@@ -283,6 +283,11 @@ provenance-witness core is proven.
 
 ## First build order
 
+Implementation note: ADR 9003 now implements the Origin Anchor, Release
+Identity Lock, and Evaluation Independence / Contamination Guard, and binds the
+existing Behavior Evidence Seal to a validated anchor. The Corpus Evidence Lens
+and Training Run Witness remain the missing Wave 1 lineage slices.
+
 ### Wave 1 — required before a real clone run
 
 1. Origin Anchor Organ

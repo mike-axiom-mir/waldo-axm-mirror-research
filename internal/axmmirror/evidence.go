@@ -89,19 +89,22 @@ func (d BehaviorEvidenceDraft) Validate() error {
 		return errors.New("waldo lineage requires model_bom_sha256 or release_bom_sha256")
 	}
 
-	for name, digest := range map[string]string{
-		"waldo.corpus_bom_sha256":  d.WALDO.CorpusBOMSHA256,
-		"waldo.run_bom_sha256":     d.WALDO.RunBOMSHA256,
-		"waldo.model_bom_sha256":   d.WALDO.ModelBOMSHA256,
-		"waldo.release_bom_sha256": d.WALDO.ReleaseBOMSHA256,
-		"context_sha256":           d.ContextSHA256,
-		"request_sha256":           d.RequestSHA256,
-		"output_sha256":            d.OutputSHA256,
+	for _, field := range []struct {
+		name   string
+		digest string
+	}{
+		{"waldo.corpus_bom_sha256", d.WALDO.CorpusBOMSHA256},
+		{"waldo.run_bom_sha256", d.WALDO.RunBOMSHA256},
+		{"waldo.model_bom_sha256", d.WALDO.ModelBOMSHA256},
+		{"waldo.release_bom_sha256", d.WALDO.ReleaseBOMSHA256},
+		{"context_sha256", d.ContextSHA256},
+		{"request_sha256", d.RequestSHA256},
+		{"output_sha256", d.OutputSHA256},
 	} {
-		if digest == "" && strings.HasPrefix(name, "waldo.") {
+		if field.digest == "" && strings.HasPrefix(field.name, "waldo.") {
 			continue
 		}
-		if err := validateSHA256(name, digest); err != nil {
+		if err := validateSHA256(field.name, field.digest); err != nil {
 			return err
 		}
 	}

@@ -8,7 +8,7 @@
     {
       "id": "origin-anchor",
       "wave": 1,
-      "status": "PROPOSED",
+      "status": "IMPLEMENTED_TESTED_GO_1_26_6",
       "purpose": "Bind behavior to exact WALDO model/release lineage and expose missing links without allowing model prose to author lineage."
     },
     {
@@ -26,19 +26,19 @@
     {
       "id": "release-identity-lock",
       "wave": 1,
-      "status": "PROPOSED",
+      "status": "IMPLEMENTED_TESTED_GO_1_26_6",
       "purpose": "Resolve which verified model/release/tokenizer identity produced an observation and refuse silent identity drift."
     },
     {
       "id": "behavior-evidence-seal",
       "wave": 1,
-      "status": "IMPLEMENTED_NEEDS_FULL_WALDO_GO_1_25_PLUS_SUITE",
+      "status": "IMPLEMENTED_TESTED_GO_1_26_6",
       "purpose": "Seal lineage-bound context/request/output digests, verification, dissent, outcome, permission, and closed authority."
     },
     {
       "id": "evaluation-independence-contamination-guard",
       "wave": 1,
-      "status": "PROPOSED",
+      "status": "IMPLEMENTED_TESTED_GO_1_26_6",
       "purpose": "Check training/evaluation overlap and authorship claims; incomplete evidence stays HOLD or UNKNOWN."
     },
     {
