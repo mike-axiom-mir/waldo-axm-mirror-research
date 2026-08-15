@@ -85,6 +85,44 @@ func TestContaminationFileWritesBlockingReport(t *testing.T) {
 	}
 }
 
+func TestLensCorpusFileWritesReadyReceipt(t *testing.T) {
+	input := filepath.Join("..", "..", "examples", "axm-mirror", "corpus-bom.json")
+	output := filepath.Join(t.TempDir(), "corpus-lens.json")
+	if err := lensCorpusFile(input, output); err != nil {
+		t.Fatalf("lensCorpusFile() error = %v", err)
+	}
+	var lens axmmirror.CorpusEvidenceLens
+	if err := readStrictJSON(output, &lens); err != nil {
+		t.Fatalf("read corpus lens: %v", err)
+	}
+	if lens.State != axmmirror.CorpusEvidenceStateReady {
+		t.Fatalf("corpus lens state = %q", lens.State)
+	}
+}
+
+func TestWitnessRunFileWritesHeldLifecycleReceipt(t *testing.T) {
+	runBOM := filepath.Join("..", "..", "examples", "axm-mirror", "run-bom.json")
+	run := writeTemp(t, `{
+  "kind":"waldo-training-run",
+  "schema":1,
+  "id":"example-real-run-0001",
+  "state":"planned",
+  "bom_sha256":"176558b03e78383529a40fbdee15849d53a96c6272171aeb344df06926aaf0b6",
+  "planned":"2026-08-15T03:00:00Z"
+}`)
+	output := filepath.Join(t.TempDir(), "run-witness.json")
+	if err := witnessRunFile(runBOM, run, output); err == nil {
+		t.Fatal("witnessRunFile() did not return a HOLD error")
+	}
+	var witness axmmirror.TrainingRunWitness
+	if err := readStrictJSON(output, &witness); err != nil {
+		t.Fatalf("read run witness: %v", err)
+	}
+	if witness.State != axmmirror.RunWitnessStateHold || witness.RunState != "planned" || len(witness.Holds) == 0 {
+		t.Fatalf("run witness = %+v", witness)
+	}
+}
+
 func writeTemp(t *testing.T, content string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "input.json")

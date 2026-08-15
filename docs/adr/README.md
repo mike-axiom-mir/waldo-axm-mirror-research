@@ -52,3 +52,7 @@ logs.
 - [0046: Portable subword tokenization](0046-portable-subword-tokenization.md)
 - [0047: Right-size tokenizer vocabularies for compact models](0047-compact-model-tokenizer.md)
 - [0048: Make corpus weights and dropout durable training facts](0048-weighted-corpus-and-dropout.md)
+- [9001: Add downstream AXM Mirror behavior evidence](9001-axm-mirror-behavior-evidence.md)
+- [9002: Make the WALDO-bound Mirror clone a provenance witness](9002-axm-waldo-witness-organ-architecture.md)
+- [9003: Add bounded Wave 1 provenance organs](9003-axm-waldo-wave-one-provenance-organs.md)
+- [9004: Complete Wave 1 with corpus and training-run witnesses](9004-axm-waldo-corpus-and-run-witnesses.md)

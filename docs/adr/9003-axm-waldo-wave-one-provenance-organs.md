@@ -101,8 +101,8 @@ Schema changes require a new version or an explicit compatibility decision.
 
 ## Consequences
 
-The fork can now bind behavior evidence to a real WALDO BOM contract, detect
-silent answering-identity changes, and refuse obvious or unresolved evaluation
-overlap. It still has no Corpus Evidence Lens, Training Run Witness, learned
-clone, inference integration, semantic leakage detector, legal conclusion, or
-source-to-output causal attribution.
+The fork can bind behavior evidence to a real WALDO model/release BOM contract,
+detect silent answering-identity changes, and refuse obvious or unresolved
+evaluation overlap. ADR 9004 extends this with corpus and run witnesses. The
+fork still has no learned clone, inference integration, semantic leakage
+detector, legal conclusion, or source-to-output causal attribution.

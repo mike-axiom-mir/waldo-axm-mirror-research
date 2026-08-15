@@ -28,10 +28,15 @@ small separate CLI. The current deterministic path is:
 
 ```mermaid
 flowchart TD
-    A["WALDO model/release BOM"] --> B["Origin anchor + identity lock"]
-    B --> C["Evaluation contamination guard"]
-    C --> D["Anchored behavior-evidence seal"]
-    D --> E["Later verification and dissent"]
+    A["WALDO corpus BOM"] --> B["Corpus evidence lens"]
+    B --> C["RUN-BOM.json + RUN.json"]
+    C --> D["Training-run witness"]
+    E["WALDO model/release BOM"] --> F["Origin anchor + identity lock"]
+    D --> G["Witnessed behavior-evidence seal"]
+    F --> G
+    H["Evaluation inventories"] --> I["Contamination guard"]
+    I --> G
+    G --> J["Later verification and dissent"]
 ```
 
 Build after installing the Go version required by WALDO:
@@ -40,8 +45,21 @@ Build after installing the Go version required by WALDO:
 go build ./cmd/waldo-axm-mirror
 ```
 
-Anchor a WALDO-produced model or release BOM. The checked-in file is a
-contract-only example with placeholder digests, not a trained model:
+Project a WALDO corpus BOM into the bounded evidence surface:
+
+```bash
+./waldo-axm-mirror lens-corpus examples/axm-mirror/corpus-bom.json /tmp/example.corpus-lens.json
+```
+
+Bind its immutable run plan to the current durable run record:
+
+```bash
+./waldo-axm-mirror witness-run examples/axm-mirror/run-bom.json examples/axm-mirror/run.json /tmp/example.run-witness.json
+```
+
+Anchor a WALDO-produced model or release BOM. All checked-in files are
+contract-only examples with placeholder digests and observations, not a
+trained model or claim that the named backend actually ran:
 
 ```bash
 ./waldo-axm-mirror anchor examples/axm-mirror/model-release-bom.json /tmp/example.anchor.json
@@ -60,15 +78,19 @@ Check exact declared training/evaluation overlap:
 ./waldo-axm-mirror contamination examples/axm-mirror/evaluation-comparison.json /tmp/example.contamination.json
 ```
 
-Seal a draft only after its release or model BOM digest matches an anchor:
+For a run-backed model or release, seal a draft only after the model, run, and
+corpus identities all match their deterministic receipts:
 
 ```bash
-./waldo-axm-mirror seal-anchored /tmp/example.anchor.json examples/axm-mirror/evidence-draft.json /tmp/evidence.sealed.json
+./waldo-axm-mirror seal-witnessed /tmp/example.anchor.json /tmp/example.run-witness.json examples/axm-mirror/evidence-draft.json /tmp/evidence.sealed.json
 ```
 
-The original contract-only seal command remains available:
+`seal-anchored` remains the correct path for an origin-backed model that has no
+WALDO training run. The original contract-only `seal` command also remains
+available for isolated schema tests:
 
 ```bash
+./waldo-axm-mirror seal-anchored /tmp/example.anchor.json examples/axm-mirror/evidence-draft.json /tmp/evidence.anchored.json
 ./waldo-axm-mirror seal examples/axm-mirror/evidence-draft.json /tmp/evidence.unanchored.sealed.json
 ```
 
@@ -84,9 +106,9 @@ rerunning a command.
 
 ## Truth boundary
 
-These slices do **not** train a Mirror clone yet. They create the downstream
-provenance/evidence contract needed before local model experiments can be
-recorded honestly.
+These slices do **not** train a Mirror clone yet. They complete the first
+deterministic provenance/evidence chain needed before local model experiments
+can be recorded honestly.
 
 They do not grant tool access, run a model, verify the artifact bytes merely by
 reading their BOM entries, certify safety or legal usability, convert dissent
@@ -94,13 +116,14 @@ into a score, expose hidden reasoning, or make any AXM result CANON.
 
 ## Next experimental rungs
 
-1. Add the Corpus Evidence Lens and Training Run Witness organs so a real
-   behavior receipt can traverse more than the model/release boundary.
-2. Bind a real WALDO-produced model or release BOM to a behavior-evidence record.
+1. Bind a real WALDO-produced corpus, run, and model/release chain to a behavior
+   record; the checked-in chain is intentionally synthetic.
+2. Add a bounded read-only provenance context surface and source-claim gate.
 3. Add a small public-safe Mirror evaluation fixture set without private memory
    or hidden reasoning.
 4. Run a local model through bounded scenarios and preserve outputs by digest.
-5. Record permission state, deterministic checks, unresolved dissent, and result.
+5. Compare exact releases without flattening behavior, verification, and dissent
+   into one score.
 6. Only then evaluate whether a small WALDO-trained Mirror research clone is
    technically and legally appropriate for the selected corpus.
 

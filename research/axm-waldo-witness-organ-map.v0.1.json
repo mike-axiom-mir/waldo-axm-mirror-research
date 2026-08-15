@@ -14,13 +14,13 @@
     {
       "id": "corpus-evidence-lens",
       "wave": 1,
-      "status": "PROPOSED",
+      "status": "IMPLEMENTED_TESTED_GO_1_26_6",
       "purpose": "Project stable corpus BOM facts into a bounded machine surface while preserving verification limits."
     },
     {
       "id": "training-run-witness",
       "wave": 1,
-      "status": "PROPOSED",
+      "status": "IMPLEMENTED_TESTED_GO_1_26_6",
       "purpose": "Bind behavior to exact run plan, corpus, origin, backend, environment, checkpoint state, and output identity."
     },
     {

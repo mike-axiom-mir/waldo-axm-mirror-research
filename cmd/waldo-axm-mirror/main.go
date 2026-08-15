@@ -18,6 +18,18 @@ func main() {
 
 	var err error
 	switch os.Args[1] {
+	case "lens-corpus":
+		if len(os.Args) != 4 {
+			usage()
+			os.Exit(2)
+		}
+		err = lensCorpusFile(os.Args[2], os.Args[3])
+	case "witness-run":
+		if len(os.Args) != 5 {
+			usage()
+			os.Exit(2)
+		}
+		err = witnessRunFile(os.Args[2], os.Args[3], os.Args[4])
 	case "anchor":
 		if len(os.Args) != 4 {
 			usage()
@@ -48,6 +60,12 @@ func main() {
 			os.Exit(2)
 		}
 		err = sealAnchoredFile(os.Args[2], os.Args[3], os.Args[4])
+	case "seal-witnessed":
+		if len(os.Args) != 6 {
+			usage()
+			os.Exit(2)
+		}
+		err = sealWitnessedFile(os.Args[2], os.Args[3], os.Args[4], os.Args[5])
 	case "verify":
 		if len(os.Args) != 3 {
 			usage()
@@ -66,12 +84,54 @@ func main() {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage:")
+	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror lens-corpus <corpus-bom.json> <lens.json>")
+	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror witness-run <run-bom.json> <run.json> <witness.json>")
 	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror anchor <waldo-bom.json> <anchor.json>")
 	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror lock <expected-anchor.json> <observed-bom.json> <receipt.json>")
 	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror contamination <comparison.json> <report.json>")
 	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror seal <draft.json> <sealed.json>")
 	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror seal-anchored <anchor.json> <draft.json> <sealed.json>")
+	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror seal-witnessed <anchor.json> <run-witness.json> <draft.json> <sealed.json>")
 	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror verify <sealed.json>")
+}
+
+func lensCorpusFile(inputPath, outputPath string) error {
+	data, err := os.ReadFile(inputPath)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", inputPath, err)
+	}
+	lens, err := axmmirror.LensCorpusBOM(data)
+	if err != nil {
+		return err
+	}
+	if err := writeJSON(outputPath, lens); err != nil {
+		return err
+	}
+	fmt.Println(lens.State, lens.BOMSHA256)
+	return nil
+}
+
+func witnessRunFile(runBOMPath, runPath, outputPath string) error {
+	runBOMData, err := os.ReadFile(runBOMPath)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", runBOMPath, err)
+	}
+	runData, err := os.ReadFile(runPath)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", runPath, err)
+	}
+	witness, err := axmmirror.WitnessTrainingRun(runBOMData, runData)
+	if err != nil {
+		return err
+	}
+	if err := writeJSON(outputPath, witness); err != nil {
+		return err
+	}
+	fmt.Println(witness.State, witness.RunBOMSHA256)
+	if witness.State != axmmirror.RunWitnessStateReady {
+		return errors.New("training run witness is HOLD; inspect the written receipt")
+	}
+	return nil
 }
 
 func anchorFile(inputPath, outputPath string) error {
@@ -168,6 +228,30 @@ func sealAnchoredFile(anchorPath, inputPath, outputPath string) error {
 		return err
 	}
 	sealed, err := axmmirror.SealAnchored(draft, anchor)
+	if err != nil {
+		return err
+	}
+	if err := writeJSON(outputPath, sealed); err != nil {
+		return err
+	}
+	fmt.Println(sealed.SHA256)
+	return nil
+}
+
+func sealWitnessedFile(anchorPath, witnessPath, inputPath, outputPath string) error {
+	var anchor axmmirror.OriginAnchor
+	if err := readStrictJSON(anchorPath, &anchor); err != nil {
+		return err
+	}
+	var witness axmmirror.TrainingRunWitness
+	if err := readStrictJSON(witnessPath, &witness); err != nil {
+		return err
+	}
+	var draft axmmirror.BehaviorEvidenceDraft
+	if err := readStrictJSON(inputPath, &draft); err != nil {
+		return err
+	}
+	sealed, err := axmmirror.SealWitnessed(draft, anchor, witness)
 	if err != nil {
 		return err
 	}
