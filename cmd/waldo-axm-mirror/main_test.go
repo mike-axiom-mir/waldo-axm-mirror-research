@@ -258,6 +258,104 @@ func TestGatedCloneFoundationCLIFlow(t *testing.T) {
 	if err := sealed.Verify(); err != nil {
 		t.Fatalf("gated behavior verification: %v", err)
 	}
+
+	// Add the situated layer without changing the earlier provenance packet or
+	// gated behavior schemas.
+	subject := axmmirror.EvidenceSubject{ID: "cli-case-0001", Kind: "evaluation-case", SHA256: repeat("c")}
+	sensoryDraft := axmmirror.SensoryEvidenceDraft{
+		Schema: axmmirror.SensoryEvidenceDraftSchema, ObservationID: "cli-touch-0001", ClaimID: "cli-claim-0001",
+		SenseID: "touch-environment-probe", Capability: "sense.environment.touch/v1", Subject: subject,
+		SeatID: "workshop-seat", BackendID: "cli-fixture", ObservedAt: "2026-08-15T10:00:00Z",
+		SealedAt: "2026-08-15T10:00:00.100Z", AssessedAt: "2026-08-15T10:00:00.200Z", TTLMillis: 60_000,
+		ObservationState: axmmirror.SensoryObservationObserved, Verdict: "PASS",
+		TypedObservationSHA256: repeat("d"), SpecificReceiptSchema: "axm.touch-fixture/v1",
+		SpecificReceiptSHA256: repeat("e"), CleanupComplete: true,
+	}
+	sensoryDraftPath := writeValueTemp(t, sensoryDraft)
+	sensoryPath := filepath.Join(directory, "sensory.json")
+	if err := intakeSensoryFile(sensoryDraftPath, sensoryPath); err != nil {
+		t.Fatalf("intakeSensoryFile() error = %v", err)
+	}
+	var sensory axmmirror.SensoryEvidenceReceipt
+	if err := readStrictJSON(sensoryPath, &sensory); err != nil {
+		t.Fatal(err)
+	}
+
+	skillItems := []axmmirror.SkillInventoryItem{
+		{ID: "mirror-organ-library-115", Version: "03f3d0cf", UseClass: axmmirror.SkillUseKnowledge, SourceSHA256: repeat("1"), Status: "TEST", ExecutionStatus: "INERT", ProofStatus: "UNTESTED", CompatibilityStatus: "UNVERIFIED", MemberCount: 115},
+		{ID: "sensorium-portable-skills", Version: "1.4.0", UseClass: axmmirror.SkillUseInstruction, SourceSHA256: repeat("2"), InstructionSHA256: repeat("3"), Status: "TEST", ExecutionStatus: "INERT", ProofStatus: "CONTRACT_PASS", CompatibilityStatus: "UNVERIFIED", MemberCount: 13},
+	}
+	skillRequest := axmmirror.SkillContinuityRequest{
+		Schema: axmmirror.SkillContinuityRequestSchema, AssessmentID: "cli-skills-0001",
+		TargetAnsweringIdentitySHA256: anchor.AnsweringIdentitySHA256,
+		Requirements: []axmmirror.SkillRequirement{
+			{ID: "mirror-organ-library-115", UseClass: axmmirror.SkillUseKnowledge},
+			{ID: "sensorium-portable-skills", UseClass: axmmirror.SkillUseInstruction},
+		},
+		Current: axmmirror.SkillInventorySet{SetID: "cli-current", CapturedAt: "2026-08-15T10:00:00Z", Complete: true, Items: skillItems},
+		Backup:  axmmirror.SkillInventorySet{SetID: "cli-backup", CapturedAt: "2026-08-15T09:00:00Z", Complete: true, Items: append([]axmmirror.SkillInventoryItem(nil), skillItems...)},
+	}
+	skillRequestPath := writeValueTemp(t, skillRequest)
+	skillPath := filepath.Join(directory, "skills.json")
+	if err := assessSkillsFile(skillRequestPath, skillPath); err != nil {
+		t.Fatalf("assessSkillsFile() error = %v", err)
+	}
+	var skills axmmirror.SkillContinuityReceipt
+	if err := readStrictJSON(skillPath, &skills); err != nil {
+		t.Fatal(err)
+	}
+
+	discoveryRequest := axmmirror.DiscoveryStanceRequest{
+		Schema: axmmirror.DiscoveryStanceRequestSchema, RequestID: "cli-discovery-0001", Subject: subject,
+		AISeams: []axmmirror.DiscoverySeam{{
+			ID: "freshness-visible", Stance: "evidence", Severity: "medium", Status: "OPEN",
+			Statement: "The task depends on a bounded sensory receipt.", EvidenceRefs: []string{sensory.ReceiptSHA256},
+			DisconfirmingCheck: "Re-run the exact observation after its TTL and compare typed receipts.", Blocks: []string{"unbounded-current-state-claim"},
+		}},
+		Human: &axmmirror.HumanDiscoveryInput{ExplicitInvocation: true, Entries: []axmmirror.HumanDiscoveryEntry{{
+			ID: "human-use-0001", Stage: "blindSpots", Text: "Explain stale evidence in plain language.", ClaimLabel: "VALUE",
+		}}},
+	}
+	discoveryRequestPath := writeValueTemp(t, discoveryRequest)
+	discoveryPath := filepath.Join(directory, "discovery.json")
+	if err := discoveryFile(discoveryRequestPath, discoveryPath); err != nil {
+		t.Fatalf("discoveryFile() error = %v", err)
+	}
+	var discovery axmmirror.DiscoveryStancePacket
+	if err := readStrictJSON(discoveryPath, &discovery); err != nil {
+		t.Fatal(err)
+	}
+
+	situatedRequest := axmmirror.SituatedContextRequest{
+		Schema: axmmirror.SituatedContextRequestSchema, EnvelopeID: "cli-situated-0001",
+		TargetAnsweringIdentitySHA256: anchor.AnsweringIdentitySHA256, Subject: subject,
+		ContextPacketSHA256: context.PacketSHA256, RequiredSenses: []string{sensory.SenseID},
+		SensoryEvidence: []axmmirror.SensoryEvidenceReceipt{sensory}, SkillContinuity: skills, DiscoveryStance: discovery,
+	}
+	situatedRequestPath := writeValueTemp(t, situatedRequest)
+	situatedPath := filepath.Join(directory, "situated.json")
+	if err := situatedContextFile(contextPath, situatedRequestPath, situatedPath); err != nil {
+		t.Fatalf("situatedContextFile() error = %v", err)
+	}
+	var situated axmmirror.SituatedContextEnvelope
+	if err := readStrictJSON(situatedPath, &situated); err != nil {
+		t.Fatal(err)
+	}
+	if situated.State != axmmirror.SituatedContextReady {
+		t.Fatalf("situated state = %q", situated.State)
+	}
+
+	situatedSealedPath := filepath.Join(directory, "situated-behavior.json")
+	if err := sealSituatedFile(anchorPath, witnessPath, profilePath, contextPath, assessmentPath, sealPath, situatedPath, behaviorDraftPath, situatedSealedPath); err != nil {
+		t.Fatalf("sealSituatedFile() error = %v", err)
+	}
+	var situatedSealed axmmirror.SealedBehaviorEvidence
+	if err := readStrictJSON(situatedSealedPath, &situatedSealed); err != nil {
+		t.Fatal(err)
+	}
+	if err := situatedSealed.Verify(); err != nil {
+		t.Fatalf("situated behavior verification: %v", err)
+	}
 }
 
 func writeTemp(t *testing.T, content string) string {

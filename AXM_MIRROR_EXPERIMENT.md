@@ -23,8 +23,8 @@ The upstream Apache-2.0 `LICENSE` and `NOTICE` remain intact.
 
 ## Implemented witness slices
 
-The branch `axm/mirror-waldo-experiment-v0.1` adds a fork-only Go package and a
-small separate CLI. The current deterministic path is:
+The stacked `axm/mirror-waldo-experiment-*` branches add a fork-only Go package
+and a small separate CLI. The current deterministic path is:
 
 ```mermaid
 flowchart TD
@@ -36,7 +36,11 @@ flowchart TD
     F --> G
     H["Evaluation inventories"] --> I["Contamination guard"]
     I --> G
-    G --> J["Later verification and dissent"]
+    K["Typed Sensorium receipts"] --> L["Situated context"]
+    M["Skill + backup manifests"] --> L
+    N["AI-native seams + human advice"] --> L
+    L --> G
+    G --> J["Later behavior delta and dissent"]
 ```
 
 Build after installing the Go version required by WALDO:
@@ -100,30 +104,55 @@ Verify it later:
 ./waldo-axm-mirror verify /tmp/evidence.sealed.json
 ```
 
+### Situated clone boundary
+
+The Wave 2.1 path adds receipt-only situation around the existing provenance
+and evaluation gates:
+
+```text
+intake-sensory + assess-skills + discover
+  -> situated-context
+  -> seal-situated
+  -> verify
+```
+
+It recognizes all thirteen public Workshop Sensorium contracts without copying
+their executors. It keeps passive organ knowledge, portable skill instructions,
+and executable adapters as different inventory roles. It also preserves the
+Mirror discovery asymmetry: AI-native seams are primary; human usefulness,
+accessibility, craft, and product-soul review is explicit, secondary, advisory,
+and unable to close native seams.
+
+The exact public contract sources and claim ceilings are pinned in
+`research/mirror-situated-knowledge-sources-2026-08-15.json`. The 115-organ
+archive remains inert knowledge and no Workshop or Mirror JavaScript is
+imported or executed.
+
 Receipt writes are atomic and refuse to replace an existing output path. Use a
 new output name, or remove an old disposable example deliberately before
 rerunning a command.
 
 ## Truth boundary
 
-These slices do **not** train a Mirror clone yet. They complete the first
-deterministic provenance/evidence chain needed before local model experiments
-can be recorded honestly.
+These slices do **not** train a Mirror clone yet. They complete deterministic
+provenance, evaluation, and situated-evidence boundaries needed before local
+model experiments can be recorded honestly.
 
-They do not grant tool access, run a model, verify the artifact bytes merely by
-reading their BOM entries, certify safety or legal usability, convert dissent
-into a score, expose hidden reasoning, or make any AXM result CANON.
+They do not grant capture or tool access, install or restore skills, run a
+model, verify artifact bytes merely by reading BOM entries, certify safety or
+legal usability, convert discovery or dissent into a score, expose hidden
+reasoning, or make any AXM result CANON.
 
 ## Next experimental rungs
 
 1. Bind a real WALDO-produced corpus, run, and model/release chain to a behavior
    record; the checked-in chain is intentionally synthetic.
-2. Add a bounded read-only provenance context surface and source-claim gate.
-3. Add a small public-safe Mirror evaluation fixture set without private memory
+2. Add a small public-safe Mirror evaluation fixture set without private memory
    or hidden reasoning.
-4. Run a local model through bounded scenarios and preserve outputs by digest.
-5. Compare exact releases without flattening behavior, verification, and dissent
-   into one score.
+3. Run a local model through bounded scenarios and preserve outputs by digest.
+4. Compare exact releases without flattening behavior, verification, discovery,
+   and dissent into one score.
+5. Add append-only dissent continuity and a Reproducibility Twin.
 6. Only then evaluate whether a small WALDO-trained Mirror research clone is
    technically and legally appropriate for the selected corpus.
 
