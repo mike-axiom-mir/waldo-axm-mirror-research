@@ -100,6 +100,31 @@ func TestLensCorpusFileWritesReadyReceipt(t *testing.T) {
 	}
 }
 
+func TestInnerAssetCLIFlow(t *testing.T) {
+	input := filepath.Join("..", "..", "examples", "axm-mirror", "inner-asset-recipe.json")
+	output := filepath.Join(t.TempDir(), "witness-orb.axmasset")
+	if err := forgeInnerAssetFile(input, output); err != nil {
+		t.Fatalf("forgeInnerAssetFile() error = %v", err)
+	}
+	if err := verifyInnerAssetFile(output); err != nil {
+		t.Fatalf("verifyInnerAssetFile() error = %v", err)
+	}
+	if err := forgeInnerAssetFile(input, output); err == nil {
+		t.Fatal("forgeInnerAssetFile() overwrote an existing candidate")
+	}
+	data, err := os.ReadFile(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := axmmirror.VerifyInnerAssetBundle(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if candidate.State != axmmirror.InnerAssetStateReady || !candidate.CandidateOnly || candidate.VisualStatus != axmmirror.InnerAssetVisualPending {
+		t.Fatalf("inner asset candidate = %+v", candidate)
+	}
+}
+
 func TestWitnessRunFileWritesHeldLifecycleReceipt(t *testing.T) {
 	runBOM := filepath.Join("..", "..", "examples", "axm-mirror", "run-bom.json")
 	run := writeTemp(t, `{

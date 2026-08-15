@@ -96,6 +96,18 @@ func main() {
 			os.Exit(2)
 		}
 		err = situatedContextFile(os.Args[2], os.Args[3], os.Args[4])
+	case "forge-asset":
+		if len(os.Args) != 4 {
+			usage()
+			os.Exit(2)
+		}
+		err = forgeInnerAssetFile(os.Args[2], os.Args[3])
+	case "verify-asset":
+		if len(os.Args) != 3 {
+			usage()
+			os.Exit(2)
+		}
+		err = verifyInnerAssetFile(os.Args[2])
 	case "seal-gated":
 		if len(os.Args) != 10 {
 			usage()
@@ -157,6 +169,8 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror assess-skills <skill-continuity-request.json> <skill-continuity-receipt.json>")
 	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror discover <discovery-request.json> <discovery-packet.json>")
 	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror situated-context <context-packet.json> <situated-request.json> <situated-envelope.json>")
+	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror forge-asset <inner-asset-recipe.json> <candidate.axmasset>")
+	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror verify-asset <candidate.axmasset>")
 	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror seal-gated <anchor.json> <run-witness.json> <profile.json> <context.json> <claims.json> <protocol.json> <draft.json> <sealed.json>")
 	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror seal-situated <anchor.json> <run-witness.json> <profile.json> <context.json> <claims.json> <protocol.json> <situated.json> <draft.json> <sealed.json>")
 	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror seal <draft.json> <sealed.json>")
@@ -436,6 +450,42 @@ func situatedContextFile(contextPath, requestPath, outputPath string) error {
 	return nil
 }
 
+func forgeInnerAssetFile(inputPath, outputPath string) error {
+	var recipe axmmirror.InnerAssetRecipe
+	if err := readStrictJSON(inputPath, &recipe); err != nil {
+		return err
+	}
+	build, err := axmmirror.ForgeInnerAsset(recipe)
+	if err != nil {
+		return err
+	}
+	bundle, err := axmmirror.EncodeInnerAssetBundle(build)
+	if err != nil {
+		return err
+	}
+	if err := writeBytesNoReplace(outputPath, bundle); err != nil {
+		return err
+	}
+	fmt.Println(build.Candidate.State, build.Candidate.CandidateSHA256)
+	if build.Candidate.State != axmmirror.InnerAssetStateReady {
+		return fmt.Errorf("inner asset candidate is %s; inspect the written bundle", build.Candidate.State)
+	}
+	return nil
+}
+
+func verifyInnerAssetFile(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", path, err)
+	}
+	candidate, err := axmmirror.VerifyInnerAssetBundle(data)
+	if err != nil {
+		return err
+	}
+	fmt.Println("OK", candidate.State, candidate.CandidateSHA256)
+	return nil
+}
+
 func sealGatedFile(anchorPath, witnessPath, profilePath, contextPath, claimsPath, protocolPath, draftPath, outputPath string) error {
 	var anchor axmmirror.OriginAnchor
 	if err := readStrictJSON(anchorPath, &anchor); err != nil {
@@ -609,6 +659,10 @@ func writeJSON(path string, value any) error {
 		return fmt.Errorf("encode %s: %w", path, err)
 	}
 	data = append(data, '\n')
+	return writeBytesNoReplace(path, data)
+}
+
+func writeBytesNoReplace(path string, data []byte) error {
 	directory := filepath.Dir(path)
 	if err := os.MkdirAll(directory, 0o755); err != nil {
 		return fmt.Errorf("create output directory for %s: %w", path, err)

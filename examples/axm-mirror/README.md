@@ -4,10 +4,10 @@ These files are public-safe synthetic inputs. They do not describe a real
 trained model or a real independent evaluation.
 
 The checked-in corpus, run, release, comparison, behavior, sensory, skill
-continuity, and discovery drafts are synthetic contract fixtures. The complete
-gated and situated clone flows are exercised by
-`TestGatedCloneFoundationCLIFlow` and the focused tests under
-`internal/axmmirror`.
+continuity, discovery, and inner-asset recipe drafts are synthetic contract
+fixtures. The complete gated, situated, and inner-asset CLI flows are exercised
+by `TestGatedCloneFoundationCLIFlow`, `TestInnerAssetCLIFlow`, and the focused
+tests under `internal/axmmirror`.
 
 The separate experimental CLI now supports:
 
@@ -25,6 +25,8 @@ waldo-axm-mirror intake-sensory
 waldo-axm-mirror assess-skills
 waldo-axm-mirror discover
 waldo-axm-mirror situated-context
+waldo-axm-mirror forge-asset
+waldo-axm-mirror verify-asset
 waldo-axm-mirror seal-gated
 waldo-axm-mirror seal-situated
 waldo-axm-mirror verify
@@ -47,6 +49,12 @@ The situated examples distinguish three surfaces that must not be collapsed:
 All thirteen Sensorium contracts are supported by the intake catalog. A
 specific situated request still names only the senses the task actually
 requires; support never implies silent invocation or permission.
+
+`inner-asset-recipe.json` is a two-frame synthetic witness-orb recipe. The
+foundry compiles it into separate editable recipe/grid, primary PNG, preview
+PNG, and sprite-atlas artifacts inside one deterministic `.axmasset` candidate.
+The fixture pins the complete portable bundle digest, but remains visually
+UNREVIEWED and carries no install, approval, promotion, or CANON authority.
 
 HOLD and REFUSED receipts are written before the CLI returns a nonzero status,
 so unresolved evidence remains inspectable. Output paths are atomic no-replace
