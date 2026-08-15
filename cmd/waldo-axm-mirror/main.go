@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/openwaldo/waldo/internal/axmmirror"
@@ -83,8 +84,12 @@ func readStrictJSON(path string, target any) error {
 	if err := decoder.Decode(target); err != nil {
 		return fmt.Errorf("decode %s: %w", path, err)
 	}
-	if decoder.More() {
-		return fmt.Errorf("decode %s: trailing JSON content", path)
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("decode %s: trailing JSON content", path)
+		}
+		return fmt.Errorf("decode %s trailing content: %w", path, err)
 	}
 	return nil
 }
