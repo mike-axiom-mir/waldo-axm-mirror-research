@@ -123,6 +123,143 @@ func TestWitnessRunFileWritesHeldLifecycleReceipt(t *testing.T) {
 	}
 }
 
+func TestGatedCloneFoundationCLIFlow(t *testing.T) {
+	examples := filepath.Join("..", "..", "examples", "axm-mirror")
+	directory := t.TempDir()
+	runBOM := filepath.Join(examples, "run-bom.json")
+	run := filepath.Join(examples, "run.json")
+	witnessPath := filepath.Join(directory, "run-witness.json")
+	if err := witnessRunFile(runBOM, run, witnessPath); err != nil {
+		t.Fatalf("witnessRunFile() error = %v", err)
+	}
+	profilePath := filepath.Join(directory, "profile-contract.json")
+	if err := profileContractFile(runBOM, witnessPath, profilePath); err != nil {
+		t.Fatalf("profileContractFile() error = %v", err)
+	}
+	anchorPath := filepath.Join(directory, "anchor.json")
+	if err := anchorFile(filepath.Join(examples, "model-release-bom.json"), anchorPath); err != nil {
+		t.Fatalf("anchorFile() error = %v", err)
+	}
+	contaminationPath := filepath.Join(directory, "contamination.json")
+	if err := contaminationFile(filepath.Join(examples, "evaluation-comparison.json"), contaminationPath); err != nil {
+		t.Fatalf("contaminationFile() error = %v", err)
+	}
+
+	var witness axmmirror.TrainingRunWitness
+	if err := readStrictJSON(witnessPath, &witness); err != nil {
+		t.Fatal(err)
+	}
+	var profile axmmirror.TrainingProfileContract
+	if err := readStrictJSON(profilePath, &profile); err != nil {
+		t.Fatal(err)
+	}
+	var anchor axmmirror.OriginAnchor
+	if err := readStrictJSON(anchorPath, &anchor); err != nil {
+		t.Fatal(err)
+	}
+	var contamination axmmirror.ContaminationReport
+	if err := readStrictJSON(contaminationPath, &contamination); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := axmmirror.CompareIdentity(anchor, anchor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := axmmirror.ProvenanceContextRequest{
+		Schema: axmmirror.ProvenanceContextRequestSchema, RequestID: "cli-context-0001",
+		MaxFactBytes: axmmirror.MaxProvenanceFactBytes,
+		Fields: []string{
+			"answering.identity_sha256", "corpus.paths", "corpus.licenses", "training.profile.canonical",
+			"evaluation.contamination_state", "evaluation.comparison_sha256",
+		},
+		Anchor: anchor, Corpus: witness.Corpus, RunWitness: &witness, ProfileContract: &profile,
+		IdentityLock: &lock, Contamination: &contamination,
+	}
+	requestPath := writeValueTemp(t, request)
+	contextPath := filepath.Join(directory, "context.json")
+	if err := contextFile(requestPath, contextPath); err != nil {
+		t.Fatalf("contextFile() error = %v", err)
+	}
+	var context axmmirror.ProvenanceContextPacket
+	if err := readStrictJSON(contextPath, &context); err != nil {
+		t.Fatal(err)
+	}
+
+	submission := axmmirror.SourceClaimSubmission{
+		Schema: axmmirror.SourceClaimSubmissionSchema, SubmissionID: "cli-claims-0001",
+		OutputSHA256: repeat("a"), ContextPacketSHA256: context.PacketSHA256,
+		Claims: []axmmirror.SourceClaim{
+			{ID: "identity", Kind: axmmirror.ClaimKindAnsweringIdentity, Value: anchor.AnsweringIdentitySHA256},
+			{ID: "license", Kind: axmmirror.ClaimKindLicenseAssertion, Value: "CC0-1.0"},
+			{ID: "path", Kind: axmmirror.ClaimKindCorpusPathMembership, Value: "research/example-corpus"},
+			{ID: "profile", Kind: axmmirror.ClaimKindTrainingProfile, Value: "causal-pretrain-shuffled"},
+			{ID: "evaluation", Kind: axmmirror.ClaimKindEvaluationIndependent, Value: axmmirror.ClaimValueEvaluationClear},
+		},
+	}
+	submissionPath := writeValueTemp(t, submission)
+	assessmentPath := filepath.Join(directory, "assessment.json")
+	if err := gateClaimsFile(contextPath, submissionPath, assessmentPath); err != nil {
+		t.Fatalf("gateClaimsFile() error = %v", err)
+	}
+	var assessment axmmirror.SourceClaimAssessment
+	if err := readStrictJSON(assessmentPath, &assessment); err != nil {
+		t.Fatal(err)
+	}
+	if assessment.State != axmmirror.ClaimGateStateConfirmed {
+		t.Fatalf("assessment state = %q", assessment.State)
+	}
+
+	draft := axmmirror.EvaluationProtocolDraft{
+		Schema: axmmirror.EvaluationProtocolDraftSchema, ProtocolID: "cli-protocol-0001",
+		Pack: axmmirror.EvaluationPackIdentity{
+			SHA256: repeat("1"), DocumentSHA256: repeat("2"), CaseCount: 2,
+			CaseOrderSHA256: repeat("3"), AuthorshipState: "outside-authored",
+			AuthorshipEvidenceSHA256: repeat("6"), AnswerKeySHA256: repeat("4"),
+		},
+		TargetAnsweringIdentitySHA256: anchor.AnsweringIdentitySHA256,
+		Anchor:                        anchor, Context: context, Contamination: contamination,
+		RequestSetSHA256: repeat("5"), AllowedMetrics: []string{"exact-match", "refusal-state"},
+		ComparisonDimensions: []string{"output", "verification"}, AnswerKeyVisibility: axmmirror.AnswerKeyWithheld,
+		Limits:          axmmirror.EvaluationExecutionLimits{MaxCases: 2, MaxOutputBytes: 4096, TimeoutMillis: 30000},
+		PermissionState: "allowed", RequestedAuthority: axmmirror.Authority{},
+	}
+	draftPath := writeValueTemp(t, draft)
+	sealPath := filepath.Join(directory, "protocol-seal.json")
+	if err := sealEvaluationFile(draftPath, sealPath); err != nil {
+		t.Fatalf("sealEvaluationFile() error = %v", err)
+	}
+	var seal axmmirror.EvaluationProtocolSeal
+	if err := readStrictJSON(sealPath, &seal); err != nil {
+		t.Fatal(err)
+	}
+	if seal.State != axmmirror.ProtocolStateReady {
+		t.Fatalf("protocol state = %q", seal.State)
+	}
+	behaviorDraft := axmmirror.BehaviorEvidenceDraft{
+		Schema: axmmirror.BehaviorEvidenceSchema, ExperimentID: seal.ProtocolID,
+		WALDO: axmmirror.WALDOLineage{
+			CorpusBOMSHA256:  witness.Corpus.BOMSHA256,
+			RunBOMSHA256:     witness.RunBOMSHA256,
+			ReleaseBOMSHA256: anchor.BOMSHA256,
+		},
+		ContextSHA256: context.PacketSHA256, RequestSHA256: seal.RequestSetSHA256,
+		OutputSHA256: assessment.OutputSHA256, PermissionState: "allowed", OutcomeState: "pass",
+		Authority: axmmirror.Authority{},
+	}
+	behaviorDraftPath := writeValueTemp(t, behaviorDraft)
+	sealedPath := filepath.Join(directory, "gated-behavior.json")
+	if err := sealGatedFile(anchorPath, witnessPath, profilePath, contextPath, assessmentPath, sealPath, behaviorDraftPath, sealedPath); err != nil {
+		t.Fatalf("sealGatedFile() error = %v", err)
+	}
+	var sealed axmmirror.SealedBehaviorEvidence
+	if err := readStrictJSON(sealedPath, &sealed); err != nil {
+		t.Fatal(err)
+	}
+	if err := sealed.Verify(); err != nil {
+		t.Fatalf("gated behavior verification: %v", err)
+	}
+}
+
 func writeTemp(t *testing.T, content string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "input.json")
@@ -130,6 +267,15 @@ func writeTemp(t *testing.T, content string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func writeValueTemp(t *testing.T, value any) string {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return writeTemp(t, string(data))
 }
 
 func repeat(ch string) string {

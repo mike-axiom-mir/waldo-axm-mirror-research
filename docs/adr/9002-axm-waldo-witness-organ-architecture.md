@@ -289,6 +289,11 @@ the Corpus Evidence Lens and Training Run Witness and binds run-backed behavior
 evidence to both receipts. All Wave 1 deterministic lineage slices now exist;
 this does not mean a learned clone has been trained.
 
+ADR 9005 implements the Training Profile Contract Lens, Provenance Context
+Surface, Source-Claim Gate, Evaluation Protocol Seal, and their integrated
+Gated Behavior Seal. Behavior comparison remains later work and must consume a
+precommitted protocol rather than assigning credit retrospectively.
+
 ### Wave 1 — required before a real clone run
 
 1. Origin Anchor Organ
@@ -298,13 +303,18 @@ this does not mean a learned clone has been trained.
 5. Behavior Evidence Seal Organ (started)
 6. Evaluation Independence / Contamination Guard Organ
 
+### Wave 1.1 — upstream behavior-contract compatibility
+
+7. Training Profile Contract Lens Organ
+
 ### Wave 2 — required for useful comparative research
 
-7. Provenance Context Surface Organ
-8. Source-Claim Gate Organ
-9. Behavior Delta Comparator Organ
-10. Dissent Continuity Ledger Organ
-11. Reproducibility Twin Organ
+8. Provenance Context Surface Organ
+9. Source-Claim Gate Organ
+10. Evaluation Protocol Seal Organ
+11. Behavior Delta Comparator Organ
+12. Dissent Continuity Ledger Organ
+13. Reproducibility Twin Organ
 
 ### Wave 3 — research that may be valuable back to WALDO
 
