@@ -56,3 +56,4 @@ logs.
 - [9002: Make the WALDO-bound Mirror clone a provenance witness](9002-axm-waldo-witness-organ-architecture.md)
 - [9003: Add bounded Wave 1 provenance organs](9003-axm-waldo-wave-one-provenance-organs.md)
 - [9004: Complete Wave 1 with corpus and training-run witnesses](9004-axm-waldo-corpus-and-run-witnesses.md)
+- [9005: Put deterministic gates around the WALDO witness clone](9005-axm-waldo-gated-clone-foundation.md)
