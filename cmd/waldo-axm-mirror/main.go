@@ -72,12 +72,42 @@ func main() {
 			os.Exit(2)
 		}
 		err = sealEvaluationFile(os.Args[2], os.Args[3])
+	case "intake-sensory":
+		if len(os.Args) != 4 {
+			usage()
+			os.Exit(2)
+		}
+		err = intakeSensoryFile(os.Args[2], os.Args[3])
+	case "assess-skills":
+		if len(os.Args) != 4 {
+			usage()
+			os.Exit(2)
+		}
+		err = assessSkillsFile(os.Args[2], os.Args[3])
+	case "discover":
+		if len(os.Args) != 4 {
+			usage()
+			os.Exit(2)
+		}
+		err = discoveryFile(os.Args[2], os.Args[3])
+	case "situated-context":
+		if len(os.Args) != 5 {
+			usage()
+			os.Exit(2)
+		}
+		err = situatedContextFile(os.Args[2], os.Args[3], os.Args[4])
 	case "seal-gated":
 		if len(os.Args) != 10 {
 			usage()
 			os.Exit(2)
 		}
 		err = sealGatedFile(os.Args[2], os.Args[3], os.Args[4], os.Args[5], os.Args[6], os.Args[7], os.Args[8], os.Args[9])
+	case "seal-situated":
+		if len(os.Args) != 11 {
+			usage()
+			os.Exit(2)
+		}
+		err = sealSituatedFile(os.Args[2], os.Args[3], os.Args[4], os.Args[5], os.Args[6], os.Args[7], os.Args[8], os.Args[9], os.Args[10])
 	case "seal":
 		if len(os.Args) != 4 {
 			usage()
@@ -123,7 +153,12 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror context <context-request.json> <context-packet.json>")
 	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror gate-claims <context-packet.json> <claim-submission.json> <assessment.json>")
 	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror seal-evaluation <protocol-draft.json> <protocol-seal.json>")
+	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror intake-sensory <sensory-draft.json> <sensory-receipt.json>")
+	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror assess-skills <skill-continuity-request.json> <skill-continuity-receipt.json>")
+	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror discover <discovery-request.json> <discovery-packet.json>")
+	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror situated-context <context-packet.json> <situated-request.json> <situated-envelope.json>")
 	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror seal-gated <anchor.json> <run-witness.json> <profile.json> <context.json> <claims.json> <protocol.json> <draft.json> <sealed.json>")
+	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror seal-situated <anchor.json> <run-witness.json> <profile.json> <context.json> <claims.json> <protocol.json> <situated.json> <draft.json> <sealed.json>")
 	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror seal <draft.json> <sealed.json>")
 	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror seal-anchored <anchor.json> <draft.json> <sealed.json>")
 	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror seal-witnessed <anchor.json> <run-witness.json> <draft.json> <sealed.json>")
@@ -321,6 +356,86 @@ func sealEvaluationFile(inputPath, outputPath string) error {
 	return nil
 }
 
+func intakeSensoryFile(inputPath, outputPath string) error {
+	var draft axmmirror.SensoryEvidenceDraft
+	if err := readStrictJSON(inputPath, &draft); err != nil {
+		return err
+	}
+	receipt, err := axmmirror.IntakeSensoryEvidence(draft)
+	if err != nil {
+		return err
+	}
+	if err := writeJSON(outputPath, receipt); err != nil {
+		return err
+	}
+	fmt.Println(receipt.State, receipt.ReceiptSHA256)
+	if receipt.State != axmmirror.SensoryStateReady {
+		return fmt.Errorf("sensory evidence intake is %s; inspect the written receipt", receipt.State)
+	}
+	return nil
+}
+
+func assessSkillsFile(inputPath, outputPath string) error {
+	var request axmmirror.SkillContinuityRequest
+	if err := readStrictJSON(inputPath, &request); err != nil {
+		return err
+	}
+	receipt, err := axmmirror.AssessSkillContinuity(request)
+	if err != nil {
+		return err
+	}
+	if err := writeJSON(outputPath, receipt); err != nil {
+		return err
+	}
+	fmt.Println(receipt.State, receipt.ReceiptSHA256)
+	if receipt.State != axmmirror.SkillContinuityReady {
+		return fmt.Errorf("skill continuity is %s; inspect the written receipt", receipt.State)
+	}
+	return nil
+}
+
+func discoveryFile(inputPath, outputPath string) error {
+	var request axmmirror.DiscoveryStanceRequest
+	if err := readStrictJSON(inputPath, &request); err != nil {
+		return err
+	}
+	packet, err := axmmirror.BuildDiscoveryStance(request)
+	if err != nil {
+		return err
+	}
+	if err := writeJSON(outputPath, packet); err != nil {
+		return err
+	}
+	fmt.Println(packet.State, packet.ReceiptSHA256)
+	if packet.State != axmmirror.DiscoveryStateReady {
+		return fmt.Errorf("discovery stance is %s; inspect the written packet", packet.State)
+	}
+	return nil
+}
+
+func situatedContextFile(contextPath, requestPath, outputPath string) error {
+	var context axmmirror.ProvenanceContextPacket
+	if err := readStrictJSON(contextPath, &context); err != nil {
+		return err
+	}
+	var request axmmirror.SituatedContextRequest
+	if err := readStrictJSON(requestPath, &request); err != nil {
+		return err
+	}
+	envelope, err := axmmirror.BuildSituatedContext(request, context)
+	if err != nil {
+		return err
+	}
+	if err := writeJSON(outputPath, envelope); err != nil {
+		return err
+	}
+	fmt.Println(envelope.State, envelope.EnvelopeSHA256)
+	if envelope.State != axmmirror.SituatedContextReady {
+		return fmt.Errorf("situated context is %s; inspect the written envelope", envelope.State)
+	}
+	return nil
+}
+
 func sealGatedFile(anchorPath, witnessPath, profilePath, contextPath, claimsPath, protocolPath, draftPath, outputPath string) error {
 	var anchor axmmirror.OriginAnchor
 	if err := readStrictJSON(anchorPath, &anchor); err != nil {
@@ -351,6 +466,50 @@ func sealGatedFile(anchorPath, witnessPath, profilePath, contextPath, claimsPath
 		return err
 	}
 	sealed, err := axmmirror.SealGated(draft, anchor, witness, profile, context, claims, protocol)
+	if err != nil {
+		return err
+	}
+	if err := writeJSON(outputPath, sealed); err != nil {
+		return err
+	}
+	fmt.Println(sealed.SHA256)
+	return nil
+}
+
+func sealSituatedFile(anchorPath, witnessPath, profilePath, contextPath, claimsPath, protocolPath, situatedPath, draftPath, outputPath string) error {
+	var anchor axmmirror.OriginAnchor
+	if err := readStrictJSON(anchorPath, &anchor); err != nil {
+		return err
+	}
+	var witness axmmirror.TrainingRunWitness
+	if err := readStrictJSON(witnessPath, &witness); err != nil {
+		return err
+	}
+	var profile axmmirror.TrainingProfileContract
+	if err := readStrictJSON(profilePath, &profile); err != nil {
+		return err
+	}
+	var context axmmirror.ProvenanceContextPacket
+	if err := readStrictJSON(contextPath, &context); err != nil {
+		return err
+	}
+	var claims axmmirror.SourceClaimAssessment
+	if err := readStrictJSON(claimsPath, &claims); err != nil {
+		return err
+	}
+	var protocol axmmirror.EvaluationProtocolSeal
+	if err := readStrictJSON(protocolPath, &protocol); err != nil {
+		return err
+	}
+	var situated axmmirror.SituatedContextEnvelope
+	if err := readStrictJSON(situatedPath, &situated); err != nil {
+		return err
+	}
+	var draft axmmirror.BehaviorEvidenceDraft
+	if err := readStrictJSON(draftPath, &draft); err != nil {
+		return err
+	}
+	sealed, err := axmmirror.SealSituatedGated(draft, anchor, witness, profile, context, claims, protocol, situated)
 	if err != nil {
 		return err
 	}

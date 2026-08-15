@@ -3,8 +3,9 @@
 These files are public-safe synthetic inputs. They do not describe a real
 trained model or a real independent evaluation.
 
-The checked-in corpus, run, release, comparison, and behavior drafts exercise
-Wave 1. The complete gated-clone foundation flow is exercised by
+The checked-in corpus, run, release, comparison, behavior, sensory, skill
+continuity, and discovery drafts are synthetic contract fixtures. The complete
+gated and situated clone flows are exercised by
 `TestGatedCloneFoundationCLIFlow` and the focused tests under
 `internal/axmmirror`.
 
@@ -20,7 +21,12 @@ waldo-axm-mirror contamination
 waldo-axm-mirror context
 waldo-axm-mirror gate-claims
 waldo-axm-mirror seal-evaluation
+waldo-axm-mirror intake-sensory
+waldo-axm-mirror assess-skills
+waldo-axm-mirror discover
+waldo-axm-mirror situated-context
 waldo-axm-mirror seal-gated
+waldo-axm-mirror seal-situated
 waldo-axm-mirror verify
 ```
 
@@ -28,6 +34,19 @@ waldo-axm-mirror verify
 constructs all deterministic inputs in one process for replay convenience, but
 the final gated seal still requires the output and claim assessment to bind the
 exact precommitted protocol digest.
+
+The situated examples distinguish three surfaces that must not be collapsed:
+
+- a Sensorium receipt is typed evidence supplied to WALDO, not proof that
+  WALDO captured an image, stream, host, or environment itself;
+- a skill continuity request compares exact current and backup manifests and
+  may only propose a human-reviewed recovery candidate;
+- AI-native seams are primary machine judgement while human-native discovery
+  remains explicit secondary advice.
+
+All thirteen Sensorium contracts are supported by the intake catalog. A
+specific situated request still names only the senses the task actually
+requires; support never implies silent invocation or permission.
 
 HOLD and REFUSED receipts are written before the CLI returns a nonzero status,
 so unresolved evidence remains inspectable. Output paths are atomic no-replace
