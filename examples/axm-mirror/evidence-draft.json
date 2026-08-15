@@ -1,0 +1,37 @@
+{
+  "schema": "axm.mirror.behavior-evidence/v0.1",
+  "experiment_id": "example-only-not-a-real-model-run",
+  "waldo": {
+    "model_bom_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "context_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "request_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "output_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "permission_state": "observed",
+  "outcome_state": "hold",
+  "verification": [
+    {
+      "name": "format",
+      "state": "pass",
+      "evidence_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    {
+      "name": "grounding",
+      "state": "hold"
+    }
+  ],
+  "dissent": [
+    {
+      "source": "example-reviewer",
+      "state": "open",
+      "note": "Example only; no independent grounding evidence exists for this fixture."
+    }
+  ],
+  "authority": {
+    "tool_execution": false,
+    "training": false,
+    "promotion": false,
+    "canon": false,
+    "world_action": false
+  }
+}
