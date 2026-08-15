@@ -59,3 +59,4 @@ logs.
 - [9005: Put deterministic gates around the WALDO witness clone](9005-axm-waldo-gated-clone-foundation.md)
 - [9006: Give the WALDO witness clone a situated evidence boundary](9006-axm-waldo-situated-clone-boundary.md)
 - [9007: Give the WALDO specialist a bounded inner asset foundry](9007-axm-waldo-inner-asset-foundry.md)
+- [9008: Add a portable capability spine without importing the Workshop](9008-axm-waldo-portable-capability-spine.md)

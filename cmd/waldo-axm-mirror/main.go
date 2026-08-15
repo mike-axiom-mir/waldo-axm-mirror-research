@@ -108,6 +108,36 @@ func main() {
 			os.Exit(2)
 		}
 		err = verifyInnerAssetFile(os.Args[2])
+	case "census-capabilities":
+		if len(os.Args) != 4 {
+			usage()
+			os.Exit(2)
+		}
+		err = censusCapabilitiesFile(os.Args[2], os.Args[3])
+	case "intake-capabilities":
+		if len(os.Args) != 4 {
+			usage()
+			os.Exit(2)
+		}
+		err = intakeCapabilitiesFile(os.Args[2], os.Args[3])
+	case "plan-handoff":
+		if len(os.Args) != 6 {
+			usage()
+			os.Exit(2)
+		}
+		err = planHandoffFile(os.Args[2], os.Args[3], os.Args[4], os.Args[5])
+	case "seal-translation":
+		if len(os.Args) != 5 {
+			usage()
+			os.Exit(2)
+		}
+		err = sealTranslationFile(os.Args[2], os.Args[3], os.Args[4])
+	case "verify-handoff-return":
+		if len(os.Args) != 6 {
+			usage()
+			os.Exit(2)
+		}
+		err = verifyHandoffReturnFile(os.Args[2], os.Args[3], os.Args[4], os.Args[5])
 	case "seal-gated":
 		if len(os.Args) != 10 {
 			usage()
@@ -171,6 +201,11 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror situated-context <context-packet.json> <situated-request.json> <situated-envelope.json>")
 	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror forge-asset <inner-asset-recipe.json> <candidate.axmasset>")
 	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror verify-asset <candidate.axmasset>")
+	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror census-capabilities <census-request.json> <self-snapshot.json>")
+	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror intake-capabilities <external-snapshot.json> <external-receipt.json>")
+	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror plan-handoff <self-snapshot.json> <external-receipt.json> <gap-request.json> <plan.json>")
+	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror seal-translation <plan.json> <translation-declaration.json> <translation-receipt.json>")
+	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror verify-handoff-return <plan.json> <translation-receipt.json> <return-draft.json> <return-receipt.json>")
 	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror seal-gated <anchor.json> <run-witness.json> <profile.json> <context.json> <claims.json> <protocol.json> <draft.json> <sealed.json>")
 	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror seal-situated <anchor.json> <run-witness.json> <profile.json> <context.json> <claims.json> <protocol.json> <situated.json> <draft.json> <sealed.json>")
 	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror seal <draft.json> <sealed.json>")
@@ -483,6 +518,118 @@ func verifyInnerAssetFile(path string) error {
 		return err
 	}
 	fmt.Println("OK", candidate.State, candidate.CandidateSHA256)
+	return nil
+}
+
+func censusCapabilitiesFile(inputPath, outputPath string) error {
+	var request axmmirror.SelfCapabilityCensusRequest
+	if err := readStrictJSON(inputPath, &request); err != nil {
+		return err
+	}
+	snapshot, err := axmmirror.CensusSelfCapabilities(request)
+	if err != nil {
+		return err
+	}
+	if err := writeJSON(outputPath, snapshot); err != nil {
+		return err
+	}
+	fmt.Println(snapshot.State, snapshot.SnapshotSHA256)
+	return nil
+}
+
+func intakeCapabilitiesFile(inputPath, outputPath string) error {
+	var snapshot axmmirror.ExternalCapabilitySnapshot
+	if err := readStrictJSON(inputPath, &snapshot); err != nil {
+		return err
+	}
+	receipt, err := axmmirror.IntakeExternalCapabilities(snapshot)
+	if err != nil {
+		return err
+	}
+	if err := writeJSON(outputPath, receipt); err != nil {
+		return err
+	}
+	fmt.Println(receipt.State, receipt.ReceiptSHA256)
+	if receipt.State != axmmirror.ExternalCapabilityLive && receipt.State != axmmirror.ExternalCapabilitySourceOnly {
+		return fmt.Errorf("external capability intake is %s; inspect the written receipt", receipt.State)
+	}
+	return nil
+}
+
+func planHandoffFile(selfPath, externalPath, requestPath, outputPath string) error {
+	var self axmmirror.SelfCapabilitySnapshot
+	if err := readStrictJSON(selfPath, &self); err != nil {
+		return err
+	}
+	var external axmmirror.ExternalCapabilityReceipt
+	if err := readStrictJSON(externalPath, &external); err != nil {
+		return err
+	}
+	var request axmmirror.CapabilityGapRequest
+	if err := readStrictJSON(requestPath, &request); err != nil {
+		return err
+	}
+	plan, err := axmmirror.PlanCapabilityHandoff(self, external, request)
+	if err != nil {
+		return err
+	}
+	if err := writeJSON(outputPath, plan); err != nil {
+		return err
+	}
+	fmt.Println(plan.State, plan.PlanSHA256)
+	if plan.State != axmmirror.HandoffStateReady && plan.State != axmmirror.HandoffStateLocal {
+		return fmt.Errorf("capability handoff plan is %s; inspect the written plan", plan.State)
+	}
+	return nil
+}
+
+func sealTranslationFile(planPath, declarationPath, outputPath string) error {
+	var plan axmmirror.CapabilityHandoffPlan
+	if err := readStrictJSON(planPath, &plan); err != nil {
+		return err
+	}
+	var declaration axmmirror.CapabilityTranslationDeclaration
+	if err := readStrictJSON(declarationPath, &declaration); err != nil {
+		return err
+	}
+	receipt, err := axmmirror.SealCapabilityTranslation(plan, declaration)
+	if err != nil {
+		return err
+	}
+	if err := writeJSON(outputPath, receipt); err != nil {
+		return err
+	}
+	fmt.Println(receipt.State, receipt.ReceiptSHA256)
+	if receipt.State != axmmirror.TranslationStateNotRequired && receipt.State != axmmirror.TranslationStateNoDeclaredLoss {
+		return fmt.Errorf("translation loss receipt is %s; inspect the written receipt", receipt.State)
+	}
+	return nil
+}
+
+func verifyHandoffReturnFile(planPath, translationPath, draftPath, outputPath string) error {
+	var plan axmmirror.CapabilityHandoffPlan
+	if err := readStrictJSON(planPath, &plan); err != nil {
+		return err
+	}
+	var translation axmmirror.TranslationLossReceipt
+	if err := readStrictJSON(translationPath, &translation); err != nil {
+		return err
+	}
+	var draft axmmirror.CapabilityReturnDraft
+	if err := readStrictJSON(draftPath, &draft); err != nil {
+		return err
+	}
+	receipt, err := axmmirror.VerifyCapabilityReturn(plan, translation, draft)
+	if err != nil {
+		return err
+	}
+	if err := writeJSON(outputPath, receipt); err != nil {
+		return err
+	}
+	fmt.Println(receipt.State, receipt.ReceiptSHA256)
+	if receipt.State != axmmirror.CapabilityReturnVerified {
+		return fmt.Errorf("capability return is %s; inspect the written receipt", receipt.State)
+	}
 	return nil
 }
 

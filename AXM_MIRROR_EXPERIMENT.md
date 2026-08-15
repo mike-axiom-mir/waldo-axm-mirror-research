@@ -43,6 +43,9 @@ flowchart TD
     G --> J["Later behavior delta and dissent"]
     O["Bounded pixel recipe"] --> P["Inner asset foundry"]
     P --> Q["Portable unreviewed .axmasset candidate"]
+    R["Self census + external capability snapshot"] --> S["Exact gap and handoff plan"]
+    S --> T["Translation-loss receipt"]
+    T --> U["Digest-bound return verification"]
 ```
 
 Build after installing the Go version required by WALDO:
@@ -158,6 +161,40 @@ The exact public Asset Factory and visual-contract knowledge sources are pinned
 in `research/asset-foundry-knowledge-sources-2026-08-15.json`. ADR 9007 defines
 the smaller WALDO-native implementation and its authority ceiling.
 
+### Portable capability spine
+
+The Wave 2.3 path lets the specialist describe a missing capability and prepare
+an inspectable external contract without putting the Workshop inside WALDO:
+
+```text
+compiled self capability census
+  + source-attributed external inventory with explicit freshness
+  + exact capability/schema/data-class gap request
+  -> review-only handoff plan
+  -> explicit translation-loss receipt
+  -> digest-bound returned-artifact receipt
+```
+
+```bash
+./waldo-axm-mirror census-capabilities examples/axm-mirror/self-capability-census-request.json /tmp/waldo-self-capabilities.json
+./waldo-axm-mirror intake-capabilities examples/axm-mirror/external-capability-snapshot.json /tmp/platform-capabilities.json
+./waldo-axm-mirror plan-handoff /tmp/waldo-self-capabilities.json /tmp/platform-capabilities.json examples/axm-mirror/capability-gap-request.json /tmp/capability-handoff.json
+```
+
+The checked external snapshot is deliberately `SOURCE_ONLY`, so the last
+command writes `HOLD_EXTERNAL_CAPABILITY_SOURCE_ONLY` and returns nonzero. That
+is the honest result: the public platform contracts are known, but no live
+Workshop runtime or provider was observed. Tests separately prove a synthetic
+fresh LIVE unique-provider path through return verification.
+
+The planner uses exact capability, schema, and data-class matches. It never
+selects or invokes a provider, inherits a permission, generates an adapter, or
+turns source declarations into readiness. Translation receipts say
+`NO_DECLARED_LOSS`, not “lossless,” and returned digests are not content or
+visual approval. The source contracts and ceilings are pinned in
+`research/portable-capability-spine-knowledge-sources-2026-08-15.json`; ADR
+9008 defines the smaller WALDO-native contract.
+
 Receipt writes are atomic and refuse to replace an existing output path. Use a
 new output name, or remove an old disposable example deliberately before
 rerunning a command.
@@ -171,8 +208,9 @@ model experiments can be recorded honestly.
 They do not grant capture or tool access, install or restore skills, run a
 model, verify artifact bytes merely by reading BOM entries, certify safety or
 legal usability, convert discovery or dissent into a score, expose hidden
-reasoning, invoke external asset generation, approve or install an asset, or
-make any AXM result CANON.
+reasoning, invoke or select an external capability provider, infer schema
+semantics or permissions, approve or install an asset, or make any AXM result
+CANON.
 
 ## Next experimental rungs
 
@@ -186,7 +224,12 @@ make any AXM result CANON.
 5. Add append-only dissent continuity and a Reproducibility Twin.
 6. Let a bounded specialist propose pixel recipes against the inner foundry and
    evaluate the resulting candidates under explicit human visual review.
-7. Only then evaluate whether a small WALDO-trained Mirror research clone is
+7. Add resource leases and real provider transport only as separately
+   permissioned contracts; keep provider selection and execution outside the
+   learned clone.
+8. Add continuity/replay capsules and artifact-byte or visual verification as
+   separate evidence, not upgrades to handoff metadata.
+9. Only then evaluate whether a small WALDO-trained Mirror research clone is
    technically and legally appropriate for the selected corpus.
 
 Large or upstream-facing changes stay out until this fork has something tested

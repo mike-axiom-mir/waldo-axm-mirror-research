@@ -4,9 +4,10 @@ These files are public-safe synthetic inputs. They do not describe a real
 trained model or a real independent evaluation.
 
 The checked-in corpus, run, release, comparison, behavior, sensory, skill
-continuity, discovery, and inner-asset recipe drafts are synthetic contract
-fixtures. The complete gated, situated, and inner-asset CLI flows are exercised
-by `TestGatedCloneFoundationCLIFlow`, `TestInnerAssetCLIFlow`, and the focused
+continuity, discovery, inner-asset, and capability-spine drafts are synthetic
+contract fixtures. The complete gated, situated, inner-asset, and synthetic
+LIVE capability CLI flows are exercised by `TestGatedCloneFoundationCLIFlow`,
+`TestInnerAssetCLIFlow`, `TestPortableCapabilitySpineCLIFlow`, and the focused
 tests under `internal/axmmirror`.
 
 The separate experimental CLI now supports:
@@ -27,6 +28,11 @@ waldo-axm-mirror discover
 waldo-axm-mirror situated-context
 waldo-axm-mirror forge-asset
 waldo-axm-mirror verify-asset
+waldo-axm-mirror census-capabilities
+waldo-axm-mirror intake-capabilities
+waldo-axm-mirror plan-handoff
+waldo-axm-mirror seal-translation
+waldo-axm-mirror verify-handoff-return
 waldo-axm-mirror seal-gated
 waldo-axm-mirror seal-situated
 waldo-axm-mirror verify
@@ -55,6 +61,27 @@ foundry compiles it into separate editable recipe/grid, primary PNG, preview
 PNG, and sprite-atlas artifacts inside one deterministic `.axmasset` candidate.
 The fixture pins the complete portable bundle digest, but remains visually
 UNREVIEWED and carries no install, approval, promotion, or CANON authority.
+
+The portable capability fixtures intentionally demonstrate a held real-source
+path:
+
+- `self-capability-census-request.json` binds a synthetic externally observed
+  build and emits the clone's compiled declaration catalog;
+- `external-capability-snapshot.json` pins four exact public platform contracts
+  but labels them `SOURCE_ONLY`, never LIVE;
+- `capability-gap-request.json` asks for the declared platform translation
+  contract using exact input and output schemas;
+- `capability-translation-declaration.json` records that no schema translation
+  is required, without generating or invoking an adapter;
+- `capability-return-draft.json` is synthetic declared return metadata. It is
+  necessarily `HOLD_RETURN_PLAN` because the source-only plan was never live or
+  executable.
+
+This chain pins the initial durable receipt digests and proves that source
+knowledge cannot silently become runtime readiness. Separate tests construct a
+fresh synthetic LIVE provider and reach `RETURN_BINDINGS_VERIFIED`; that still
+proves bindings only, not returned bytes, content quality, permission
+enforcement, installation, promotion, or CANON.
 
 HOLD and REFUSED receipts are written before the CLI returns a nonzero status,
 so unresolved evidence remains inspectable. Output paths are atomic no-replace
