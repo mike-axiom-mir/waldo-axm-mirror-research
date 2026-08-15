@@ -41,6 +41,8 @@ flowchart TD
     N["AI-native seams + human advice"] --> L
     L --> G
     G --> J["Later behavior delta and dissent"]
+    O["Bounded pixel recipe"] --> P["Inner asset foundry"]
+    P --> Q["Portable unreviewed .axmasset candidate"]
 ```
 
 Build after installing the Go version required by WALDO:
@@ -128,6 +130,34 @@ The exact public contract sources and claim ceilings are pinned in
 archive remains inert knowledge and no Workshop or Mirror JavaScript is
 imported or executed.
 
+### Inner asset foundry
+
+The Wave 2.2 path adds one deliberately small creation substrate without
+copying the Workshop or full Asset Factory:
+
+```text
+strict pixel recipe
+  -> deterministic Go compiler
+  -> normalized recipe + resolved grid + primary PNG + preview PNG + atlas
+  -> candidate-only portable .axmasset
+  -> full digest verification and deterministic recompilation
+```
+
+```bash
+./waldo-axm-mirror forge-asset examples/axm-mirror/inner-asset-recipe.json /tmp/witness-orb.axmasset
+./waldo-axm-mirror verify-asset /tmp/witness-orb.axmasset
+```
+
+Recipes contain only bounded pixel primitives, explicit palettes, frames,
+semantic/presentation layers, canvas constraints, and a deterministic seed.
+They contain no code, prompt, path, URL, external generator, or Asset Hand. A
+READY candidate still has `visual_status: UNREVIEWED`; technical PASS is not
+visual approval, usefulness, shared-vocabulary admission, promotion, or CANON.
+
+The exact public Asset Factory and visual-contract knowledge sources are pinned
+in `research/asset-foundry-knowledge-sources-2026-08-15.json`. ADR 9007 defines
+the smaller WALDO-native implementation and its authority ceiling.
+
 Receipt writes are atomic and refuse to replace an existing output path. Use a
 new output name, or remove an old disposable example deliberately before
 rerunning a command.
@@ -141,7 +171,8 @@ model experiments can be recorded honestly.
 They do not grant capture or tool access, install or restore skills, run a
 model, verify artifact bytes merely by reading BOM entries, certify safety or
 legal usability, convert discovery or dissent into a score, expose hidden
-reasoning, or make any AXM result CANON.
+reasoning, invoke external asset generation, approve or install an asset, or
+make any AXM result CANON.
 
 ## Next experimental rungs
 
@@ -153,7 +184,9 @@ reasoning, or make any AXM result CANON.
 4. Compare exact releases without flattening behavior, verification, discovery,
    and dissent into one score.
 5. Add append-only dissent continuity and a Reproducibility Twin.
-6. Only then evaluate whether a small WALDO-trained Mirror research clone is
+6. Let a bounded specialist propose pixel recipes against the inner foundry and
+   evaluate the resulting candidates under explicit human visual review.
+7. Only then evaluate whether a small WALDO-trained Mirror research clone is
    technically and legally appropriate for the selected corpus.
 
 Large or upstream-facing changes stay out until this fork has something tested

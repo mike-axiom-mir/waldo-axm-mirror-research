@@ -57,3 +57,5 @@ logs.
 - [9003: Add bounded Wave 1 provenance organs](9003-axm-waldo-wave-one-provenance-organs.md)
 - [9004: Complete Wave 1 with corpus and training-run witnesses](9004-axm-waldo-corpus-and-run-witnesses.md)
 - [9005: Put deterministic gates around the WALDO witness clone](9005-axm-waldo-gated-clone-foundation.md)
+- [9006: Give the WALDO witness clone a situated evidence boundary](9006-axm-waldo-situated-clone-boundary.md)
+- [9007: Give the WALDO specialist a bounded inner asset foundry](9007-axm-waldo-inner-asset-foundry.md)
