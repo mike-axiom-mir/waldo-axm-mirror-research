@@ -125,6 +125,101 @@ func TestInnerAssetCLIFlow(t *testing.T) {
 	}
 }
 
+func TestPortableCapabilitySpineCLIFlow(t *testing.T) {
+	directory := t.TempDir()
+	censusRequest := axmmirror.SelfCapabilityCensusRequest{
+		Schema: axmmirror.SelfCapabilityCensusRequestSchema, CensusID: "cli-self-census-0001",
+		TargetAnsweringIdentitySHA256: repeat("1"), ObservedBuildSHA256: repeat("2"),
+		ObservationReceiptSHA256: repeat("3"), CapturedAt: "2026-08-15T10:00:00Z", Authority: axmmirror.Authority{},
+	}
+	selfPath := filepath.Join(directory, "self-capabilities.json")
+	if err := censusCapabilitiesFile(writeValueTemp(t, censusRequest), selfPath); err != nil {
+		t.Fatalf("censusCapabilitiesFile() error = %v", err)
+	}
+	var self axmmirror.SelfCapabilitySnapshot
+	if err := readStrictJSON(selfPath, &self); err != nil {
+		t.Fatal(err)
+	}
+
+	externalSnapshot := axmmirror.ExternalCapabilitySnapshot{
+		Schema: axmmirror.ExternalCapabilitySnapshotSchema, SnapshotID: "cli-external-live-0001",
+		Source: axmmirror.CapabilitySnapshotSource{
+			Repository: "example/platform", Branch: "main", Commit: repeat40("a"),
+			Documents: []axmmirror.CapabilitySourceDocument{{Path: "tools/render-hand/module.contract.json", GitBlobSHA: repeat40("b"), SHA256: repeat("c")}},
+		},
+		ObservationState: axmmirror.ExternalObservationLive, ObservedAt: "2026-08-15T10:00:00Z", AssessedAt: "2026-08-15T10:00:00Z",
+		TTLMillis: 60_000, InventoryComplete: true, RuntimeEvidenceSHA256: repeat("d"),
+		Capabilities: []axmmirror.ExternalCapability{{
+			ID: "asset.external.render", ProviderID: "render-hand", Version: "v1", ExecutionClass: "EXTERNAL_HAND",
+			DeclarationState: axmmirror.ExternalDeclarationAvailable, InputSchemas: []string{"axm.asset-brief/v1"},
+			OutputSchemas: []string{"image/png"}, AcceptedDataClasses: []string{axmmirror.CapabilityDataPublic},
+		}},
+		Authority: axmmirror.Authority{},
+	}
+	externalPath := filepath.Join(directory, "external-capabilities.json")
+	if err := intakeCapabilitiesFile(writeValueTemp(t, externalSnapshot), externalPath); err != nil {
+		t.Fatalf("intakeCapabilitiesFile() error = %v", err)
+	}
+
+	request := axmmirror.CapabilityGapRequest{
+		Schema: axmmirror.CapabilityGapRequestSchema, RequestID: "cli-gap-0001",
+		TargetAnsweringIdentitySHA256: self.TargetAnsweringIdentitySHA256, CapabilityID: "asset.external.render",
+		Input:                axmmirror.CapabilityArtifactRef{Schema: "axm.asset-brief/v1", SHA256: repeat("4"), Bytes: 512},
+		RequiredOutputSchema: "image/png", DataClass: axmmirror.CapabilityDataPublic, MaxOutputBytes: 4096,
+		CreatedAt: "2026-08-15T10:00:01Z", ExpiresAt: "2026-08-15T10:10:00Z", Authority: axmmirror.Authority{},
+	}
+	planPath := filepath.Join(directory, "handoff-plan.json")
+	if err := planHandoffFile(selfPath, externalPath, writeValueTemp(t, request), planPath); err != nil {
+		t.Fatalf("planHandoffFile() error = %v", err)
+	}
+	var plan axmmirror.CapabilityHandoffPlan
+	if err := readStrictJSON(planPath, &plan); err != nil {
+		t.Fatal(err)
+	}
+	if plan.State != axmmirror.HandoffStateReady || plan.ProviderSelected || plan.ExternalExecutionAllowed {
+		t.Fatalf("handoff plan = %+v", plan)
+	}
+
+	translationDeclaration := axmmirror.CapabilityTranslationDeclaration{
+		Schema: axmmirror.CapabilityTranslationDeclarationSchema, TranslationID: "cli-translation-0001",
+		PlanSHA256: plan.PlanSHA256, ProviderID: plan.UniqueCandidateProviderID,
+		InputFromSchema: request.Input.Schema, InputToSchema: request.Input.Schema,
+		OutputFromSchema: request.RequiredOutputSchema, OutputToSchema: request.RequiredOutputSchema,
+		DeclaredAt: "2026-08-15T10:00:01Z", Authority: axmmirror.Authority{},
+	}
+	translationPath := filepath.Join(directory, "translation-receipt.json")
+	if err := sealTranslationFile(planPath, writeValueTemp(t, translationDeclaration), translationPath); err != nil {
+		t.Fatalf("sealTranslationFile() error = %v", err)
+	}
+	var translation axmmirror.TranslationLossReceipt
+	if err := readStrictJSON(translationPath, &translation); err != nil {
+		t.Fatal(err)
+	}
+
+	returnDraft := axmmirror.CapabilityReturnDraft{
+		Schema: axmmirror.CapabilityReturnDraftSchema, ReturnID: "cli-return-0001", PlanSHA256: plan.PlanSHA256,
+		TranslationReceiptSHA256: translation.ReceiptSHA256, ProviderID: plan.UniqueCandidateProviderID, Input: request.Input,
+		Outputs: []axmmirror.CapabilityOutputArtifact{{
+			ID: "primary", CapabilityArtifactRef: axmmirror.CapabilityArtifactRef{Schema: "image/png", SHA256: repeat("5"), Bytes: 1024},
+		}},
+		ProviderReceiptSHA256: repeat("6"), StartedAt: "2026-08-15T10:00:02Z", CompletedAt: "2026-08-15T10:00:03Z",
+		AssessedAt: "2026-08-15T10:00:04Z", RuntimeState: axmmirror.CapabilityRuntimeComplete,
+		PermissionState: axmmirror.CapabilityPermissionConfirmed, CleanupState: axmmirror.CapabilityCleanupConfirmed,
+		Authority: axmmirror.Authority{},
+	}
+	returnPath := filepath.Join(directory, "return-receipt.json")
+	if err := verifyHandoffReturnFile(planPath, translationPath, writeValueTemp(t, returnDraft), returnPath); err != nil {
+		t.Fatalf("verifyHandoffReturnFile() error = %v", err)
+	}
+	var returned axmmirror.CapabilityReturnReceipt
+	if err := readStrictJSON(returnPath, &returned); err != nil {
+		t.Fatal(err)
+	}
+	if returned.State != axmmirror.CapabilityReturnVerified {
+		t.Fatalf("return receipt state = %q", returned.State)
+	}
+}
+
 func TestWitnessRunFileWritesHeldLifecycleReceipt(t *testing.T) {
 	runBOM := filepath.Join("..", "..", "examples", "axm-mirror", "run-bom.json")
 	run := writeTemp(t, `{
@@ -404,6 +499,14 @@ func writeValueTemp(t *testing.T, value any) string {
 func repeat(ch string) string {
 	value := ""
 	for i := 0; i < 64; i++ {
+		value += ch
+	}
+	return value
+}
+
+func repeat40(ch string) string {
+	value := ""
+	for i := 0; i < 40; i++ {
 		value += ch
 	}
 	return value
