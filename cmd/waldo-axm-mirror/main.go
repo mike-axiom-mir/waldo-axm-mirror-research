@@ -138,6 +138,48 @@ func main() {
 			os.Exit(2)
 		}
 		err = verifyHandoffReturnFile(os.Args[2], os.Args[3], os.Args[4], os.Args[5])
+	case "assess-verifier-change":
+		if len(os.Args) != 5 {
+			usage()
+			os.Exit(2)
+		}
+		err = assessVerifierChangeFile(os.Args[2], os.Args[3], os.Args[4])
+	case "materialize-verifier-change":
+		if len(os.Args) != 5 {
+			usage()
+			os.Exit(2)
+		}
+		err = materializeVerifierChangeFile(os.Args[2], os.Args[3], os.Args[4])
+	case "plan-verifier-repair":
+		if len(os.Args) != 6 {
+			usage()
+			os.Exit(2)
+		}
+		err = planVerifierRepairFile(os.Args[2], os.Args[3], os.Args[4], os.Args[5])
+	case "seal-tool-experience":
+		if len(os.Args) != 4 {
+			usage()
+			os.Exit(2)
+		}
+		err = sealToolExperienceFile(os.Args[2], os.Args[3])
+	case "start-tool-memory":
+		if len(os.Args) != 4 {
+			usage()
+			os.Exit(2)
+		}
+		err = startToolMemoryFile(os.Args[2], os.Args[3])
+	case "grow-tool-memory":
+		if len(os.Args) != 5 {
+			usage()
+			os.Exit(2)
+		}
+		err = growToolMemoryFile(os.Args[2], os.Args[3], os.Args[4])
+	case "recall-tool-wisdom":
+		if len(os.Args) != 5 {
+			usage()
+			os.Exit(2)
+		}
+		err = recallToolWisdomFile(os.Args[2], os.Args[3], os.Args[4])
 	case "seal-gated":
 		if len(os.Args) != 10 {
 			usage()
@@ -206,6 +248,13 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror plan-handoff <self-snapshot.json> <external-receipt.json> <gap-request.json> <plan.json>")
 	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror seal-translation <plan.json> <translation-declaration.json> <translation-receipt.json>")
 	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror verify-handoff-return <plan.json> <translation-receipt.json> <return-draft.json> <return-receipt.json>")
+	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror assess-verifier-change <registry.json> <change-request.json> <receipt.json>")
+	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror materialize-verifier-change <registry.json> <ready-receipt.json> <candidate-registry.json>")
+	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror plan-verifier-repair <registry.json> <failed-receipt.json> <repair-request.json> <repair-plan.json>")
+	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror seal-tool-experience <experience-draft.json> <sealed-experience.json>")
+	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror start-tool-memory <sealed-experience.json> <memory-shard.json>")
+	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror grow-tool-memory <memory-shard.json> <sealed-experience.json> <next-memory-shard.json>")
+	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror recall-tool-wisdom <memory-shard.json> <wisdom-query.json> <wisdom-view.json>")
 	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror seal-gated <anchor.json> <run-witness.json> <profile.json> <context.json> <claims.json> <protocol.json> <draft.json> <sealed.json>")
 	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror seal-situated <anchor.json> <run-witness.json> <profile.json> <context.json> <claims.json> <protocol.json> <situated.json> <draft.json> <sealed.json>")
 	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror seal <draft.json> <sealed.json>")
@@ -629,6 +678,151 @@ func verifyHandoffReturnFile(planPath, translationPath, draftPath, outputPath st
 	fmt.Println(receipt.State, receipt.ReceiptSHA256)
 	if receipt.State != axmmirror.CapabilityReturnVerified {
 		return fmt.Errorf("capability return is %s; inspect the written receipt", receipt.State)
+	}
+	return nil
+}
+
+func assessVerifierChangeFile(registryPath, requestPath, outputPath string) error {
+	var registry axmmirror.VerifierRegistry
+	if err := readStrictJSON(registryPath, &registry); err != nil {
+		return err
+	}
+	var request axmmirror.VerifierChangeRequest
+	if err := readStrictJSON(requestPath, &request); err != nil {
+		return err
+	}
+	receipt, err := axmmirror.AssessVerifierChange(registry, request)
+	if err != nil {
+		return err
+	}
+	if err := writeJSON(outputPath, receipt); err != nil {
+		return err
+	}
+	fmt.Println(receipt.State, receipt.ReceiptSHA256)
+	if receipt.State != axmmirror.VerifierChangeReady {
+		return fmt.Errorf("verifier change is %s; inspect the written rollback or HOLD receipt", receipt.State)
+	}
+	return nil
+}
+
+func materializeVerifierChangeFile(registryPath, receiptPath, outputPath string) error {
+	var registry axmmirror.VerifierRegistry
+	if err := readStrictJSON(registryPath, &registry); err != nil {
+		return err
+	}
+	var receipt axmmirror.VerifierChangeReceipt
+	if err := readStrictJSON(receiptPath, &receipt); err != nil {
+		return err
+	}
+	candidate, err := axmmirror.MaterializeVerifierChange(registry, receipt)
+	if err != nil {
+		return err
+	}
+	if err := writeJSON(outputPath, candidate); err != nil {
+		return err
+	}
+	fmt.Println("VERIFIER_REGISTRY_CANDIDATE", candidate.RegistrySHA256)
+	return nil
+}
+
+func planVerifierRepairFile(registryPath, failedPath, requestPath, outputPath string) error {
+	var registry axmmirror.VerifierRegistry
+	if err := readStrictJSON(registryPath, &registry); err != nil {
+		return err
+	}
+	var failed axmmirror.VerifierChangeReceipt
+	if err := readStrictJSON(failedPath, &failed); err != nil {
+		return err
+	}
+	var request axmmirror.RepairBuddyRequest
+	if err := readStrictJSON(requestPath, &request); err != nil {
+		return err
+	}
+	plan, err := axmmirror.PlanVerifierRepair(registry, failed, request)
+	if err != nil {
+		return err
+	}
+	if err := writeJSON(outputPath, plan); err != nil {
+		return err
+	}
+	fmt.Println(plan.State, plan.PlanSHA256)
+	if plan.State != axmmirror.RepairBuddyCandidateReady {
+		return fmt.Errorf("Repair Buddy plan is %s; inspect the written plan", plan.State)
+	}
+	return nil
+}
+
+func sealToolExperienceFile(inputPath, outputPath string) error {
+	var experience axmmirror.IdentityToolExperience
+	if err := readStrictJSON(inputPath, &experience); err != nil {
+		return err
+	}
+	sealed, err := axmmirror.SealIdentityToolExperience(experience)
+	if err != nil {
+		return err
+	}
+	if err := writeJSON(outputPath, sealed); err != nil {
+		return err
+	}
+	fmt.Println("TOOL_EXPERIENCE_SEALED", sealed.ExperienceSHA256)
+	return nil
+}
+
+func startToolMemoryFile(experiencePath, outputPath string) error {
+	var experience axmmirror.IdentityToolExperience
+	if err := readStrictJSON(experiencePath, &experience); err != nil {
+		return err
+	}
+	shard, err := axmmirror.StartIdentityToolMemory(experience)
+	if err != nil {
+		return err
+	}
+	if err := writeJSON(outputPath, shard); err != nil {
+		return err
+	}
+	fmt.Println(shard.State, shard.ShardSHA256)
+	return nil
+}
+
+func growToolMemoryFile(currentPath, experiencePath, outputPath string) error {
+	var current axmmirror.IdentityToolMemoryShard
+	if err := readStrictJSON(currentPath, &current); err != nil {
+		return err
+	}
+	var experience axmmirror.IdentityToolExperience
+	if err := readStrictJSON(experiencePath, &experience); err != nil {
+		return err
+	}
+	next, err := axmmirror.GrowIdentityToolMemory(current, experience)
+	if err != nil {
+		return err
+	}
+	if err := writeJSON(outputPath, next); err != nil {
+		return err
+	}
+	fmt.Println(next.State, next.ShardSHA256)
+	return nil
+}
+
+func recallToolWisdomFile(shardPath, queryPath, outputPath string) error {
+	var shard axmmirror.IdentityToolMemoryShard
+	if err := readStrictJSON(shardPath, &shard); err != nil {
+		return err
+	}
+	var query axmmirror.IdentityWisdomQuery
+	if err := readStrictJSON(queryPath, &query); err != nil {
+		return err
+	}
+	view, err := axmmirror.RecallIdentityToolWisdom(shard, query)
+	if err != nil {
+		return err
+	}
+	if err := writeJSON(outputPath, view); err != nil {
+		return err
+	}
+	fmt.Println(view.State, view.ViewSHA256)
+	if view.State != axmmirror.ToolWisdomReady {
+		return fmt.Errorf("identity tool wisdom is %s; inspect the written view", view.State)
 	}
 	return nil
 }
