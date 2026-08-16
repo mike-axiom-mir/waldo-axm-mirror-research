@@ -9,15 +9,22 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 )
 
 const (
-	CorpusEvidenceLensSchema = "axm.waldo-witness.corpus-evidence-lens/v0.1"
-	CorpusEvidenceStateReady = "READY"
+	CorpusEvidenceLensSchemaV1 = "axm.waldo-witness.corpus-evidence-lens/v0.1"
+	CorpusEvidenceLensSchema   = "axm.waldo-witness.corpus-evidence-lens/v0.2"
+	CorpusEvidenceStateReady   = "READY"
 
-	waldoTextRecordSchema = 1
-	waldoTextWriterRecipe = "parquet-go/0.30.1/zstd-6/page-1m/rg-64m/v5-bom"
-	waldoFormerTextRecipe = "parquet-go/0.30.1/zstd-6/page-1m/rg-64m/v4"
+	waldoTextRecordSchema        = 2
+	waldoFormerTextRecordSchema  = 1
+	waldoTextWriterRecipe        = "parquet-go/0.30.1/zstd-6/page-1m/rg-64m/v9-privacy-redaction"
+	waldoFormerMainContentRecipe = "parquet-go/0.30.1/zstd-6/page-1m/rg-64m/v8-main-content"
+	waldoFormerAssessmentRecipe  = "parquet-go/0.30.1/zstd-6/page-1m/rg-64m/v7-content-assessment"
+	waldoFormerTextBOMRecipe     = "parquet-go/0.30.1/zstd-6/page-1m/rg-64m/v5-bom"
+	waldoFormerTextRecipe        = "parquet-go/0.30.1/zstd-6/page-1m/rg-64m/v4"
+	waldoPrivacyRedactionPolicy  = "waldo/privacy-redaction-v1"
 )
 
 // EvidenceMeasures is WALDO's exact additive shard, document, token, and byte
@@ -91,28 +98,70 @@ type CorpusAttestationEvidence struct {
 	NotRecorded   int64  `json:"not_recorded"`
 }
 
+// CorpusRecordFilterEvidence binds the exact portable selection policy without
+// expanding an unbounded per-corpus filter map into the public receipt.
+type CorpusRecordFilterEvidence struct {
+	State             string `json:"state"`
+	Schema            int    `json:"schema,omitempty"`
+	PolicySHA256      string `json:"policy_sha256"`
+	GlobalDeclared    bool   `json:"global_declared"`
+	CorpusFilterCount int    `json:"corpus_filter_count"`
+}
+
+// CorpusAssessmentEvidence keeps deterministic row classifiers separate from
+// source meaning. DetectorSetSHA256 binds every field/detector pair while the
+// additive counts remain directly inspectable.
+type CorpusAssessmentEvidence struct {
+	State                     string `json:"state"`
+	AssessedShards            int64  `json:"assessed_shards"`
+	LegacyShards              int64  `json:"legacy_shards"`
+	DetectorSetSHA256         string `json:"detector_set_sha256"`
+	EmailAddressRecords       int64  `json:"email_address_records"`
+	RepetitiveContentRecords  int64  `json:"repetitive_content_records"`
+	BoilerplateContentRecords int64  `json:"boilerplate_content_records"`
+}
+
+// CorpusPrivacyRedactionEvidence reports exact deterministic transformations
+// recorded by current WALDO shards. It never upgrades those counts into a
+// claim of anonymity, privacy-law compliance, or absence of indirect identity.
+type CorpusPrivacyRedactionEvidence struct {
+	State                      string `json:"state"`
+	Policy                     string `json:"policy,omitempty"`
+	NamesRetained              bool   `json:"names_retained"`
+	RedactedShards             int64  `json:"redacted_shards"`
+	UnredactedCompatibleShards int64  `json:"unredacted_compatible_shards"`
+	EmailAddresses             int64  `json:"email_addresses"`
+	IPAddresses                int64  `json:"ip_addresses"`
+	PhoneNumbers               int64  `json:"phone_numbers"`
+	MailRoutingHeaders         int64  `json:"mail_routing_headers"`
+	Credentials                int64  `json:"credentials"`
+}
+
 // CorpusEvidenceLens is a bounded, deterministic projection of a documented
 // OpenWALDO corpus BOM. READY means that the receipt passed the structural and
 // aggregate checks implemented here; the boundary notices state what it does
 // not establish.
 type CorpusEvidenceLens struct {
-	Schema          string                      `json:"schema"`
-	State           string                      `json:"state"`
-	BOMSHA256       string                      `json:"bom_sha256"`
-	DocumentSHA256  string                      `json:"document_sha256"`
-	ReceiptSHA256   string                      `json:"receipt_sha256,omitempty"`
-	Index           CorpusIndexEvidence         `json:"index"`
-	Paths           []string                    `json:"paths"`
-	LicensePolicy   CorpusLicensePolicy         `json:"license_policy"`
-	Manifests       []CorpusManifestEvidence    `json:"manifests"`
-	SourceSetSHA256 string                      `json:"source_set_sha256"`
-	ShardSetSHA256  string                      `json:"shard_set_sha256"`
-	Totals          EvidenceMeasures            `json:"totals"`
-	Modalities      map[string]ModalityEvidence `json:"modalities,omitempty"`
-	Licenses        []CorpusLicenseEvidence     `json:"licenses"`
-	Attestation     CorpusAttestationEvidence   `json:"attestation"`
-	Notices         []string                    `json:"notices"`
-	Authority       Authority                   `json:"authority"`
+	Schema           string                          `json:"schema"`
+	State            string                          `json:"state"`
+	BOMSHA256        string                          `json:"bom_sha256"`
+	DocumentSHA256   string                          `json:"document_sha256"`
+	ReceiptSHA256    string                          `json:"receipt_sha256,omitempty"`
+	Index            CorpusIndexEvidence             `json:"index"`
+	Paths            []string                        `json:"paths"`
+	LicensePolicy    CorpusLicensePolicy             `json:"license_policy"`
+	RecordFilter     *CorpusRecordFilterEvidence     `json:"record_filter,omitempty"`
+	Manifests        []CorpusManifestEvidence        `json:"manifests"`
+	SourceSetSHA256  string                          `json:"source_set_sha256"`
+	ShardSetSHA256   string                          `json:"shard_set_sha256"`
+	Totals           EvidenceMeasures                `json:"totals"`
+	Modalities       map[string]ModalityEvidence     `json:"modalities,omitempty"`
+	Licenses         []CorpusLicenseEvidence         `json:"licenses"`
+	Attestation      CorpusAttestationEvidence       `json:"attestation"`
+	Assessment       *CorpusAssessmentEvidence       `json:"assessment,omitempty"`
+	PrivacyRedaction *CorpusPrivacyRedactionEvidence `json:"privacy_redaction,omitempty"`
+	Notices          []string                        `json:"notices"`
+	Authority        Authority                       `json:"authority"`
 }
 
 // The wire types below mirror the documented schema-1 JSON order. They stay
@@ -125,12 +174,44 @@ type waldoCorpusBOM struct {
 	Index        waldoCorpusIndex            `json:"index"`
 	Paths        []string                    `json:"paths"`
 	Policy       CorpusLicensePolicy         `json:"license_policy,omitempty"`
+	RecordFilter *waldoRecordFilterPolicy    `json:"record_filter,omitempty"`
 	Manifests    []waldoCorpusManifest       `json:"manifests"`
 	SubManifests []waldoCorpusSubManifest    `json:"sub_manifests,omitempty"`
 	Shards       []waldoCorpusShard          `json:"shards"`
 	Totals       EvidenceMeasures            `json:"totals"`
 	Modalities   map[string]ModalityEvidence `json:"modalities,omitempty"`
 	Licenses     map[string]EvidenceMeasures `json:"licenses"`
+}
+
+type waldoRecordFilterPolicy struct {
+	Schema  int                          `json:"schema"`
+	Global  *waldoRecordFilter           `json:"global,omitempty"`
+	Corpora map[string]waldoRecordFilter `json:"corpora,omitempty"`
+}
+
+type waldoRecordFilter struct {
+	MainContent *bool                 `json:"main_content,omitempty"`
+	Exclude     *waldoExclusionFilter `json:"exclude,omitempty"`
+	Licenses    *waldoValueFilter     `json:"licenses,omitempty"`
+	Languages   *waldoValueFilter     `json:"languages,omitempty"`
+	Sources     *waldoValueFilter     `json:"sources,omitempty"`
+	Date        *waldoDateFilter      `json:"date,omitempty"`
+}
+
+type waldoExclusionFilter struct {
+	RepetitiveContent  *bool    `json:"repetitive_content,omitempty"`
+	BoilerplateContent *bool    `json:"boilerplate_content,omitempty"`
+	Licenses           []string `json:"licenses,omitempty"`
+}
+
+type waldoValueFilter struct {
+	Include []string `json:"include,omitempty"`
+	Exclude []string `json:"exclude,omitempty"`
+}
+
+type waldoDateFilter struct {
+	From string `json:"from,omitempty"`
+	To   string `json:"to,omitempty"`
 }
 
 type waldoCorpusIndex struct {
@@ -266,6 +347,27 @@ type waldoRecipeEvidence struct {
 	Steps      []waldoRecipeStep `json:"steps"`
 }
 
+type waldoDetectionMeasure struct {
+	Detector string `json:"detector"`
+	Records  int64  `json:"records"`
+}
+
+type waldoContentAssessment struct {
+	EmailAddresses     *waldoDetectionMeasure `json:"email_addresses,omitempty"`
+	RepetitiveContent  *waldoDetectionMeasure `json:"repetitive_content,omitempty"`
+	BoilerplateContent *waldoDetectionMeasure `json:"boilerplate_content,omitempty"`
+}
+
+type waldoContentRedaction struct {
+	Policy             string `json:"policy"`
+	NamesRetained      bool   `json:"names_retained"`
+	EmailAddresses     int64  `json:"email_addresses"`
+	IPAddresses        int64  `json:"ip_addresses"`
+	PhoneNumbers       int64  `json:"phone_numbers"`
+	MailRoutingHeaders int64  `json:"mail_routing_headers"`
+	Credentials        int64  `json:"credentials"`
+}
+
 type waldoCorpusManifest struct {
 	Path         string                      `json:"path"`
 	SHA256       string                      `json:"sha256"`
@@ -280,6 +382,8 @@ type waldoCorpusManifest struct {
 	Sources      []waldoSource               `json:"sources"`
 	Processing   *waldoProcessing            `json:"processing,omitempty"`
 	ComposedBy   *waldoRecipeEvidence        `json:"composed_by,omitempty"`
+	Assessment   *waldoContentAssessment     `json:"assessment,omitempty"`
+	Redaction    *waldoContentRedaction      `json:"redaction,omitempty"`
 	Totals       EvidenceMeasures            `json:"totals"`
 	Modalities   map[string]ModalityEvidence `json:"modalities,omitempty"`
 	Licenses     map[string]EvidenceMeasures `json:"licenses"`
@@ -293,18 +397,22 @@ type waldoShardValidation struct {
 }
 
 type waldoShardBOM struct {
-	Kind         string               `json:"kind"`
-	Schema       int                  `json:"schema"`
-	Subject      string               `json:"subject"`
-	PlanSHA256   string               `json:"plan_sha256"`
-	RecordSchema int                  `json:"record_schema"`
-	WriterRecipe string               `json:"writer_recipe"`
-	Tokenizer    string               `json:"tokenizer"`
-	Records      int64                `json:"records"`
-	Tokens       int64                `json:"tokens"`
-	ContentBytes int64                `json:"content_bytes"`
-	Licenses     []string             `json:"licenses"`
-	Validation   waldoShardValidation `json:"validation"`
+	Kind                      string                `json:"kind"`
+	Schema                    int                   `json:"schema"`
+	Subject                   string                `json:"subject"`
+	PlanSHA256                string                `json:"plan_sha256"`
+	RecordSchema              int                   `json:"record_schema"`
+	WriterRecipe              string                `json:"writer_recipe"`
+	Tokenizer                 string                `json:"tokenizer"`
+	Records                   int64                 `json:"records"`
+	Tokens                    int64                 `json:"tokens"`
+	ContentBytes              int64                 `json:"content_bytes"`
+	EmailAddressRecords       int64                 `json:"email_address_records,omitempty"`
+	RepetitiveContentRecords  int64                 `json:"repetitive_content_records,omitempty"`
+	BoilerplateContentRecords int64                 `json:"boilerplate_content_records,omitempty"`
+	Redaction                 waldoContentRedaction `json:"redaction,omitempty"`
+	Licenses                  []string              `json:"licenses"`
+	Validation                waldoShardValidation  `json:"validation"`
 }
 
 type waldoShardAttestation struct {
@@ -332,6 +440,8 @@ type waldoCorpusShard struct {
 	Bytes             int64                       `json:"bytes"`
 	Modalities        map[string]ModalityEvidence `json:"modalities,omitempty"`
 	Attestation       *waldoShardAttestation      `json:"attestation,omitempty"`
+	Assessment        *waldoContentAssessment     `json:"assessment,omitempty"`
+	Redaction         *waldoContentRedaction      `json:"redaction,omitempty"`
 }
 
 type corpusShardIdentity struct {
@@ -376,6 +486,14 @@ func LensCorpusBOM(data []byte) (CorpusEvidenceLens, error) {
 	if err != nil {
 		return CorpusEvidenceLens{}, err
 	}
+	recordFilter, err := projectCorpusRecordFilter(bom.RecordFilter)
+	if err != nil {
+		return CorpusEvidenceLens{}, err
+	}
+	assessment, privacyRedaction, err := projectCorpusRowEvidence(bom.Shards)
+	if err != nil {
+		return CorpusEvidenceLens{}, err
+	}
 
 	index := CorpusIndexEvidence{Remote: bom.Index.Remote, Commit: bom.Index.Commit, Dirty: bom.Index.Dirty}
 	var notices []string
@@ -392,25 +510,30 @@ func LensCorpusBOM(data []byte) (CorpusEvidenceLens, error) {
 	notices = append(notices,
 		"license values are recorded assertions and policy inputs, not legal conclusions",
 		"hashes bind recorded identity and integrity; they do not prove truth, quality, safety, or actual trainer consumption",
+		"row assessments are deterministic classifier records, not proof of source meaning, quality, or harmlessness",
+		"privacy redaction counts prove only the recorded deterministic policy; names, indirect identifiers, and detector misses may remain, so anonymity and legal compliance are not established",
 	)
 
 	lens := CorpusEvidenceLens{
-		Schema:          CorpusEvidenceLensSchema,
-		State:           CorpusEvidenceStateReady,
-		BOMSHA256:       digestBytes(canonical),
-		DocumentSHA256:  digestBytes(data),
-		Index:           index,
-		Paths:           append([]string(nil), bom.Paths...),
-		LicensePolicy:   cloneLicensePolicy(bom.Policy),
-		Manifests:       manifests,
-		SourceSetSHA256: sourceSetDigest,
-		ShardSetSHA256:  shardSetDigest,
-		Totals:          bom.Totals,
-		Modalities:      cloneModalitiesEvidence(bom.Modalities),
-		Licenses:        projectCorpusLicenses(bom.Licenses),
-		Attestation:     attestation,
-		Notices:         notices,
-		Authority:       Authority{},
+		Schema:           CorpusEvidenceLensSchema,
+		State:            CorpusEvidenceStateReady,
+		BOMSHA256:        digestBytes(canonical),
+		DocumentSHA256:   digestBytes(data),
+		Index:            index,
+		Paths:            append([]string(nil), bom.Paths...),
+		LicensePolicy:    cloneLicensePolicy(bom.Policy),
+		RecordFilter:     &recordFilter,
+		Manifests:        manifests,
+		SourceSetSHA256:  sourceSetDigest,
+		ShardSetSHA256:   shardSetDigest,
+		Totals:           bom.Totals,
+		Modalities:       cloneModalitiesEvidence(bom.Modalities),
+		Licenses:         projectCorpusLicenses(bom.Licenses),
+		Attestation:      attestation,
+		Assessment:       &assessment,
+		PrivacyRedaction: &privacyRedaction,
+		Notices:          notices,
+		Authority:        Authority{},
 	}
 	lens.ReceiptSHA256, err = corpusLensReceiptDigest(lens)
 	if err != nil {
@@ -423,8 +546,26 @@ func LensCorpusBOM(data []byte) (CorpusEvidenceLens, error) {
 }
 
 func (lens CorpusEvidenceLens) Validate() error {
-	if lens.Schema != CorpusEvidenceLensSchema || lens.State != CorpusEvidenceStateReady {
+	if !oneOf(lens.Schema, CorpusEvidenceLensSchemaV1, CorpusEvidenceLensSchema) || lens.State != CorpusEvidenceStateReady {
 		return fmt.Errorf("unsupported corpus evidence lens identity %q state %q", lens.Schema, lens.State)
+	}
+	if lens.Schema == CorpusEvidenceLensSchemaV1 {
+		if lens.RecordFilter != nil || lens.Assessment != nil || lens.PrivacyRedaction != nil {
+			return errors.New("legacy corpus evidence lens must not carry v0.2 row-policy evidence")
+		}
+	} else {
+		if lens.RecordFilter == nil || lens.Assessment == nil || lens.PrivacyRedaction == nil {
+			return errors.New("corpus evidence lens v0.2 requires record-filter, assessment, and privacy-redaction evidence")
+		}
+		if err := validateCorpusRecordFilterEvidence(*lens.RecordFilter); err != nil {
+			return err
+		}
+		if err := validateCorpusAssessmentEvidence(*lens.Assessment, lens.Totals.Shards); err != nil {
+			return err
+		}
+		if err := validateCorpusPrivacyEvidence(*lens.PrivacyRedaction, lens.Totals.Shards); err != nil {
+			return err
+		}
 	}
 	for _, item := range []struct{ name, value string }{
 		{"corpus lens.bom_sha256", lens.BOMSHA256},
@@ -593,12 +734,18 @@ func validateCorpusBOM(bom waldoCorpusBOM) error {
 	if err := validateLicensePolicy(bom.Policy); err != nil {
 		return err
 	}
+	if err := validateWaldoRecordFilterPolicy(bom.RecordFilter, bom.Paths); err != nil {
+		return err
+	}
 
 	manifests := make(map[string]waldoCorpusManifest, len(bom.Manifests))
 	manifestSources := make(map[string]map[string]bool, len(bom.Manifests))
 	manifestTotals := make(map[string]EvidenceMeasures, len(bom.Manifests))
 	manifestLicenses := make(map[string]map[string]EvidenceMeasures, len(bom.Manifests))
 	manifestModalities := make(map[string]map[string]ModalityEvidence, len(bom.Manifests))
+	manifestEmailRecords := make(map[string]int64, len(bom.Manifests))
+	manifestRepetitiveRecords := make(map[string]int64, len(bom.Manifests))
+	manifestBoilerplateRecords := make(map[string]int64, len(bom.Manifests))
 	for i, manifest := range bom.Manifests {
 		if err := validateRelativePath(fmt.Sprintf("corpus manifests[%d].path", i), manifest.Path); err != nil {
 			return err
@@ -620,6 +767,16 @@ func validateCorpusBOM(bom waldoCorpusBOM) error {
 		}
 		if err := validateConversion("corpus manifest "+manifest.Path, manifest.ConvertedBy, manifest.RecordSchema); err != nil {
 			return err
+		}
+		if manifest.RecordSchema >= waldoTextRecordSchema {
+			if err := validateWaldoContentAssessment(manifest.Assessment, manifest.Totals.Docs); err != nil {
+				return fmt.Errorf("corpus manifest %s assessment: %w", manifest.Path, err)
+			}
+		}
+		if manifest.ConvertedBy.Recipe == waldoTextWriterRecipe {
+			if err := validateWaldoContentRedaction(manifest.Redaction); err != nil {
+				return fmt.Errorf("corpus manifest %s redaction: %w", manifest.Path, err)
+			}
 		}
 		sources := map[string]bool{}
 		for j, source := range manifest.Sources {
@@ -704,6 +861,19 @@ func validateCorpusBOM(bom waldoCorpusBOM) error {
 		if len(shard.Modalities) > 0 && modalityTokens(shard.Modalities) != shard.Tokens {
 			return fmt.Errorf("corpus shard %d modality tokens do not match its token total", i+1)
 		}
+		if shard.RecordSchema >= waldoTextRecordSchema {
+			if err := validateWaldoContentAssessment(shard.Assessment, shard.Docs); err != nil {
+				return fmt.Errorf("corpus shard %d assessment: %w", i+1, err)
+			}
+			manifestEmailRecords[shard.Manifest] += shard.Assessment.EmailAddresses.Records
+			manifestRepetitiveRecords[shard.Manifest] += shard.Assessment.RepetitiveContent.Records
+			manifestBoilerplateRecords[shard.Manifest] += shard.Assessment.BoilerplateContent.Records
+		}
+		if shard.ConvertedBy.Recipe == waldoTextWriterRecipe {
+			if err := validateWaldoContentRedaction(shard.Redaction); err != nil {
+				return fmt.Errorf("corpus shard %d redaction: %w", i+1, err)
+			}
+		}
 		seenSources := map[string]bool{}
 		for _, source := range shard.Sources {
 			if !manifestSources[shard.Manifest][source] || seenSources[source] {
@@ -740,6 +910,9 @@ func validateCorpusBOM(bom waldoCorpusBOM) error {
 	for path, manifest := range manifests {
 		if manifest.Totals != manifestTotals[path] || !maps.Equal(manifest.Licenses, manifestLicenses[path]) || !maps.Equal(manifest.Modalities, manifestModalities[path]) {
 			return fmt.Errorf("corpus manifest %s totals do not match its selected shards", path)
+		}
+		if manifest.RecordSchema >= waldoTextRecordSchema && (manifest.Assessment.EmailAddresses.Records != manifestEmailRecords[path] || manifest.Assessment.RepetitiveContent.Records != manifestRepetitiveRecords[path] || manifest.Assessment.BoilerplateContent.Records != manifestBoilerplateRecords[path]) {
+			return fmt.Errorf("corpus manifest %s assessment does not match its selected shards", path)
 		}
 	}
 	return nil
@@ -815,8 +988,25 @@ func validateCorpusAttestation(position int, shard waldoCorpusShard, licenses []
 			return err
 		}
 		bom := attestation.BOM
-		if bom.Kind != "openwaldo-bom" || bom.Schema != 1 || bom.Subject != "shard" || bom.WriterRecipe != waldoTextWriterRecipe || strings.TrimSpace(bom.Tokenizer) == "" || bom.RecordSchema != waldoTextRecordSchema || bom.RecordSchema != shard.RecordSchema || bom.Records != shard.Docs || bom.Tokens != shard.Tokens || !slices.Equal(bom.Licenses, licenses) {
+		if bom.Kind != "openwaldo-bom" || bom.Schema != 1 || bom.Subject != "shard" || !supportedWaldoShardWriter(bom.RecordSchema, bom.WriterRecipe) || strings.TrimSpace(bom.Tokenizer) == "" || bom.RecordSchema != shard.RecordSchema || bom.Records != shard.Docs || bom.Tokens != shard.Tokens || !slices.Equal(bom.Licenses, licenses) {
 			return fmt.Errorf("corpus shard %d embedded BOM differs from its corpus pin", position)
+		}
+		assessment := waldoContentAssessment{}
+		if shard.Assessment != nil {
+			assessment = *shard.Assessment
+		}
+		emailRecords, repetitiveRecords, boilerplateRecords := assessmentCounts(assessment)
+		redaction := waldoContentRedaction{}
+		if shard.Redaction != nil {
+			redaction = *shard.Redaction
+		}
+		if bom.EmailAddressRecords != emailRecords || bom.RepetitiveContentRecords != repetitiveRecords || bom.BoilerplateContentRecords != boilerplateRecords || bom.Redaction != redaction {
+			return fmt.Errorf("corpus shard %d embedded BOM row evidence differs from its corpus pin", position)
+		}
+		if bom.WriterRecipe == waldoTextWriterRecipe {
+			if err := validateWaldoContentRedaction(&bom.Redaction); err != nil {
+				return fmt.Errorf("corpus shard %d embedded BOM redaction: %w", position, err)
+			}
 		}
 		if err := validateSHA256(fmt.Sprintf("corpus shard %d embedded plan_sha256", position), bom.PlanSHA256); err != nil {
 			return err
@@ -958,6 +1148,161 @@ func projectCorpusShards(shards []waldoCorpusShard) (string, CorpusAttestationEv
 	return digestBytes(encoded), attestation, nil
 }
 
+func projectCorpusRecordFilter(policy *waldoRecordFilterPolicy) (CorpusRecordFilterEvidence, error) {
+	encoded, err := json.Marshal(policy)
+	if err != nil {
+		return CorpusRecordFilterEvidence{}, fmt.Errorf("encode corpus record filter: %w", err)
+	}
+	evidence := CorpusRecordFilterEvidence{State: "NOT_DECLARED", PolicySHA256: digestBytes(encoded)}
+	if policy != nil {
+		evidence.State = "DECLARED"
+		evidence.Schema = policy.Schema
+		evidence.GlobalDeclared = policy.Global != nil
+		evidence.CorpusFilterCount = len(policy.Corpora)
+	}
+	return evidence, nil
+}
+
+func projectCorpusRowEvidence(shards []waldoCorpusShard) (CorpusAssessmentEvidence, CorpusPrivacyRedactionEvidence, error) {
+	assessment := CorpusAssessmentEvidence{}
+	privacy := CorpusPrivacyRedactionEvidence{}
+	detectors := map[string]bool{}
+	for i, shard := range shards {
+		if shard.RecordSchema >= waldoTextRecordSchema {
+			if err := validateWaldoContentAssessment(shard.Assessment, shard.Docs); err != nil {
+				return CorpusAssessmentEvidence{}, CorpusPrivacyRedactionEvidence{}, fmt.Errorf("project corpus shard %d assessment: %w", i+1, err)
+			}
+			assessment.AssessedShards++
+			detectors["email_addresses\x00"+shard.Assessment.EmailAddresses.Detector] = true
+			detectors["repetitive_content\x00"+shard.Assessment.RepetitiveContent.Detector] = true
+			detectors["boilerplate_content\x00"+shard.Assessment.BoilerplateContent.Detector] = true
+			assessment.EmailAddressRecords += shard.Assessment.EmailAddresses.Records
+			assessment.RepetitiveContentRecords += shard.Assessment.RepetitiveContent.Records
+			assessment.BoilerplateContentRecords += shard.Assessment.BoilerplateContent.Records
+		} else {
+			assessment.LegacyShards++
+		}
+
+		if shard.ConvertedBy.Recipe == waldoTextWriterRecipe {
+			if err := validateWaldoContentRedaction(shard.Redaction); err != nil {
+				return CorpusAssessmentEvidence{}, CorpusPrivacyRedactionEvidence{}, fmt.Errorf("project corpus shard %d redaction: %w", i+1, err)
+			}
+			privacy.RedactedShards++
+			privacy.Policy = shard.Redaction.Policy
+			privacy.NamesRetained = privacy.NamesRetained || shard.Redaction.NamesRetained
+			privacy.EmailAddresses += shard.Redaction.EmailAddresses
+			privacy.IPAddresses += shard.Redaction.IPAddresses
+			privacy.PhoneNumbers += shard.Redaction.PhoneNumbers
+			privacy.MailRoutingHeaders += shard.Redaction.MailRoutingHeaders
+			privacy.Credentials += shard.Redaction.Credentials
+		} else {
+			privacy.UnredactedCompatibleShards++
+		}
+	}
+	detectorSet := make([]string, 0, len(detectors))
+	for detector := range detectors {
+		detectorSet = append(detectorSet, detector)
+	}
+	sort.Strings(detectorSet)
+	encodedDetectors, err := json.Marshal(detectorSet)
+	if err != nil {
+		return CorpusAssessmentEvidence{}, CorpusPrivacyRedactionEvidence{}, fmt.Errorf("encode corpus detector set: %w", err)
+	}
+	assessment.DetectorSetSHA256 = digestBytes(encodedDetectors)
+	switch {
+	case len(shards) == 0:
+		assessment.State = "NO_SHARDS"
+		privacy.State = "NO_SHARDS"
+	case assessment.AssessedShards == 0:
+		assessment.State = "NOT_APPLICABLE_LEGACY"
+	case assessment.LegacyShards == 0:
+		assessment.State = "RECORDED_COMPLETE"
+	default:
+		assessment.State = "RECORDED_WITH_LEGACY"
+	}
+	if len(shards) > 0 {
+		switch {
+		case privacy.RedactedShards == 0:
+			privacy.State = "NOT_RECORDED"
+		case privacy.UnredactedCompatibleShards == 0:
+			privacy.State = "RECORDED_COMPLETE"
+		default:
+			privacy.State = "RECORDED_PARTIAL"
+		}
+	}
+	return assessment, privacy, nil
+}
+
+func validateCorpusRecordFilterEvidence(evidence CorpusRecordFilterEvidence) error {
+	if err := validateSHA256("corpus record filter.policy_sha256", evidence.PolicySHA256); err != nil {
+		return err
+	}
+	if evidence.CorpusFilterCount < 0 {
+		return errors.New("corpus record filter has a negative corpus-filter count")
+	}
+	switch evidence.State {
+	case "NOT_DECLARED":
+		if evidence.Schema != 0 || evidence.GlobalDeclared || evidence.CorpusFilterCount != 0 {
+			return errors.New("undeclared corpus record filter invents policy fields")
+		}
+	case "DECLARED":
+		if evidence.Schema != 1 || !evidence.GlobalDeclared && evidence.CorpusFilterCount == 0 {
+			return errors.New("declared corpus record filter has an incomplete schema or policy")
+		}
+	default:
+		return fmt.Errorf("unsupported corpus record-filter evidence state %q", evidence.State)
+	}
+	return nil
+}
+
+func validateCorpusAssessmentEvidence(evidence CorpusAssessmentEvidence, shards int64) error {
+	if err := validateSHA256("corpus assessment.detector_set_sha256", evidence.DetectorSetSHA256); err != nil {
+		return err
+	}
+	if evidence.AssessedShards < 0 || evidence.LegacyShards < 0 || evidence.AssessedShards+evidence.LegacyShards != shards || evidence.EmailAddressRecords < 0 || evidence.RepetitiveContentRecords < 0 || evidence.BoilerplateContentRecords < 0 {
+		return errors.New("corpus assessment evidence has inconsistent shard or record counts")
+	}
+	expected := "RECORDED_WITH_LEGACY"
+	switch {
+	case shards == 0:
+		expected = "NO_SHARDS"
+	case evidence.AssessedShards == 0:
+		expected = "NOT_APPLICABLE_LEGACY"
+	case evidence.LegacyShards == 0:
+		expected = "RECORDED_COMPLETE"
+	}
+	if evidence.State != expected {
+		return fmt.Errorf("corpus assessment state %q does not match its shard counts", evidence.State)
+	}
+	return nil
+}
+
+func validateCorpusPrivacyEvidence(evidence CorpusPrivacyRedactionEvidence, shards int64) error {
+	if evidence.RedactedShards < 0 || evidence.UnredactedCompatibleShards < 0 || evidence.RedactedShards+evidence.UnredactedCompatibleShards != shards || evidence.EmailAddresses < 0 || evidence.IPAddresses < 0 || evidence.PhoneNumbers < 0 || evidence.MailRoutingHeaders < 0 || evidence.Credentials < 0 {
+		return errors.New("corpus privacy-redaction evidence has inconsistent shard or transformation counts")
+	}
+	expected := "RECORDED_PARTIAL"
+	switch {
+	case shards == 0:
+		expected = "NO_SHARDS"
+	case evidence.RedactedShards == 0:
+		expected = "NOT_RECORDED"
+	case evidence.UnredactedCompatibleShards == 0:
+		expected = "RECORDED_COMPLETE"
+	}
+	if evidence.State != expected {
+		return fmt.Errorf("corpus privacy-redaction state %q does not match its shard counts", evidence.State)
+	}
+	if evidence.RedactedShards == 0 {
+		if evidence.Policy != "" || evidence.NamesRetained || evidence.EmailAddresses != 0 || evidence.IPAddresses != 0 || evidence.PhoneNumbers != 0 || evidence.MailRoutingHeaders != 0 || evidence.Credentials != 0 {
+			return errors.New("unrecorded corpus privacy evidence invents a policy or transformation counts")
+		}
+	} else if evidence.Policy != waldoPrivacyRedactionPolicy || !evidence.NamesRetained {
+		return errors.New("recorded corpus privacy evidence has an unsupported policy or names-retained state")
+	}
+	return nil
+}
+
 func projectCorpusLicenses(input map[string]EvidenceMeasures) []CorpusLicenseEvidence {
 	licenses := make([]CorpusLicenseEvidence, 0, len(input))
 	for id, measure := range input {
@@ -965,6 +1310,198 @@ func projectCorpusLicenses(input map[string]EvidenceMeasures) []CorpusLicenseEvi
 	}
 	sort.Slice(licenses, func(i, j int) bool { return licenses[i].ID < licenses[j].ID })
 	return licenses
+}
+
+func validateWaldoRecordFilterPolicy(policy *waldoRecordFilterPolicy, paths []string) error {
+	if policy == nil {
+		return nil
+	}
+	if policy.Schema != 1 {
+		return fmt.Errorf("unsupported corpus record-filter schema %d", policy.Schema)
+	}
+	if policy.Global == nil && len(policy.Corpora) == 0 {
+		return errors.New("corpus record-filter policy must declare a global or corpus filter")
+	}
+	if policy.Global != nil {
+		if err := validateWaldoRecordFilter(*policy.Global); err != nil {
+			return fmt.Errorf("global corpus record filter: %w", err)
+		}
+	}
+	selected := make(map[string]bool, len(paths))
+	for _, path := range paths {
+		selected[path] = true
+	}
+	for path, filter := range policy.Corpora {
+		if !selected[path] {
+			return fmt.Errorf("corpus record filter declares unselected corpus %q", path)
+		}
+		if err := validateWaldoRecordFilter(filter); err != nil {
+			return fmt.Errorf("corpus record filter %s: %w", path, err)
+		}
+	}
+	return nil
+}
+
+func validateWaldoRecordFilter(filter waldoRecordFilter) error {
+	if filter.MainContent == nil && filter.Exclude == nil && filter.Licenses == nil && filter.Languages == nil && filter.Sources == nil && filter.Date == nil {
+		return errors.New("record filter must declare at least one condition")
+	}
+	if filter.Exclude != nil {
+		if filter.Exclude.RepetitiveContent == nil && filter.Exclude.BoilerplateContent == nil && len(filter.Exclude.Licenses) == 0 {
+			return errors.New("record-filter exclude requires at least one condition")
+		}
+		if err := validateWaldoPatterns(filter.Exclude.Licenses); err != nil {
+			return fmt.Errorf("record-filter exclude licenses: %w", err)
+		}
+		if len(filter.Exclude.Licenses) > 0 && filter.Licenses != nil {
+			return errors.New("record-filter exclude licenses cannot be combined with legacy license filtering")
+		}
+	}
+	for _, item := range []struct {
+		name   string
+		filter *waldoValueFilter
+	}{
+		{name: "licenses", filter: filter.Licenses},
+		{name: "languages", filter: filter.Languages},
+		{name: "sources", filter: filter.Sources},
+	} {
+		if item.filter == nil {
+			continue
+		}
+		if len(item.filter.Include) == 0 && len(item.filter.Exclude) == 0 {
+			return fmt.Errorf("record-filter %s requires include or exclude", item.name)
+		}
+		patterns := append(append([]string(nil), item.filter.Include...), item.filter.Exclude...)
+		if err := validateWaldoPatterns(patterns); err != nil {
+			return fmt.Errorf("record-filter %s: %w", item.name, err)
+		}
+	}
+	if filter.Date != nil {
+		if err := validateWaldoDateFilter(*filter.Date); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateWaldoPatterns(patterns []string) error {
+	seen := map[string]bool{}
+	for _, pattern := range patterns {
+		if pattern == "" || seen[pattern] {
+			return errors.New("record-filter patterns must be non-empty and unique")
+		}
+		seen[pattern] = true
+		if _, err := pathpkg.Match(pattern, "probe"); err != nil {
+			return fmt.Errorf("invalid record-filter pattern %q: %w", pattern, err)
+		}
+	}
+	return nil
+}
+
+func validateWaldoDateFilter(filter waldoDateFilter) error {
+	if filter.From == "" && filter.To == "" {
+		return errors.New("record-filter date requires from or to")
+	}
+	var from, to time.Time
+	if filter.From != "" {
+		start, _, err := waldoDateInterval(filter.From)
+		if err != nil {
+			return fmt.Errorf("record-filter date.from: %w", err)
+		}
+		from = start
+	}
+	if filter.To != "" {
+		_, end, err := waldoDateInterval(filter.To)
+		if err != nil {
+			return fmt.Errorf("record-filter date.to: %w", err)
+		}
+		to = end
+	}
+	if !from.IsZero() && !to.IsZero() && from.After(to) {
+		return errors.New("record-filter date.from must not be after date.to")
+	}
+	return nil
+}
+
+func waldoDateInterval(value string) (time.Time, time.Time, error) {
+	var start time.Time
+	var err error
+	switch len(value) {
+	case len("2006"):
+		start, err = time.Parse("2006", value)
+		if err == nil {
+			return start, start.AddDate(1, 0, 0).Add(-time.Nanosecond), nil
+		}
+	case len("2006-01"):
+		start, err = time.Parse("2006-01", value)
+		if err == nil {
+			return start, start.AddDate(0, 1, 0).Add(-time.Nanosecond), nil
+		}
+	case len("2006-01-02"):
+		start, err = time.Parse("2006-01-02", value)
+		if err == nil {
+			return start, start.AddDate(0, 0, 1).Add(-time.Nanosecond), nil
+		}
+	default:
+		start, err = time.Parse(time.RFC3339Nano, value)
+		if err == nil {
+			return start, start, nil
+		}
+	}
+	return time.Time{}, time.Time{}, fmt.Errorf("%q must be YYYY, YYYY-MM, YYYY-MM-DD, or RFC 3339", value)
+}
+
+func validateWaldoContentAssessment(assessment *waldoContentAssessment, documents int64) error {
+	if assessment == nil {
+		return errors.New("content assessment is required")
+	}
+	for _, item := range []struct {
+		name    string
+		measure *waldoDetectionMeasure
+	}{
+		{name: "email_addresses", measure: assessment.EmailAddresses},
+		{name: "repetitive_content", measure: assessment.RepetitiveContent},
+		{name: "boilerplate_content", measure: assessment.BoilerplateContent},
+	} {
+		if item.measure == nil || strings.TrimSpace(item.measure.Detector) == "" {
+			return fmt.Errorf("%s detector is required", item.name)
+		}
+		if item.measure.Records < 0 || item.measure.Records > documents {
+			return fmt.Errorf("%s record count is invalid", item.name)
+		}
+	}
+	return nil
+}
+
+func validateWaldoContentRedaction(redaction *waldoContentRedaction) error {
+	if redaction == nil || redaction.Policy != waldoPrivacyRedactionPolicy || !redaction.NamesRetained {
+		return errors.New("privacy policy and names_retained are required")
+	}
+	if redaction.EmailAddresses < 0 || redaction.IPAddresses < 0 || redaction.PhoneNumbers < 0 || redaction.MailRoutingHeaders < 0 || redaction.Credentials < 0 {
+		return errors.New("privacy-redaction counts must be non-negative")
+	}
+	return nil
+}
+
+func assessmentCounts(assessment waldoContentAssessment) (int64, int64, int64) {
+	var email, repetitive, boilerplate int64
+	if assessment.EmailAddresses != nil {
+		email = assessment.EmailAddresses.Records
+	}
+	if assessment.RepetitiveContent != nil {
+		repetitive = assessment.RepetitiveContent.Records
+	}
+	if assessment.BoilerplateContent != nil {
+		boilerplate = assessment.BoilerplateContent.Records
+	}
+	return email, repetitive, boilerplate
+}
+
+func supportedWaldoShardWriter(recordSchema int, writerRecipe string) bool {
+	if recordSchema == waldoTextRecordSchema {
+		return oneOf(writerRecipe, waldoTextWriterRecipe, waldoFormerMainContentRecipe, waldoFormerAssessmentRecipe)
+	}
+	return recordSchema == waldoFormerTextRecordSchema && writerRecipe == waldoFormerTextBOMRecipe
 }
 
 func validateLicensePolicy(policy CorpusLicensePolicy) error {

@@ -1,8 +1,8 @@
 {
   "schema": "axm.waldo-witness.capability-return-draft/v0.1",
   "return_id": "synthetic-source-only-return-0001",
-  "plan_sha256": "222dbe59220065182e896c71308c4cd8cb56413e70e474facfa3e3012e6014e1",
-  "translation_receipt_sha256": "7a1243ccf07a59b26c180e460740778ded473cb0ebe44e0379e7aa51cb2acf48",
+  "plan_sha256": "53accce73f893b5d1ec8e7c4604095fe7de2cc7c78e28d192876dc6f87d6690a",
+  "translation_receipt_sha256": "50873dc0e1da8bc02ea5171cfa641327f883956aa3b936aafbe158142feb6883",
   "provider_id": "adapter-translation-garden",
   "input": {
     "schema": "axm.translation.module-call/v1",

@@ -10,6 +10,12 @@ LIVE capability CLI flows are exercised by `TestGatedCloneFoundationCLIFlow`,
 `TestInnerAssetCLIFlow`, `TestPortableCapabilitySpineCLIFlow`, and the focused
 tests under `internal/axmmirror`.
 
+`corpus-bom.json` intentionally remains a schema-1 shard fixture. The current
+v0.2 lens reports its record filter as not declared, its assessment as legacy,
+and its privacy-redaction evidence as not recorded. Current schema-2/v9
+compatibility is tested against the real upstream Go BOM type rather than
+misrepresenting this legacy example as freshly redacted.
+
 The separate experimental CLI now supports:
 
 ```text

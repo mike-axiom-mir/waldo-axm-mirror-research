@@ -52,13 +52,19 @@ The lens reports Git identity honestly:
 Missing or dirty Git identity does not erase the exact manifest and shard
 digests already carried by the BOM.
 
-The current schema-1 projection accepts unknown additive JSON fields, as
+The original v0.1 schema-1 projection accepts unknown additive JSON fields, as
 WALDO's corpus compatibility contract requires. Duplicate object keys and
 trailing JSON values remain ambiguous and are rejected. `bom_sha256` hashes the
-known schema-1 typed representation used for current WALDO BOM identity;
-`document_sha256` separately binds the exact bytes observed by the organ. A
-future durable field that changes BOM identity requires an explicit schema or
-compatibility update in this fork rather than a silent claim of support.
+known typed representation used for WALDO BOM identity; `document_sha256`
+separately binds the exact bytes observed by the organ. A future durable field
+that changes BOM identity requires an explicit schema or compatibility update
+in this fork rather than a silent claim of support.
+
+ADR 9009 applies that rule after OpenWALDO added record-filter, assessment, and
+privacy-redaction fields. New projections use v0.2 and bind those current fields
+into the canonical BOM digest. They expose exact policy/detector identities and
+counts without turning assessment into meaning or redaction into anonymity.
+Legacy v0.1 receipts remain validation-compatible in their original shape.
 
 The lens also carries `receipt_sha256`, calculated over the receipt with that
 field omitted. This detects accidental mutation of the projected receipt; it
@@ -117,9 +123,10 @@ not merely the immutable plan digest.
 
 ## Durability and authority
 
-The new receipt schemas are:
+The receipt schemas are:
 
-- `axm.waldo-witness.corpus-evidence-lens/v0.1`; and
+- `axm.waldo-witness.corpus-evidence-lens/v0.2` for new projections;
+- `axm.waldo-witness.corpus-evidence-lens/v0.1` for legacy validation; and
 - `axm.waldo-witness.training-run-witness/v0.1`.
 
 Both carry closed authority. They cannot execute tools, start training, promote

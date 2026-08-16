@@ -21,6 +21,14 @@ partnership, endorsement, or ownership of OpenWALDO.
 
 The upstream Apache-2.0 `LICENSE` and `NOTICE` remain intact.
 
+The v0.6 experimental stack merges the exact OpenWALDO head
+`451e029abd1f74fd77625984526a1980c48fb477`. The merge and its downstream
+compatibility work are recorded in ADR 9009 and
+`research/openwaldo-upstream-alignment-2026-08-16.json`; neither upstream
+`main` nor this fork's `main` is changed. The inherited v0.6 organ-map overlay
+records the upgraded corpus witness and keeps the still-missing continuity and
+specialist-growth surfaces explicit.
+
 ## Implemented witness slices
 
 The stacked `axm/mirror-waldo-experiment-*` branches add a fork-only Go package
@@ -59,6 +67,12 @@ Project a WALDO corpus BOM into the bounded evidence surface:
 ```bash
 ./waldo-axm-mirror lens-corpus examples/axm-mirror/corpus-bom.json /tmp/example.corpus-lens.json
 ```
+
+Current output uses corpus-lens v0.2 and binds WALDO record-filter,
+content-assessment, main-content-era writer, and privacy-redaction evidence.
+The checked example remains a legacy schema-1 input on purpose, so its receipt
+shows the absence of newer facts instead of inventing them. Legacy v0.1 lens
+receipts remain validation-compatible.
 
 Bind its immutable run plan to the current durable run record:
 
