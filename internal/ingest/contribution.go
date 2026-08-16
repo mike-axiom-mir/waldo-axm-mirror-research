@@ -43,6 +43,8 @@ func BuildManifest(plan Plan, assembly AssemblyResult, objectBase string) (index
 			Recipe: shard.TextWriterRecipe, Tokenizer: tokenizer.Default,
 		},
 	}
+	manifest.Assessment = newContentAssessment(0, 0, 0)
+	manifest.Redaction = newContentRedaction()
 	planSources := plan.Sources
 	if len(planSources) == 0 {
 		legacy := plan.Source
@@ -82,7 +84,13 @@ func BuildManifest(plan Plan, assembly AssemblyResult, objectBase string) (index
 			URL: objectURL, SHA256: object.SHA256, Sources: object.Sources,
 			Docs: object.Docs, Tokens: object.Tokens, Bytes: object.Bytes,
 			LicenseUsage: object.LicenseUsage,
+			Assessment:   newContentAssessment(object.EmailAddressRecords, object.RepetitiveContentRecords, object.BoilerplateContentRecords),
+			Redaction:    cloneContentRedaction(object.Redaction),
 		})
+		manifest.Assessment.EmailAddresses.Records += object.EmailAddressRecords
+		manifest.Assessment.RepetitiveContent.Records += object.RepetitiveContentRecords
+		manifest.Assessment.BoilerplateContent.Records += object.BoilerplateContentRecords
+		addContentRedaction(manifest.Redaction, object.Redaction)
 		if len(licenses) == 1 {
 			manifest.Shards[len(manifest.Shards)-1].License = licenses[0]
 		} else {
@@ -104,6 +112,31 @@ func BuildManifest(plan Plan, assembly AssemblyResult, objectBase string) (index
 		return index.Manifest{}, err
 	}
 	return manifest, nil
+}
+
+func newContentRedaction() *index.ContentRedaction {
+	return &index.ContentRedaction{Policy: shard.PrivacyRedactionPolicy, NamesRetained: true}
+}
+
+func cloneContentRedaction(value index.ContentRedaction) *index.ContentRedaction {
+	copy := value
+	return &copy
+}
+
+func addContentRedaction(total *index.ContentRedaction, value index.ContentRedaction) {
+	total.EmailAddresses += value.EmailAddresses
+	total.IPAddresses += value.IPAddresses
+	total.PhoneNumbers += value.PhoneNumbers
+	total.MailRoutingHeaders += value.MailRoutingHeaders
+	total.Credentials += value.Credentials
+}
+
+func newContentAssessment(email, repetitive, boilerplate int64) *index.ContentAssessment {
+	return &index.ContentAssessment{
+		EmailAddresses:     &index.DetectionMeasure{Detector: shard.EmailDetector, Records: email},
+		RepetitiveContent:  &index.DetectionMeasure{Detector: shard.RepetitionDetector, Records: repetitive},
+		BoilerplateContent: &index.DetectionMeasure{Detector: shard.BoilerplateDetector, Records: boilerplate},
+	}
 }
 
 func compactCollector(recipe *index.IngestRecipeEvidence) string {
@@ -175,11 +208,11 @@ func conversionProfile(plan Plan) string {
 		configured = configured || input.Profile.Type != ""
 	}
 	if !configured {
-		return "canonical-text-schema-1"
+		return "canonical-text-schema-2"
 	}
 	encoded, _ := json.Marshal(profiles)
 	digest := sha256.Sum256(encoded)
-	return "canonical-text-schema-1@sha256:" + hex.EncodeToString(digest[:])
+	return "canonical-text-schema-2@sha256:" + hex.EncodeToString(digest[:])
 }
 
 func writeIdentityString(destination hash.Hash, value string) {

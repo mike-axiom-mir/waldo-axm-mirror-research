@@ -31,7 +31,8 @@ scratch="$work/scratch"
 staging="$work/staging"
 models="$work/models"
 model_export="$work/model-export"
-input="$work/training.jsonl"
+input="$work/training"
+input_profile="$work/input-profile.yaml"
 compose="$work/model.yaml"
 disclosure="$work/eu-gpai.json"
 provider="$work/provider.json"
@@ -39,10 +40,22 @@ export WALDO_CONFIG="$work/config.json"
 
 echo "testing: complete fake-model lifecycle"
 (cd "$repo_root" && GOCACHE="$work/go-cache" go build -o "$binary" ./cmd/waldo)
-printf '%s\n' \
-  '{"text":"Small deterministic training record."}' \
-  '{"text":"A second preserved training record."}' \
-  '{"text":"A third record reserved for deterministic evaluation."}' > "$input"
+mkdir -p "$input"
+cat > "$input/records.jsonl" <<'EOF'
+{"text":"Contact test@example.org; this assessed row must be excluded.","metadata":{"namespace":0}}
+{"text":"alpha beta gamma delta epsilon zeta eta theta alpha beta gamma delta epsilon zeta eta theta alpha beta gamma delta epsilon zeta eta theta alpha beta gamma delta epsilon zeta eta theta alpha beta gamma delta epsilon zeta eta theta alpha beta gamma delta epsilon zeta eta theta alpha beta gamma delta epsilon zeta eta theta","metadata":{"namespace":0}}
+{"text":"Repeated navigation footer line.\nRepeated navigation footer line.\nRepeated navigation footer line.\nRepeated navigation footer line.\nRepeated navigation footer line.\nRepeated navigation footer line.\nRepeated navigation footer line.\nRepeated navigation footer line.","metadata":{"namespace":0}}
+{"text":"A preserved training record with enough ordinary prose for this fixture.","metadata":{"namespace":0}}
+{"text":"A separate record reserved for deterministic evaluation.","metadata":{"namespace":0}}
+{"text":"Auxiliary discussion that must be excluded by main-content classification.","metadata":{"namespace":1}}
+EOF
+cat > "$input_profile" <<'EOF'
+type: record-map
+main_content:
+  metadata.namespace: 0
+fields:
+  text: [text]
+EOF
 
 "$binary" index init "$index_root"
 "$binary" config set lookaside "file://$lookaside"
@@ -74,7 +87,8 @@ destination="$index_root/core/e2e/model-corpus"
   --description Disposable-fake-model-input \
   --license CC0-1.0 \
   --source https://example.invalid/model-e2e \
-  --source-category public-dataset
+  --source-category public-dataset \
+  --input-profile "$input_profile"
 
 contribution=""
 for candidate in "$staging"/*/contribution; do
@@ -107,6 +121,11 @@ stages:
   - name: pretrain
     type: pre-training
     objective: causal-language-modeling
+    filter:
+      main_content: true
+      exclude:
+        repetitive_content: true
+        boilerplate_content: true
     corpora:
       - core/e2e/model-corpus
     parameters:
@@ -143,7 +162,7 @@ printf '%s\n' "$inspect_output" | grep -q 'simulated'
 json_inspection=$("$binary" --json model summary smoke)
 printf '%s\n' "$json_inspection" | grep -Eq '"state"[[:space:]]*:[[:space:]]*"complete"'
 printf '%s\n' "$json_inspection" | grep -Eq '"simulated"[[:space:]]*:[[:space:]]*true'
-printf '%s\n' "$json_inspection" | grep -Eq '"profile"[[:space:]]*:[[:space:]]*"causal-pretrain-v1"'
+printf '%s\n' "$json_inspection" | grep -Eq '"profile"[[:space:]]*:[[:space:]]*"causal-pretrain-shuffled"'
 printf '%s\n' "$json_inspection" | grep -Eq '"packing"[[:space:]]*:[[:space:]]*"continuous-eos-v1"'
 printf '%s\n' "$json_inspection" | grep -Eq '"checkpoints"[[:space:]]*:'
 
@@ -156,8 +175,13 @@ run_bom=$(find "$models/smoke/runs" -type f -name RUN-BOM.json -print -quit)
 [ -n "$run_bom" ] || { echo "missing training run BOM" >&2; exit 1; }
 grep -Eq '"attestation"[[:space:]]*:' "$run_bom" || { echo "run BOM omitted shard attestation evidence" >&2; exit 1; }
 grep -Eq '"status"[[:space:]]*:[[:space:]]*"embedded"' "$run_bom" || { echo "run BOM omitted embedded shard BOM status" >&2; exit 1; }
+grep -Eq '"main_content"[[:space:]]*:[[:space:]]*true' "$run_bom" || { echo "run BOM omitted the applied main-content requirement" >&2; exit 1; }
+grep -Eq '"repetitive_content"[[:space:]]*:[[:space:]]*true' "$run_bom" || { echo "run BOM omitted the applied repetitive-content exclusion" >&2; exit 1; }
+grep -Eq '"boilerplate_content"[[:space:]]*:[[:space:]]*true' "$run_bom" || { echo "run BOM omitted the applied boilerplate-content exclusion" >&2; exit 1; }
 artifact_count=$(find "$models/smoke/runs" -type f -name fake-model.json -print | wc -l | tr -d ' ')
 [ "$artifact_count" -eq 1 ] || { echo "found $artifact_count fake artifacts, want 1" >&2; exit 1; }
+fake_artifact=$(find "$models/smoke/runs" -type f -name fake-model.json -print -quit)
+grep -Eq '"training_records"[[:space:]]*:[[:space:]]*2' "$fake_artifact" || { echo "content exclusions did not leave exactly two training records" >&2; exit 1; }
 checkpoint_count=$(find "$models/smoke/runs" -type f -name 'step-*.json' -print | wc -l | tr -d ' ')
 [ "$checkpoint_count" -eq 1 ] || { echo "found $checkpoint_count fake checkpoints, want 1" >&2; exit 1; }
 

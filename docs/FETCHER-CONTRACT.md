@@ -215,6 +215,18 @@ facts, user data requires service/interaction facts, and synthetic data
 requires generator identity. Unknown categories and incomplete mandatory
 category evidence are rejected.
 
+Fetchers do not detect, redact, or annotate personal data, repetition, or
+boilerplate. WALDO applies `waldo/privacy-redaction-v1` to every retained row,
+then hashes, deduplicates, measures, assesses, and packs the redacted text.
+Names are retained; email addresses, IP addresses, phone numbers, mail-routing
+headers, and high-confidence credentials are removed or replaced. Schema-2
+rows and generated provenance preserve the policy and redaction counts.
+
+For structured sources that mix primary and auxiliary records, the recipe may
+derive the general canonical `main_content` boolean from one exact scalar field
+match. Fetchers still emit the unmodified source field. Omitting the declaration
+marks every retained row as main content.
+
 ```yaml
 input:
   type: record-map

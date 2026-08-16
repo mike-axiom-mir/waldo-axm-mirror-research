@@ -31,6 +31,7 @@ type BOM struct {
 	Index        index.Identity            `json:"index"`
 	Paths        []string                  `json:"paths"`
 	Policy       LicensePolicy             `json:"license_policy,omitempty"`
+	RecordFilter *RecordFilterPolicy       `json:"record_filter,omitempty"`
 	Manifests    []ManifestPin             `json:"manifests"`
 	SubManifests []SubManifestPin          `json:"sub_manifests,omitempty"`
 	Shards       []ShardPin                `json:"shards"`
@@ -66,6 +67,8 @@ type ManifestPin struct {
 	Sources      []index.Source              `json:"sources"`
 	Processing   *index.Processing           `json:"processing,omitempty"`
 	ComposedBy   *index.IngestRecipeEvidence `json:"composed_by,omitempty"`
+	Assessment   *index.ContentAssessment    `json:"assessment,omitempty"`
+	Redaction    *index.ContentRedaction     `json:"redaction,omitempty"`
 	Totals       index.Measures              `json:"totals"`
 	Modalities   index.Modalities            `json:"modalities,omitempty"`
 	Licenses     map[string]index.Measures   `json:"licenses"`
@@ -89,6 +92,8 @@ type ShardPin struct {
 	Bytes             int64                     `json:"bytes"`
 	Modalities        index.Modalities          `json:"modalities,omitempty"`
 	Attestation       *shard.Attestation        `json:"attestation,omitempty"`
+	Assessment        *index.ContentAssessment  `json:"assessment,omitempty"`
+	Redaction         *index.ContentRedaction   `json:"redaction,omitempty"`
 }
 
 // BuildBOM resolves targets from one checkout into immutable manifest and
@@ -158,6 +163,8 @@ func (bom *BOM) addManifest(ctx context.Context, root string, corpus index.Corpu
 		Sources:      append([]index.Source(nil), corpus.Manifest.Sources...),
 		Processing:   corpus.Manifest.Processing,
 		ComposedBy:   corpus.Manifest.ComposedBy,
+		Assessment:   corpus.Manifest.Assessment,
+		Redaction:    corpus.Manifest.Redaction,
 		Licenses:     map[string]index.Measures{},
 	}
 	addShard := func(shard index.Shard, subManifestSHA256 string) {
@@ -186,6 +193,8 @@ func (bom *BOM) addManifest(ctx context.Context, root string, corpus index.Corpu
 			Tokens:            shard.Tokens,
 			Bytes:             shard.Bytes,
 			Modalities:        cloneModalities(shard.Modalities),
+			Assessment:        shard.Assessment,
+			Redaction:         shard.Redaction,
 		}
 		if len(licenses) == 1 {
 			shardPin.License = licenses[0]
