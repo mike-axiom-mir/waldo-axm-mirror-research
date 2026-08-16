@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/openwaldo/waldo/internal/corpus"
 	"github.com/openwaldo/waldo/internal/model"
 	"github.com/openwaldo/waldo/internal/training"
 )
@@ -22,7 +23,7 @@ func TestModelComposeGuideNamesEverySchemaField(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, value := range []any{
-		model.Compose{}, model.ComposeBase{}, model.Architecture{}, model.Tokenizer{}, model.Stage{}, training.Parameters{},
+		model.Compose{}, model.ComposeBase{}, model.Architecture{}, model.Tokenizer{}, model.Stage{}, model.CorpusSelection{}, corpus.RecordFilter{}, corpus.ValueFilter{}, corpus.DateFilter{}, training.Parameters{},
 	} {
 		typeOf := reflect.TypeOf(value)
 		for index := 0; index < typeOf.NumField(); index++ {
@@ -50,7 +51,7 @@ func TestEveryReferenceComposeSettingResolvesIntoTrainingContract(t *testing.T) 
 			}
 			for _, stage := range compose.Stages {
 				raw := stage.Parameters
-				resolved, err := training.ResolveParameters(raw)
+				resolved, err := stage.ResolveParameters()
 				if err != nil {
 					t.Fatalf("stage %s: %v", stage.Name, err)
 				}
@@ -76,8 +77,18 @@ func TestEveryReferenceComposeSettingResolvesIntoTrainingContract(t *testing.T) 
 					t.Fatalf("stage %s shuffle_buffer_records = %d, want %d", stage.Name, resolved.Data.ShuffleBufferRecords, *raw.ShuffleBufferRecords)
 				}
 				assertOptionalInt64(t, stage.Name+" shuffle_buffer_bytes", raw.ShuffleBufferBytes, resolved.Data.ShuffleBufferBytes)
-				if !reflect.DeepEqual(resolved.Data.CorpusWeights, raw.CorpusWeights) {
-					t.Fatalf("stage %s corpus_weights = %v, want %v", stage.Name, resolved.Data.CorpusWeights, raw.CorpusWeights)
+				expectedWeights := raw.CorpusWeights
+				for _, selection := range stage.Corpora {
+					if selection.Weight == nil {
+						continue
+					}
+					if expectedWeights == nil {
+						expectedWeights = map[string]uint64{}
+					}
+					expectedWeights[selection.Path] = *selection.Weight
+				}
+				if !reflect.DeepEqual(resolved.Data.CorpusWeights, expectedWeights) {
+					t.Fatalf("stage %s corpus weights = %v, want %v", stage.Name, resolved.Data.CorpusWeights, expectedWeights)
 				}
 				if resolved.Evaluation == nil {
 					t.Fatalf("stage %s has no resolved evaluation policy", stage.Name)
@@ -111,8 +122,8 @@ func TestReferenceCanaryIsExecutableAndCompact(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(files) != 4 || files[0] != "0000-canary.yaml" || files[1] != "0001-babble.yaml" || files[2] != "0002-basic.yaml" || files[3] != "0003-intermediate.yaml" {
-		t.Fatalf("reference composes = %v, want canary, babble, basic, and intermediate", files)
+	if len(files) != 5 || files[0] != "0000-canary.yaml" || files[1] != "0001-babble.yaml" || files[2] != "0002-basic.yaml" || files[3] != "0003-intermediate.yaml" || files[4] != "0004-conversation.yaml" {
+		t.Fatalf("reference composes = %v, want canary through conversation", files)
 	}
 	compose, _, err := model.LoadCompose("0000-canary.yaml")
 	if err != nil {
@@ -130,6 +141,34 @@ func TestReferenceCanaryIsExecutableAndCompact(t *testing.T) {
 	}
 	if forecast.ApproximateParameters != 13620736 || forecast.PlannedTokens != 4096000 {
 		t.Fatalf("canary forecast = %d parameters/%d tokens", forecast.ApproximateParameters, forecast.PlannedTokens)
+	}
+}
+
+func TestConversationHasOrderedPretrainingAndInstructionTuning(t *testing.T) {
+	compose, _, err := model.LoadCompose("0004-conversation.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(compose.Stages) != 2 || compose.Stages[0].Type != "pre-training" || compose.Stages[1].Type != "fine-tuning" {
+		t.Fatalf("conversation stages = %+v", compose.Stages)
+	}
+	if compose.Stages[0].Filter == nil || compose.Stages[0].Filter.MainContent == nil || !*compose.Stages[0].Filter.MainContent {
+		t.Fatalf("conversation pretraining does not require main content: %+v", compose.Stages[0].Filter)
+	}
+	for _, stage := range compose.Stages {
+		if stage.Filter == nil || stage.Filter.Exclude == nil || stage.Filter.Exclude.RepetitiveContent == nil || stage.Filter.Exclude.BoilerplateContent == nil {
+			t.Fatalf("conversation stage %s does not declare content-quality exclusions: %+v", stage.Name, stage.Filter)
+		}
+	}
+	forecast, err := model.ForecastCompose(compose)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if forecast.ApproximateParameters != 139287552 || forecast.PlannedTokens != 6039961600 {
+		t.Fatalf("conversation forecast = %d parameters/%d tokens", forecast.ApproximateParameters, forecast.PlannedTokens)
+	}
+	if compose.Stages[1].Parameters.LearningRate >= compose.Stages[0].Parameters.LearningRate || compose.Stages[1].Parameters.Epochs != 5 {
+		t.Fatalf("conversation tuning controls = %+v", compose.Stages[1].Parameters)
 	}
 }
 
@@ -151,7 +190,7 @@ func TestBasicHasTenHourScalingBudget(t *testing.T) {
 	if forecast.ApproximateParameters != 114115584 || forecast.PlannedTokens != 3932160000 {
 		t.Fatalf("basic forecast = %d parameters/%d tokens", forecast.ApproximateParameters, forecast.PlannedTokens)
 	}
-	if compose.Architecture.Dropout != 0.1 || compose.Stages[0].Parameters.Profile != "causal-pretrain-v3" || len(compose.Stages[0].Parameters.CorpusWeights) != 3 {
+	if compose.Architecture.Dropout != 0.1 || compose.Stages[0].Parameters.Profile != "causal-pretrain-weighted" || inlineWeightCount(compose.Stages[0]) != 3 || len(compose.Stages[0].Parameters.CorpusWeights) != 0 {
 		t.Fatalf("basic tuning controls are not pinned: architecture=%+v parameters=%+v", compose.Architecture, compose.Stages[0].Parameters)
 	}
 }
@@ -175,6 +214,16 @@ func TestIntermediateHasTwoDayScalingBudget(t *testing.T) {
 	if parameters.BatchSize != 16 || parameters.Steps != 366210 || parameters.SequenceLength != 2048 {
 		t.Fatalf("intermediate memory-safe training shape = %+v", parameters)
 	}
+}
+
+func inlineWeightCount(stage model.Stage) int {
+	count := 0
+	for _, selection := range stage.Corpora {
+		if selection.Weight != nil {
+			count++
+		}
+	}
+	return count
 }
 
 func TestValidatedBabbleHasMeasuredScalingBudget(t *testing.T) {

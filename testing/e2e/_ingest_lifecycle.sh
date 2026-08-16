@@ -71,9 +71,11 @@ echo "building WALDO and the E2E validator"
 
 echo "generating UTF-8, multiline, and duplicate source content"
 mkdir -p "$fixture"
-printf 'Plain UTF-8: café, 東京, and 🚀.\nSecond line preserved exactly.\n' > "$fixture/01-plain.txt"
+printf 'Plain UTF-8: café, 東京, and 🚀.\nContact maintainer@example.org.\nSecond line preserved exactly.\n' > "$fixture/01-plain.txt"
 printf '# Markdown title\n\nA paragraph with "quotes", a backslash \\, and trailing punctuation!\n\n- one\n- two\n' > "$fixture/02-markdown.md"
 cp "$fixture/01-plain.txt" "$fixture/03-duplicate.txt"
+printf '%s\n' 'alpha beta gamma delta epsilon zeta eta theta alpha beta gamma delta epsilon zeta eta theta alpha beta gamma delta epsilon zeta eta theta alpha beta gamma delta epsilon zeta eta theta alpha beta gamma delta epsilon zeta eta theta alpha beta gamma delta epsilon zeta eta theta alpha beta gamma delta epsilon zeta eta theta' > "$fixture/04-repetitive.txt"
+printf '%s\n' 'Repeated navigation footer line.' 'Repeated navigation footer line.' 'Repeated navigation footer line.' 'Repeated navigation footer line.' 'Repeated navigation footer line.' 'Repeated navigation footer line.' 'Repeated navigation footer line.' 'Repeated navigation footer line.' > "$fixture/05-boilerplate.txt"
 
 ingest_input=$fixture
 if [ "$mode" = "recipe" ]; then
@@ -232,6 +234,40 @@ fi
 echo "applying review overlay to disposable index"
 cp -R "$contribution"/. "$index_root"/
 
+manifest_path="$index_root/core/e2e/tiny/tiny.yaml"
+grep -q 'detector: waldo/email-address-v1' "$manifest_path" || {
+  echo "manifest does not pin the email-address detector" >&2
+  exit 1
+}
+grep -A2 'email_addresses:' "$manifest_path" | grep -q 'records: 0' || {
+  echo "manifest assessment reports an email after redaction" >&2
+  exit 1
+}
+grep -q 'policy: waldo/privacy-redaction-v1' "$manifest_path" || {
+  echo "manifest does not pin the privacy-redaction policy" >&2
+  exit 1
+}
+grep -A3 '^redaction:' "$manifest_path" | grep -q 'email_addresses: 1' || {
+  echo "manifest does not report the email-address replacement" >&2
+  exit 1
+}
+grep -q 'detector: waldo/gopher-ngram-repetition-v1' "$manifest_path" || {
+  echo "manifest does not pin the repetition detector" >&2
+  exit 1
+}
+grep -A2 'repetitive_content:' "$manifest_path" | grep -q 'records: 1' || {
+  echo "manifest does not report the one repetitive row" >&2
+  exit 1
+}
+grep -q 'detector: waldo/gopher-structural-duplication-v1' "$manifest_path" || {
+  echo "manifest does not pin the boilerplate detector" >&2
+  exit 1
+}
+grep -A2 'boilerplate_content:' "$manifest_path" | grep -q 'records: 1' || {
+  echo "manifest does not report the one boilerplate row" >&2
+  exit 1
+}
+
 echo "verifying new corpus recursively"
 "$binary" index verify "$destination" --offline
 "$binary" index verify "$destination"
@@ -253,29 +289,30 @@ if [ -z "$jsonl" ] || [ ! -s "$jsonl" ]; then
   exit 1
 fi
 line_count=$(wc -l < "$jsonl" | tr -d ' ')
-if [ "$line_count" -ne 2 ]; then
-  echo "JSONL export contains $line_count records, want 2" >&2
+if [ "$line_count" -ne 4 ]; then
+  echo "JSONL export contains $line_count records, want 4" >&2
   exit 1
 fi
 "$validator" "$jsonl" "$destination/tiny.yaml" \
   https://example.invalid/waldo-e2e tiny CC0-1.0 "$fixture" \
-  "$fixture/01-plain.txt" "$fixture/02-markdown.md"
+  "$fixture/01-plain.txt" "$fixture/02-markdown.md" "$fixture/04-repetitive.txt" "$fixture/05-boilerplate.txt"
 
 if [ "$transport" = "local" ]; then
   echo "summarizing, auditing, listing, and exporting local shard records"
   shard_summary=$("$binary" shard summary "$published_object")
   printf '%s\n' "$shard_summary"
   printf '%s\n' "$shard_summary" | grep -Eq '^SHARDS:[[:space:]]+1$'
-  printf '%s\n' "$shard_summary" | grep -Eq '^RECORDS:[[:space:]]+2$'
+  printf '%s\n' "$shard_summary" | grep -Eq '^RECORDS:[[:space:]]+4$'
   "$binary" shard audit "$published_object" | grep -Eq '^STATUS:[[:space:]]+VERIFIED$'
   record_listing=$("$binary" shard list-records "$published_object")
-  [ "$(printf '%s\n' "$record_listing" | wc -l | tr -d ' ')" -eq 3 ] || {
-    echo "shard record listing did not contain one header and two records" >&2
+  [ "$(printf '%s\n' "$record_listing" | wc -l | tr -d ' ')" -eq 5 ] || {
+    echo "shard record listing did not contain one header and four records" >&2
     exit 1
   }
   first_id=$(sed -n '1s/.*"sha256":"\([0-9a-f]*\)".*/\1/p' "$jsonl")
   "$binary" shard export-record "$published_object" "$first_id" > "$work/exported-record.txt"
-  cmp "$work/exported-record.txt" "$fixture/01-plain.txt"
+  sed 's/maintainer@example.org/<EMAIL_ADDRESS>/g' "$fixture/01-plain.txt" > "$work/expected-redacted-record.txt"
+  cmp "$work/exported-record.txt" "$work/expected-redacted-record.txt"
 fi
 
 if find "$staging" -path '*/objects/*' -type f -print | grep . >/dev/null 2>&1; then

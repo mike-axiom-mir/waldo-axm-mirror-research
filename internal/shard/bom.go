@@ -14,6 +14,7 @@ import (
 	"io"
 	"slices"
 
+	"github.com/openwaldo/waldo/internal/index"
 	"github.com/parquet-go/parquet-go"
 )
 
@@ -26,18 +27,22 @@ const (
 // metadata. The enclosing lookaside SHA-256 supplies object identity; a shard
 // cannot include its own object hash without a circular dependency.
 type BOM struct {
-	Kind         string     `json:"kind"`
-	Schema       int        `json:"schema"`
-	Subject      string     `json:"subject"`
-	PlanSHA256   string     `json:"plan_sha256"`
-	RecordSchema int        `json:"record_schema"`
-	WriterRecipe string     `json:"writer_recipe"`
-	Tokenizer    string     `json:"tokenizer"`
-	Records      int64      `json:"records"`
-	Tokens       int64      `json:"tokens"`
-	ContentBytes int64      `json:"content_bytes"`
-	Licenses     []string   `json:"licenses"`
-	Validation   Validation `json:"validation"`
+	Kind                      string                 `json:"kind"`
+	Schema                    int                    `json:"schema"`
+	Subject                   string                 `json:"subject"`
+	PlanSHA256                string                 `json:"plan_sha256"`
+	RecordSchema              int                    `json:"record_schema"`
+	WriterRecipe              string                 `json:"writer_recipe"`
+	Tokenizer                 string                 `json:"tokenizer"`
+	Records                   int64                  `json:"records"`
+	Tokens                    int64                  `json:"tokens"`
+	ContentBytes              int64                  `json:"content_bytes"`
+	EmailAddressRecords       int64                  `json:"email_address_records,omitempty"`
+	RepetitiveContentRecords  int64                  `json:"repetitive_content_records,omitempty"`
+	BoilerplateContentRecords int64                  `json:"boilerplate_content_records,omitempty"`
+	Redaction                 index.ContentRedaction `json:"redaction,omitempty"`
+	Licenses                  []string               `json:"licenses"`
+	Validation                Validation             `json:"validation"`
 }
 
 type Validation struct {
@@ -65,6 +70,7 @@ func NewBOM(planSHA256, tokenizer string, records, tokens, contentBytes int64, l
 		PlanSHA256: planSHA256, RecordSchema: TextRecordSchema,
 		WriterRecipe: TextWriterRecipe, Tokenizer: tokenizer,
 		Records: records, Tokens: tokens, ContentBytes: contentBytes, Licenses: licenses,
+		Redaction:  index.ContentRedaction{Policy: PrivacyRedactionPolicy, NamesRetained: true},
 		Validation: Validation{CanonicalRecords: true, ContentHashes: true, TokenCounts: true, ExactLicenseDedup: true},
 	}
 }
@@ -76,11 +82,26 @@ func (bom BOM) Validate() error {
 	if !validDigest(bom.PlanSHA256) {
 		return fmt.Errorf("shard BOM plan_sha256 must be 64 lowercase hexadecimal characters")
 	}
-	if bom.RecordSchema != TextRecordSchema || bom.WriterRecipe != TextWriterRecipe || bom.Tokenizer == "" {
+	supported := bom.RecordSchema == TextRecordSchema && (bom.WriterRecipe == TextWriterRecipe || bom.WriterRecipe == FormerMainContentRecipe || bom.WriterRecipe == FormerAssessmentRecipe) || bom.RecordSchema == FormerTextRecordSchema && bom.WriterRecipe == FormerTextBOMRecipe
+	if !supported || bom.Tokenizer == "" {
 		return fmt.Errorf("shard BOM has unsupported record, writer, or tokenizer identity")
 	}
 	if bom.Records <= 0 || bom.Tokens < 0 || bom.ContentBytes <= 0 || len(bom.Licenses) == 0 || !slices.IsSorted(bom.Licenses) {
 		return fmt.Errorf("shard BOM has invalid totals or licenses")
+	}
+	if bom.EmailAddressRecords < 0 || bom.EmailAddressRecords > bom.Records {
+		return fmt.Errorf("shard BOM has invalid email-address record count")
+	}
+	if bom.RepetitiveContentRecords < 0 || bom.RepetitiveContentRecords > bom.Records {
+		return fmt.Errorf("shard BOM has invalid repetitive-content record count")
+	}
+	if bom.BoilerplateContentRecords < 0 || bom.BoilerplateContentRecords > bom.Records {
+		return fmt.Errorf("shard BOM has invalid boilerplate-content record count")
+	}
+	if bom.WriterRecipe == TextWriterRecipe {
+		if err := validateRedaction(bom.Redaction); err != nil {
+			return fmt.Errorf("shard BOM redaction: %w", err)
+		}
 	}
 	for position, license := range bom.Licenses {
 		if license == "" || position > 0 && license == bom.Licenses[position-1] {
@@ -133,7 +154,7 @@ func InspectAttestation(path string) (Attestation, error) {
 	defer file.Close()
 	recipe, _ := parquetFile.Lookup("waldo.recipe")
 	switch recipe {
-	case TextWriterRecipe:
+	case TextWriterRecipe, FormerMainContentRecipe, FormerAssessmentRecipe, FormerTextBOMRecipe:
 		if _, err := verifyAttestedOne(path); err != nil {
 			return Attestation{}, err
 		}
@@ -155,6 +176,16 @@ func InspectAttestation(path string) (Attestation, error) {
 	default:
 		return Attestation{Status: "unattested", WriterRecipe: recipe}, nil
 	}
+}
+
+func validateRedaction(redaction index.ContentRedaction) error {
+	if redaction.Policy != PrivacyRedactionPolicy || !redaction.NamesRetained {
+		return fmt.Errorf("unsupported or incomplete privacy policy")
+	}
+	if redaction.EmailAddresses < 0 || redaction.IPAddresses < 0 || redaction.PhoneNumbers < 0 || redaction.MailRoutingHeaders < 0 || redaction.Credentials < 0 {
+		return fmt.Errorf("redaction counts must be non-negative")
+	}
+	return nil
 }
 
 func validDigest(value string) bool {

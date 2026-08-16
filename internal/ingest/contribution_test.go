@@ -11,9 +11,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/openwaldo/waldo/internal/index"
+	"github.com/openwaldo/waldo/internal/shard"
 	"github.com/openwaldo/waldo/internal/tokenizer"
 )
 
@@ -40,7 +42,7 @@ func TestBuildManifestMatchesCurrentIndexContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if manifest.Schema != index.ManifestSchema || manifest.RecordSchema != 1 || len(manifest.Shards) != 1 || manifest.Shards[0].Docs != 1 || manifest.Shards[0].Tokens <= 0 {
+	if manifest.Schema != index.ManifestSchema || manifest.RecordSchema != shard.TextRecordSchema || len(manifest.Shards) != 1 || manifest.Shards[0].Docs != 1 || manifest.Shards[0].Tokens <= 0 {
 		t.Fatalf("manifest = %+v", manifest)
 	}
 	if manifest.Format != "" || manifest.Processing != nil || manifest.ComposedBy != nil || len(manifest.Sources[0].Files) != 0 || len(manifest.Sources[0].Usage) != 0 || manifest.Sources[0].Content != nil || len(manifest.Shards[0].Modalities) != 0 {
@@ -65,6 +67,73 @@ func TestBuildManifestMatchesCurrentIndexContract(t *testing.T) {
 	if len(roundTrip.Shards) != 1 || roundTrip.Shards[0].SHA256 != manifest.Shards[0].SHA256 {
 		t.Fatalf("round-trip manifest = %+v", roundTrip)
 	}
+	if roundTrip.Redaction == nil || roundTrip.Shards[0].Redaction == nil || *roundTrip.Redaction != *manifest.Redaction {
+		t.Fatalf("round-trip redaction = %+v / %+v", roundTrip.Redaction, roundTrip.Shards[0].Redaction)
+	}
+}
+
+func TestIngestionFlagsContentAssessmentsAndSummarizesManifest(t *testing.T) {
+	directory := t.TempDir()
+	writeFixture(t, filepath.Join(directory, "email.txt"), "Contact maintainer@example.org for details.\n")
+	writeFixture(t, filepath.Join(directory, "plain.txt"), "No contact address in this record.\n")
+	writeFixture(t, filepath.Join(directory, "boilerplate.txt"), strings.Repeat("Repeated navigation and footer line.\n", 8))
+	writeFixture(t, filepath.Join(directory, "repetitive.txt"), strings.Repeat("alpha beta gamma delta epsilon zeta eta theta ", 12))
+	probe, err := ProbePaths(context.Background(), []string{directory})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := NewPlan(probe, PlanRequest{
+		Destination: "core/email-fixture", Title: "Email fixture", Description: "Email assessment fixture.", License: "CC0-1.0",
+		Source: PlanSource{Name: "fixture", URL: "https://example.test/data", Category: "public-dataset"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assembly, err := AssembleTextObjects(context.Background(), plan, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := BuildManifest(plan, assembly, "https://objects.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Assessment == nil || manifest.Assessment.EmailAddresses == nil || manifest.Assessment.EmailAddresses.Detector != shard.EmailDetector || manifest.Assessment.EmailAddresses.Records != 0 {
+		t.Fatalf("manifest assessment = %+v", manifest.Assessment)
+	}
+	if manifest.Redaction == nil || manifest.Redaction.Policy != shard.PrivacyRedactionPolicy || !manifest.Redaction.NamesRetained || manifest.Redaction.EmailAddresses != 1 {
+		t.Fatalf("manifest redaction = %+v", manifest.Redaction)
+	}
+	if manifest.Assessment.RepetitiveContent == nil || manifest.Assessment.RepetitiveContent.Detector != shard.RepetitionDetector || manifest.Assessment.RepetitiveContent.Records != 1 {
+		t.Fatalf("repetitive assessment = %+v", manifest.Assessment)
+	}
+	if manifest.Assessment.BoilerplateContent == nil || manifest.Assessment.BoilerplateContent.Detector != shard.BoilerplateDetector || manifest.Assessment.BoilerplateContent.Records != 1 {
+		t.Fatalf("boilerplate assessment = %+v", manifest.Assessment)
+	}
+	var emailFlagged, repetitiveFlagged, boilerplateFlagged, assessed int
+	if err := shard.WalkRecords(assembly.Objects[0].Path, func(_ int64, view shard.RecordView) error {
+		if view.EmailAddresses == nil || view.RepetitiveContent == nil || view.BoilerplateContent == nil {
+			t.Fatal("schema-2 row has incomplete content assessment")
+		}
+		assessed++
+		if *view.EmailAddresses {
+			emailFlagged++
+		}
+		if strings.Contains(view.Text, "maintainer@example.org") {
+			t.Fatal("canonical shard retained an email address")
+		}
+		if *view.RepetitiveContent {
+			repetitiveFlagged++
+		}
+		if *view.BoilerplateContent {
+			boilerplateFlagged++
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if assessed != 4 || emailFlagged != 0 || repetitiveFlagged != 1 || boilerplateFlagged != 1 {
+		t.Fatalf("assessed/email/repetitive/boilerplate rows = %d/%d/%d/%d", assessed, emailFlagged, repetitiveFlagged, boilerplateFlagged)
+	}
 }
 
 func TestDeclarativeProfileIsPartOfConversionAndSourceIdentity(t *testing.T) {
@@ -85,6 +154,45 @@ func TestDeclarativeProfileIsPartOfConversionAndSourceIdentity(t *testing.T) {
 	}
 	if baseSource == changedSource || conversionProfile(base) == conversionProfile(changed) {
 		t.Fatal("profile mapping did not change persisted identities")
+	}
+}
+
+func TestMainContentClassificationChangesPlanAndSourceIdentity(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "input.json")
+	writeFixture(t, path, `{"metadata":{"namespace":0},"text":"main"}`)
+	probe, err := ProbePaths(context.Background(), []string{path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := NewPlan(probe, PlanRequest{
+		Destination: "core/main-content", Title: "Main content", License: "CC0-1.0",
+		Source:  PlanSource{Name: "fixture", URL: "https://example.test/data", Category: "public-dataset"},
+		Profile: InputProfile{Type: ProfileRecordMap, MainContent: map[string]any{"metadata.namespace": 0}, Fields: ProfileFields{Text: []string{"text"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := base
+	changed.Inputs = append([]PlanInput(nil), base.Inputs...)
+	changed.Inputs[0].Profile.MainContent = map[string]any{"metadata.namespace": 1}
+	basePlan, err := base.Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	changedPlan, err := changed.Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseSource, err := sourceAcquisitionIdentity(base, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	changedSource, err := sourceAcquisitionIdentity(changed, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if basePlan == changedPlan || baseSource == changedSource {
+		t.Fatal("main-content classification did not change plan and source identities")
 	}
 }
 
@@ -153,7 +261,7 @@ func TestBuildManifestSizeDoesNotScaleWithInputArtifactCount(t *testing.T) {
 		plan.Inputs[position] = input
 	}
 	assembly := AssemblyResult{
-		Objects:   []ObjectResult{{SHA256: fmt.Sprintf("%064x", 1), Bytes: 1024, Docs: 25_000, Tokens: 50_000, LogicalBytes: 500_000, License: plan.License}},
+		Objects:   []ObjectResult{{SHA256: fmt.Sprintf("%064x", 1), Bytes: 1024, Docs: 25_000, Tokens: 50_000, LogicalBytes: 500_000, License: plan.License, Redaction: index.ContentRedaction{Policy: shard.PrivacyRedactionPolicy, NamesRetained: true}}},
 		InputDocs: 25_000, RetainedDocs: 25_000,
 	}
 	manifest, err := BuildManifest(plan, assembly, "s3://openwaldo/lookaside/v1")

@@ -122,6 +122,21 @@ source evidence provides the logical attribution boundary.
 | `date` | UTF-8 string | no | upstream date as observed; partial dates remain representable |
 | `token_count` | signed 64-bit integer | no | count from the shard's explicitly named counting recipe |
 | `meta` | UTF-8 string containing canonical JSON | no | source-specific evidence not promoted to a core column |
+| `email_addresses` | boolean | yes in schema 2 | legacy assessment fact; current ingestion redacts first and requires this to be `false` |
+| `repetitive_content` | boolean | yes in schema 2 | `true` when WALDO's pinned token n-gram detector exceeds its within-document threshold; the text is not changed |
+| `boilerplate_content` | boolean | yes in schema 2 | `true` when WALDO's pinned duplicate-line or duplicate-paragraph detector exceeds its threshold; the text is not changed |
+| `main_content` | boolean | yes in current schema 2 | Recipe-declared primary-content classification; defaults to `true` when no mapping exists, including older schemas |
+| `redacted_email_addresses` | signed 64-bit integer | yes in current schema 2 | email replacements applied before canonical identity |
+| `redacted_ip_addresses` | signed 64-bit integer | yes in current schema 2 | IPv4/IPv6 replacements applied before canonical identity |
+| `redacted_phone_numbers` | signed 64-bit integer | yes in current schema 2 | conservative phone-number replacements applied before canonical identity |
+| `removed_mail_routing_headers` | signed 64-bit integer | yes in current schema 2 | routing fields removed from recognized RFC 822 header blocks |
+| `redacted_credentials` | signed 64-bit integer | yes in current schema 2 | high-confidence credential/private-key replacements applied before canonical identity |
+
+Automatic privacy redaction is corpus-neutral and mandatory. It precedes
+hashing, deduplication, token measurement, assessment, and packing. Names are
+retained. The current policy and aggregate counts are preserved in shard,
+manifest, and BOM evidence; this reduces exposure but is not a guarantee of
+anonymity or regulatory compliance.
 
 For recipe-driven whole-file text and Markdown inputs, `meta.source_path`
 preserves the validated acquisition-relative path. This keeps file-level
@@ -146,9 +161,19 @@ remain training-tokenizer neutral because they contain text rather than token
 IDs; changing the reference counter does change object identity and therefore
 requires a new recorded writer recipe.
 
-Record schema 1 remains the canonical logical contract. The physical writer
-recipe and footer metadata distinguish this representation from older
-schema-1 objects; it must not claim the identity of an existing shard recipe.
+Record schema 2 is the current canonical logical contract. Schema-1 objects
+remain valid, readable, and unassessed; they are not rewritten. New ingestion
+always evaluates every retained row with `waldo/email-address-v1`, writes the
+boolean result, and records detector identity plus flagged-record counts in the
+shard footer, embedded shard BOM, manifest shard, and manifest aggregate. The
+detector recognizes common Internet email-shaped strings. It does not determine
+whether an address identifies a natural person or establish a legal conclusion.
+
+Because canonical objects are immutable, adding this column does not migrate
+existing shards. A corpus is upgraded only by an explicit rebuild. If a
+compose requests an assessment exclusion across schema-1 shards, WALDO warns,
+retains those unassessed rows, and applies the exclusion normally to schema-2
+rows. All non-assessment filter conditions continue to apply.
 
 ### Other logical record kinds
 

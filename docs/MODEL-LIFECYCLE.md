@@ -56,7 +56,9 @@ waldo model rm small
 
 ## Downloaded open-weight origins
 
-`model pull` acquires training-quality Hugging Face Safetensors, resolves
+`model pull` is the explicit command for importing a supported external model
+into WALDO's managed model store. Schema 1 acquires training-quality Hugging
+Face Safetensors, resolves
 the requested reference to an immutable repository commit, hashes every source
 artifact, validates the architecture, tokenizer, tensor names, shapes, and
 precision, and streams the tensor bytes into WALDO's canonical names:
@@ -79,6 +81,22 @@ Schema 1 initially accepts standard bias-free Llama weights with
 That is the format produced by WALDO's Hugging Face export. Other tokenizers or
 architectural variants fail before publication rather than being numerically
 converted or silently retokenized.
+
+A compose can use this same verified importer without first creating a visible
+base model:
+
+```yaml
+base:
+  source: huggingface://organization/model@0123456789abcdef0123456789abcdef01234567
+```
+
+Direct compose sources must name an immutable commit. WALDO inherits the
+verified architecture when `architecture` is omitted, or treats a supplied
+architecture as an exact assertion. Acquired origins are content-addressed
+beneath `<model.root>/.origins`, hidden from `model list`, and reused by later
+composes. Target models hard-link cached artifacts when the filesystem permits
+and copy them otherwise. The resulting model retains the same `ORIGIN-BOM.json`
+provenance as an explicit `model pull`.
 
 `init` creates an untrained immutable architecture. `train` resolves one or
 more recursive index selections, deduplicates them into an OpenWALDO BOM,
@@ -220,7 +238,8 @@ this section describes its place in the model lifecycle:
 kind: waldo-model-compose
 schema: 1
 
-# Optional. Omit this block to initialize a blank architecture.
+# Optional. Omit this block to initialize a blank architecture. Use either
+# model or source, never both.
 base:
   model: llama-base
   # Optional assertion; WALDO always pins the resolved value into PLAN.json.
@@ -249,7 +268,7 @@ stages:
       - core/books
       - core/common-pile/foodista
     parameters:
-      profile: causal-pretrain-v1
+      profile: causal-pretrain-shuffled
       steps: 10000
       batch_size: 2
       sequence_length: 1024
@@ -269,7 +288,7 @@ stages:
 ```
 
 Use `architecture.dropout` for recorded residual dropout. Multi-corpus runs
-that need unequal exposure use `profile: causal-pretrain-v3` and declare an
+that need unequal exposure use `profile: causal-pretrain-weighted` and declare an
 integer weight for every resolved corpus path:
 
 ```yaml
@@ -277,11 +296,13 @@ architecture:
   dropout: 0.1
 stages:
   - name: pretrain
+    corpora:
+      - path: core/books/gutenberg
+        weight: 1
+      - path: core/common-pile/wikimedia
+        weight: 2
     parameters:
-      profile: causal-pretrain-v3
-      corpus_weights:
-        core/books/gutenberg: 1
-        core/common-pile/wikimedia: 2
+      profile: causal-pretrain-weighted
 ```
 
 Weights define relative tokenizer-target exposure, not sampling probabilities
@@ -289,6 +310,11 @@ or duplicated source records. They are preserved in the run BOM and exact
 consumption remains backend-validated. Built-in MLX and PyTorch workers apply
 dropout to attention and feed-forward residual branches during training and
 disable it during evaluation and inference.
+
+Scalar corpus paths and the older `parameters.corpus_weights` map remain
+accepted. A configured corpus entry can also carry license, language, source,
+and date filters; stage-wide and corpus-local filters are combined and pinned
+in the corpus BOM before held-out selection and training.
 
 Run it with:
 
@@ -302,10 +328,12 @@ maps, duplicate stage names, and invalid parameters are rejected. Corpus values
 are index paths, never raw directories or corpus exports. Explicit paths
 discover their checkout; logical paths use the current or configured checkout.
 
-When `base` is present, it must name a pulled model whose origin remains
-its current weights. WALDO verifies every origin artifact, checks the optional
-hash assertion and exact architecture equality, then initializes the new model
-from that origin. A compose never mutates the named base model.
+When `base.model` is present, it must name a pulled model whose origin remains
+its current weights. `base.source` instead accepts a pinned supported external
+source and uses the same verified importer as `model pull`. WALDO verifies every
+origin artifact, checks the optional hash assertion and exact architecture
+equality when declared, then initializes the new model from that origin. A
+compose never mutates a named base model.
 
 WALDO resolves and hash-verifies every stage and creates the active model at
 `<model.root>/<name>` when absent. When the name already exists, its normalized

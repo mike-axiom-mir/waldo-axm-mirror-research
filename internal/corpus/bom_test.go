@@ -65,6 +65,31 @@ func TestBuildBOMResolvesAndPinsSelection(t *testing.T) {
 	}
 }
 
+func TestContentAssessmentExclusionsAllowUnassessedSchemaOneSelection(t *testing.T) {
+	root := bomFixture(t)
+	target, err := index.Resolve(root, "books")
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, _ := NewLicensePolicy(nil, nil)
+	bom, err := BuildBOM(context.Background(), []index.Target{target}, policy, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	present := true
+	for name, exclusion := range map[string]ExclusionFilter{
+		"repetitive":  {RepetitiveContent: &present},
+		"boilerplate": {BoilerplateContent: &present},
+	} {
+		t.Run(name, func(t *testing.T) {
+			bom.RecordFilter = &RecordFilterPolicy{Schema: RecordFilterSchema, Global: &RecordFilter{Exclude: &exclusion}}
+			if err := bom.Validate(); err != nil {
+				t.Fatalf("schema-one filtered BOM was rejected: %v", err)
+			}
+		})
+	}
+}
+
 func TestBuildBOMExpandsNestedSubManifests(t *testing.T) {
 	root, rootHash, childHash := rollupBOMFixture(t, 50)
 	target, err := index.Resolve(root, "books")

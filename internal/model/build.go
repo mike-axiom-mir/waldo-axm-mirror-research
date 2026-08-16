@@ -8,6 +8,7 @@ package model
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -35,13 +36,14 @@ type Progress struct {
 }
 
 type Builder struct {
-	Root        string
-	Now         func() time.Time
-	NewID       func() (string, error)
-	Resolver    training.Resolver
-	Progress    func(Progress)
-	ComposeName string
-	MultiNode   MultiNodeHandoff
+	Root         string
+	Now          func() time.Time
+	NewID        func() (string, error)
+	Resolver     training.Resolver
+	OriginPuller *Puller
+	Progress     func(Progress)
+	ComposeName  string
+	MultiNode    MultiNodeHandoff
 }
 
 type MultiNodeHandoff struct {
@@ -140,7 +142,7 @@ func (builder Builder) Train(ctx context.Context, name string, prepared Prepared
 	if len(prepared.Inputs) == 0 {
 		return Inspection{}, fmt.Errorf("stage %s has no verified shard inputs", stage.Name)
 	}
-	resolvedParameters, err := training.ResolveParameters(stage.Parameters)
+	resolvedParameters, err := stage.ResolveParameters()
 	if err != nil {
 		return Inspection{}, fmt.Errorf("stage %s training profile: %w", stage.Name, err)
 	}
@@ -264,7 +266,7 @@ func resumableRun(inspection Inspection, stage Stage, parameters training.Resolv
 	index := len(inspection.Runs) - 1
 	run := inspection.Runs[index]
 	bom := inspection.RunBOMs[index]
-	if !resumableRunState(run, parameters) || bom.Stage != stage.Name || bom.StageType != stage.Type || bom.Objective != stage.Objective || bom.CorpusBOMSHA256 != corpusHash || !reflect.DeepEqual(bom.Parameters, parameters) || bom.EvaluationSet == nil || !reflect.DeepEqual(*bom.EvaluationSet, evaluation) || !reflect.DeepEqual(bom.Execution, execution) {
+	if !resumableRunState(run, parameters) || bom.Stage != stage.Name || bom.StageType != stage.Type || bom.Objective != stage.Objective || bom.CorpusBOMSHA256 != corpusHash || !equivalentTrainingParameters(bom.Parameters, parameters) || bom.EvaluationSet == nil || !reflect.DeepEqual(*bom.EvaluationSet, evaluation) || !reflect.DeepEqual(bom.Execution, execution) {
 		return 0, false
 	}
 	return index, true
@@ -736,8 +738,8 @@ func (builder Builder) CheckComposeTarget(name string, compose Compose) error {
 	if err := compose.Validate(); err != nil {
 		return err
 	}
-	if _, err := builder.resolveComposeBase(&compose); err != nil {
-		return err
+	if compose.Architecture == (Architecture{}) {
+		return fmt.Errorf("compose base source must be resolved before checking its target")
 	}
 	pending, err := pendingComposeTransaction(builder.Root, name)
 	if err != nil {
@@ -781,34 +783,106 @@ func validateComposeTarget(target Inspection, compose Compose) error {
 	return nil
 }
 
-func (builder Builder) resolveComposeBase(compose *Compose) (*Inspection, error) {
+// ResolveCompose resolves an inherited base architecture. When acquire is
+// true, external origin weights are acquired through the same importer used by
+// model pull and cached outside the visible managed-model namespace.
+func (builder Builder) ResolveCompose(ctx context.Context, compose Compose, acquire bool) (Compose, error) {
+	resolved, _, err := builder.resolveCompose(ctx, compose, acquire)
+	return resolved, err
+}
+
+func (builder Builder) resolveCompose(ctx context.Context, compose Compose, acquire bool) (Compose, *Inspection, error) {
+	if err := compose.Validate(); err != nil {
+		return Compose{}, nil, err
+	}
 	if compose.Base == nil {
-		return nil, nil
+		return compose, nil, nil
 	}
 	declaration := *compose.Base
 	compose.Base = &declaration
-	base, err := Inspect(builder.Root, compose.Base.Model)
-	if err != nil {
-		return nil, fmt.Errorf("resolve compose base model %q: %w", compose.Base.Model, err)
+	if compose.Base.Source != "" {
+		repository, revision, err := parseHuggingFaceSource(compose.Base.Source)
+		if err != nil {
+			return Compose{}, nil, fmt.Errorf("resolve compose base source: %w", err)
+		}
+		compose.Base.Source = "huggingface://" + repository + "@" + strings.ToLower(revision)
+	}
+	var base Inspection
+	if compose.Base.Model != "" {
+		resolved, err := Inspect(builder.Root, compose.Base.Model)
+		if err != nil {
+			return Compose{}, nil, fmt.Errorf("resolve compose base model %q: %w", compose.Base.Model, err)
+		}
+		base = resolved
+	} else if acquire {
+		originRoot := filepath.Join(builder.Root, ".origins")
+		digest := sha256.Sum256([]byte(compose.Base.Source))
+		originName := hex.EncodeToString(digest[:])
+		originPath := filepath.Join(originRoot, originName)
+		if _, err := os.Stat(originPath); os.IsNotExist(err) {
+			puller := Puller{Root: originRoot}
+			if builder.OriginPuller != nil {
+				puller = *builder.OriginPuller
+				puller.Root = originRoot
+			}
+			resolved, pullErr := puller.Pull(ctx, originName, compose.Base.Source)
+			if pullErr != nil {
+				return Compose{}, nil, fmt.Errorf("acquire compose base %s: %w", compose.Base.Source, pullErr)
+			}
+			base = resolved
+		} else if err != nil {
+			return Compose{}, nil, err
+		} else {
+			resolved, err := Inspect(originRoot, originName)
+			if err != nil {
+				return Compose{}, nil, err
+			}
+			base = resolved
+		}
+	} else {
+		puller := Puller{Root: filepath.Join(builder.Root, ".origins")}
+		if builder.OriginPuller != nil {
+			puller = *builder.OriginPuller
+			puller.Root = filepath.Join(builder.Root, ".origins")
+		}
+		architecture, err := puller.Probe(ctx, compose.Base.Source)
+		if err != nil {
+			return Compose{}, nil, fmt.Errorf("resolve compose base %s: %w", compose.Base.Source, err)
+		}
+		if compose.Architecture != (Architecture{}) && !reflect.DeepEqual(compose.Architecture, architecture) {
+			return Compose{}, nil, fmt.Errorf("compose architecture does not match base source %q", compose.Base.Source)
+		}
+		compose.Architecture = architecture
+		if err := compose.Validate(); err != nil {
+			return Compose{}, nil, err
+		}
+		return compose, nil, nil
 	}
 	if base.Origin == nil || base.BOM.CurrentOriginSHA256 == "" {
-		return nil, fmt.Errorf("compose base model %q must have pulled origin weights as its current weights", compose.Base.Model)
+		return Compose{}, nil, fmt.Errorf("compose base must have pulled origin weights as its current weights")
 	}
 	if compose.Base.OriginSHA256 != "" && compose.Base.OriginSHA256 != base.Model.OriginBOMSHA256 {
-		return nil, fmt.Errorf("compose base model %q origin is %s, not requested %s", compose.Base.Model, base.Model.OriginBOMSHA256, compose.Base.OriginSHA256)
+		return Compose{}, nil, fmt.Errorf("compose base origin is %s, not requested %s", base.Model.OriginBOMSHA256, compose.Base.OriginSHA256)
 	}
-	if !reflect.DeepEqual(compose.Architecture, base.Model.Architecture) {
-		return nil, fmt.Errorf("compose architecture does not match base model %q", compose.Base.Model)
+	if compose.Architecture != (Architecture{}) && !reflect.DeepEqual(compose.Architecture, base.Model.Architecture) {
+		return Compose{}, nil, fmt.Errorf("compose architecture does not match base origin")
 	}
+	compose.Architecture = base.Model.Architecture
 	compose.Base.OriginSHA256 = base.Model.OriginBOMSHA256
-	return &base, nil
+	if err := compose.Validate(); err != nil {
+		return Compose{}, nil, err
+	}
+	return compose, &base, nil
 }
 
 // Compose creates a model when absent or appends stages to an existing model
 // with the same immutable architecture. Hidden transaction metadata preserves
 // exact-command resume in both cases.
 func (builder Builder) Compose(ctx context.Context, name string, compose Compose, stages []PreparedStage) (Inspection, error) {
-	if err := compose.Validate(); err != nil {
+	var base *Inspection
+	var err error
+	compose, base, err = builder.resolveCompose(ctx, compose, true)
+	if err != nil {
 		return Inspection{}, err
 	}
 	if err := ValidateName(name); err != nil {
@@ -826,10 +900,6 @@ func (builder Builder) Compose(ctx context.Context, name string, compose Compose
 		return Inspection{}, err
 	}
 	destination := filepath.Join(builder.Root, name)
-	base, err := builder.resolveComposeBase(&compose)
-	if err != nil {
-		return Inspection{}, err
-	}
 	transaction := composeTransaction{Kind: "waldo-model-compose-transaction", Schema: 1, Name: name, Compose: compose}
 	for _, stage := range stages {
 		digest, err := hashJSON(stage.BOM)
@@ -1164,7 +1234,7 @@ func validateStagedComposeRun(inspection Inspection, index int, prepared Prepare
 	if err != nil {
 		return err
 	}
-	parameters, err := training.ResolveParameters(prepared.Stage.Parameters)
+	parameters, err := prepared.Stage.ResolveParameters()
 	if err != nil {
 		return err
 	}
@@ -1174,10 +1244,14 @@ func validateStagedComposeRun(inspection Inspection, index int, prepared Prepare
 			return err
 		}
 	}
-	if bom.Stage != prepared.Stage.Name || bom.StageType != prepared.Stage.Type || bom.Objective != prepared.Stage.Objective || bom.CorpusBOMSHA256 != corpusHash || !reflect.DeepEqual(bom.Parameters, parameters) {
+	if bom.Stage != prepared.Stage.Name || bom.StageType != prepared.Stage.Type || bom.Objective != prepared.Stage.Objective || bom.CorpusBOMSHA256 != corpusHash || !equivalentTrainingParameters(bom.Parameters, parameters) {
 		return fmt.Errorf("run %d immutable facts do not match stage %s", index+1, prepared.Stage.Name)
 	}
 	return nil
+}
+
+func equivalentTrainingParameters(left, right training.ResolvedParameters) bool {
+	return reflect.DeepEqual(training.NormalizeResolvedParameters(left), training.NormalizeResolvedParameters(right))
 }
 
 func (builder Builder) initializeFromOrigin(name string, compose Compose, base Inspection) (Inspection, error) {
@@ -1218,6 +1292,9 @@ func (builder Builder) initializeFromOrigin(name string, compose Compose, base I
 func copyOriginFile(source, destination string) error {
 	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
 		return err
+	}
+	if err := os.Link(source, destination); err == nil {
+		return nil
 	}
 	input, err := os.Open(source)
 	if err != nil {

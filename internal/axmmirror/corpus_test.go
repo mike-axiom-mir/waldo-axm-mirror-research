@@ -33,6 +33,9 @@ func TestCorpusEvidenceLensProjectsValidatedBOM(t *testing.T) {
 	if lens.Attestation.State != "NOT_RECORDED" || lens.Attestation.NotRecorded != 1 {
 		t.Fatalf("lens attestation = %+v", lens.Attestation)
 	}
+	if lens.Schema != CorpusEvidenceLensSchema || lens.RecordFilter == nil || lens.RecordFilter.State != "NOT_DECLARED" || lens.Assessment == nil || lens.Assessment.State != "NOT_APPLICABLE_LEGACY" || lens.PrivacyRedaction == nil || lens.PrivacyRedaction.State != "NOT_RECORDED" {
+		t.Fatalf("lens v0.2 row evidence = filter %+v assessment %+v privacy %+v", lens.RecordFilter, lens.Assessment, lens.PrivacyRedaction)
+	}
 	if err := lens.Validate(); err != nil {
 		t.Fatalf("lens.Validate() error = %v", err)
 	}
@@ -131,7 +134,7 @@ func TestCorpusEvidenceLensSummarizesEmbeddedAttestation(t *testing.T) {
 	bom := validCorpusBOM()
 	shardBOM := &waldoShardBOM{
 		Kind: "openwaldo-bom", Schema: 1, Subject: "shard", PlanSHA256: repeatHex("f"),
-		RecordSchema: 1, WriterRecipe: waldoTextWriterRecipe, Tokenizer: "byte",
+		RecordSchema: 1, WriterRecipe: waldoFormerTextBOMRecipe, Tokenizer: "byte",
 		Records: 2, Tokens: 8, ContentBytes: 64, Licenses: []string{"CC0-1.0"},
 		Validation: waldoShardValidation{CanonicalRecords: true, ContentHashes: true, TokenCounts: true, ExactLicenseDedup: true},
 	}
@@ -139,7 +142,7 @@ func TestCorpusEvidenceLensSummarizesEmbeddedAttestation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bom.Shards[0].Attestation = &waldoShardAttestation{Status: "embedded", WriterRecipe: waldoTextWriterRecipe, BOMSHA256: digestBytes(encoded), BOM: shardBOM}
+	bom.Shards[0].Attestation = &waldoShardAttestation{Status: "embedded", WriterRecipe: waldoFormerTextBOMRecipe, BOMSHA256: digestBytes(encoded), BOM: shardBOM}
 	data, _ := json.Marshal(bom)
 	lens, err := LensCorpusBOM(data)
 	if err != nil {
@@ -147,6 +150,100 @@ func TestCorpusEvidenceLensSummarizesEmbeddedAttestation(t *testing.T) {
 	}
 	if lens.Attestation.State != "RECORDED_COMPLETE" || lens.Attestation.Embedded != 1 || lens.Attestation.NotRecorded != 0 {
 		t.Fatalf("embedded attestation = %+v", lens.Attestation)
+	}
+}
+
+func TestCorpusEvidenceLensWitnessesCurrentAssessmentFilterAndPrivacyContract(t *testing.T) {
+	bom := validCurrentCorpusBOM(t)
+	data, err := json.MarshalIndent(bom, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lens, err := LensCorpusBOM(data)
+	if err != nil {
+		t.Fatalf("LensCorpusBOM() current contract error = %v", err)
+	}
+	canonical, err := json.Marshal(bom)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lens.BOMSHA256 != digestBytes(canonical) || lens.RecordFilter == nil || lens.RecordFilter.State != "DECLARED" || lens.RecordFilter.Schema != 1 || !lens.RecordFilter.GlobalDeclared {
+		t.Fatalf("current filter evidence = %+v", lens.RecordFilter)
+	}
+	if lens.Assessment == nil || lens.Assessment.State != "RECORDED_COMPLETE" || lens.Assessment.AssessedShards != 1 || lens.Assessment.RepetitiveContentRecords != 1 {
+		t.Fatalf("current assessment evidence = %+v", lens.Assessment)
+	}
+	if lens.PrivacyRedaction == nil || lens.PrivacyRedaction.State != "RECORDED_COMPLETE" || lens.PrivacyRedaction.Policy != waldoPrivacyRedactionPolicy || !lens.PrivacyRedaction.NamesRetained || lens.PrivacyRedaction.EmailAddresses != 1 || lens.PrivacyRedaction.IPAddresses != 1 {
+		t.Fatalf("current privacy evidence = %+v", lens.PrivacyRedaction)
+	}
+	if lens.Attestation.State != "RECORDED_COMPLETE" || lens.Attestation.Embedded != 1 {
+		t.Fatalf("current attestation evidence = %+v", lens.Attestation)
+	}
+}
+
+func TestCorpusEvidenceLensAcceptsCompatibleSchemaTwoWriters(t *testing.T) {
+	for _, recipe := range []string{waldoFormerMainContentRecipe, waldoFormerAssessmentRecipe} {
+		t.Run(recipe, func(t *testing.T) {
+			bom := validCurrentCorpusBOM(t)
+			bom.Manifests[0].ConvertedBy.Recipe = recipe
+			bom.Manifests[0].Redaction = nil
+			bom.Shards[0].ConvertedBy.Recipe = recipe
+			bom.Shards[0].Redaction = nil
+			bom.Shards[0].Attestation.WriterRecipe = recipe
+			bom.Shards[0].Attestation.BOM.WriterRecipe = recipe
+			bom.Shards[0].Attestation.BOM.Redaction = waldoContentRedaction{}
+			encoded, err := json.Marshal(bom.Shards[0].Attestation.BOM)
+			if err != nil {
+				t.Fatal(err)
+			}
+			bom.Shards[0].Attestation.BOMSHA256 = digestBytes(encoded)
+			data, err := json.Marshal(bom)
+			if err != nil {
+				t.Fatal(err)
+			}
+			lens, err := LensCorpusBOM(data)
+			if err != nil {
+				t.Fatalf("LensCorpusBOM() compatible writer error = %v", err)
+			}
+			if lens.Assessment == nil || lens.Assessment.State != "RECORDED_COMPLETE" || lens.PrivacyRedaction == nil || lens.PrivacyRedaction.State != "NOT_RECORDED" || lens.PrivacyRedaction.UnredactedCompatibleShards != 1 {
+				t.Fatalf("compatible writer evidence = assessment %+v privacy %+v", lens.Assessment, lens.PrivacyRedaction)
+			}
+		})
+	}
+}
+
+func TestCorpusEvidenceLensRejectsMissingCurrentPrivacyEvidence(t *testing.T) {
+	bom := validCurrentCorpusBOM(t)
+	bom.Shards[0].Redaction = nil
+	data, _ := json.Marshal(bom)
+	if _, err := LensCorpusBOM(data); err == nil || !strings.Contains(err.Error(), "redaction") {
+		t.Fatalf("LensCorpusBOM() missing privacy error = %v", err)
+	}
+}
+
+func TestCorpusEvidenceLensRetainsStrictLegacyReceiptValidation(t *testing.T) {
+	data, err := json.Marshal(validCorpusBOM())
+	if err != nil {
+		t.Fatal(err)
+	}
+	lens, err := LensCorpusBOM(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lens.Schema = CorpusEvidenceLensSchemaV1
+	lens.RecordFilter = nil
+	lens.Assessment = nil
+	lens.PrivacyRedaction = nil
+	lens.ReceiptSHA256, err = corpusLensReceiptDigest(lens)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := lens.Validate(); err != nil {
+		t.Fatalf("legacy corpus evidence lens should remain valid: %v", err)
+	}
+	lens.RecordFilter = &CorpusRecordFilterEvidence{State: "NOT_DECLARED", PolicySHA256: repeatHex("a")}
+	if err := lens.Validate(); err == nil || !strings.Contains(err.Error(), "legacy corpus evidence lens") {
+		t.Fatalf("legacy receipt with v0.2 fields error = %v", err)
 	}
 }
 
@@ -180,4 +277,42 @@ func validCorpusBOM() waldoCorpusBOM {
 		Paths: []string{""}, Manifests: []waldoCorpusManifest{manifest}, Shards: []waldoCorpusShard{shard},
 		Totals: measure, Licenses: map[string]EvidenceMeasures{"CC0-1.0": measure},
 	}
+}
+
+func validCurrentCorpusBOM(t *testing.T) waldoCorpusBOM {
+	t.Helper()
+	bom := validCorpusBOM()
+	conversion := waldoConversion{Tool: "waldo", Version: "test", Profile: "text", Recipe: waldoTextWriterRecipe, Tokenizer: "byte"}
+	assessment := &waldoContentAssessment{
+		EmailAddresses:     &waldoDetectionMeasure{Detector: "waldo/email-address-v1", Records: 0},
+		RepetitiveContent:  &waldoDetectionMeasure{Detector: "waldo/gopher-ngram-repetition-v1", Records: 1},
+		BoilerplateContent: &waldoDetectionMeasure{Detector: "waldo/gopher-structural-duplication-v1", Records: 0},
+	}
+	redaction := &waldoContentRedaction{Policy: waldoPrivacyRedactionPolicy, NamesRetained: true, EmailAddresses: 1, IPAddresses: 1}
+	bom.RecordFilter = &waldoRecordFilterPolicy{Schema: 1, Global: &waldoRecordFilter{MainContent: boolPointer(true)}}
+	bom.Manifests[0].RecordSchema = waldoTextRecordSchema
+	bom.Manifests[0].ConvertedBy = conversion
+	bom.Manifests[0].Assessment = assessment
+	bom.Manifests[0].Redaction = redaction
+	bom.Shards[0].RecordSchema = waldoTextRecordSchema
+	bom.Shards[0].ConvertedBy = conversion
+	bom.Shards[0].Assessment = assessment
+	bom.Shards[0].Redaction = redaction
+	shardBOM := &waldoShardBOM{
+		Kind: "openwaldo-bom", Schema: 1, Subject: "shard", PlanSHA256: repeatHex("f"),
+		RecordSchema: waldoTextRecordSchema, WriterRecipe: waldoTextWriterRecipe, Tokenizer: "byte",
+		Records: 2, Tokens: 8, ContentBytes: 64, RepetitiveContentRecords: 1,
+		Redaction: *redaction, Licenses: []string{"CC0-1.0"},
+		Validation: waldoShardValidation{CanonicalRecords: true, ContentHashes: true, TokenCounts: true, ExactLicenseDedup: true},
+	}
+	encoded, err := json.Marshal(shardBOM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bom.Shards[0].Attestation = &waldoShardAttestation{Status: "embedded", WriterRecipe: waldoTextWriterRecipe, BOMSHA256: digestBytes(encoded), BOM: shardBOM}
+	return bom
+}
+
+func boolPointer(value bool) *bool {
+	return &value
 }

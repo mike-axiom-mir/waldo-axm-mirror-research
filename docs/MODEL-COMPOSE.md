@@ -39,10 +39,15 @@ weights.
 kind: waldo-model-compose
 schema: 1
 
-# Optional: initialize from a locally managed pulled model.
+# Optional: choose one base form, never both.
 # base:
 #   model: llama-base
 #   origin_sha256: <expected-origin-bom-sha256> # optional assertion
+#
+# Or acquire a supported external origin directly. With this form only,
+# architecture may be omitted and inherited from the verified origin.
+# base:
+#   source: huggingface://organization/model@<commit>
 
 architecture:
   family: decoder-transformer
@@ -64,11 +69,27 @@ stages:
   - name: pretrain
     type: pre-training
     objective: causal-language-modeling
+    filter:
+      main_content: true
+      exclude:
+        repetitive_content: true
+        boilerplate_content: true
+        licenses: [CC-BY-NC-*]
     corpora:
-      - core/books/gutenberg
-      - core/common-pile/wikimedia
+      - path: core/books/gutenberg
+        weight: 1
+        filter:
+          languages:
+            include: [en]
+          date:
+            from: "1900"
+      - path: core/common-pile/wikimedia
+        weight: 2
+        filter:
+          sources:
+            exclude: [deprecated-*]
     parameters:
-      profile: causal-pretrain-v3
+      profile: causal-pretrain-weighted
       epochs: 1
       steps: 60000
       batch_size: 32
@@ -81,9 +102,6 @@ stages:
       evaluate_every: 6000
       shuffle_buffer_records: 32768
       shuffle_buffer_bytes: 1073741824
-      corpus_weights:
-        core/books/gutenberg: 1
-        core/common-pile/wikimedia: 2
       evaluation_fraction: 0.01
       evaluation_max_records: 512
       evaluation_max_bytes: 16777216
@@ -99,19 +117,100 @@ field names and structure.
 | `kind` | yes | `waldo-model-compose` | Identifies the document as a model compose. |
 | `schema` | yes | `1` | Selects the compose schema. |
 | `base` | no | object | Optionally initializes a new model from pulled origin weights. |
-| `architecture` | yes | object | Defines immutable model structure and tokenizer identity. |
+| `architecture` | normally | object | Defines immutable model structure and tokenizer identity. It may be omitted with `base.source`, in which case WALDO inherits the verified source architecture. |
 | `stages` | yes | non-empty list | Ordered training stages. Stage names must be unique. |
 
 ### Base fields
 
 | Field | Required | Value | Meaning |
 | --- | --- | --- | --- |
-| `base.model` | yes when `base` is present | `^[a-z0-9][a-z0-9._-]{0,63}$` | Names a managed model whose current weights are still its pulled origin. |
+| `base.model` | exactly one of `model` or `source` | `^[a-z0-9][a-z0-9._-]{0,63}$` | Names a managed model whose current weights are still its pulled origin. |
+| `base.source` | exactly one of `model` or `source` | pinned model source | Acquires a supported external model through the same verified importer as `model pull`. Schema 1 accepts `huggingface://organization/model@<commit>`. |
 | `base.origin_sha256` | no | SHA-256 | Asserts the expected origin BOM. WALDO always resolves and pins the actual value. |
 
-The complete compose architecture must exactly equal the base model
-architecture. A base initializes a new model; training never mutates the named
-base model.
+## Base initialization
+
+`base` controls the weights used to initialize a model before its first stage.
+It does not name the destination model; the destination is the first argument
+to `waldo model train`. A compose supports three initialization modes:
+
+| Compose declaration | Initial weights | Architecture rule |
+| --- | --- | --- |
+| no `base` | Newly initialized weights | `architecture` is required. |
+| `base.model` | Verified origin weights from a named managed model | `architecture` is required and must exactly match the managed model. |
+| `base.source` | Verified origin weights acquired from an external source | `architecture` may be omitted and inherited; when present, it must exactly match. |
+
+`model` and `source` are mutually exclusive. A base initializes the destination
+model and is never mutated by its training. `origin_sha256` is an optional
+fail-closed assertion against the canonical origin BOM hash. WALDO always pins
+the resolved hash in the destination plan and model BOM whether or not the
+assertion is declared.
+
+### Named managed base
+
+```yaml
+base:
+  model: llama-base
+  origin_sha256: <expected-origin-bom-sha256>
+```
+
+The named model must still expose its pulled origin as its current weights. The
+compose must contain a complete, exactly matching `architecture`. Use this form
+when the base should be visible to `waldo model list` and independently
+inspectable with `waldo model summary llama-base`.
+
+### Direct external base
+
+The smallest complete source-based compose is:
+
+```yaml
+kind: waldo-model-compose
+schema: 1
+
+base:
+  source: huggingface://organization/model@0123456789abcdef0123456789abcdef01234567
+
+stages:
+  - name: adapt
+    type: fine-tuning
+    objective: causal-language-modeling
+    corpora: [core/books/gutenberg]
+    parameters:
+      profile: causal-pretrain-shuffled
+      steps: 1000
+      batch_size: 8
+      sequence_length: 512
+      learning_rate: 0.00005
+      seed: 42
+```
+
+Run it normally:
+
+```bash
+waldo model forecast model.yaml
+waldo model train adapted-model model.yaml
+```
+
+The source must pin a 40- to 64-character hexadecimal commit. Branches and tags
+are rejected because they can move. `forecast` downloads only repository
+metadata, `config.json`, and `tokenizer_config.json`; it does not download model
+weights. `train` acquires and verifies the complete origin through the same
+importer as `waldo model pull`.
+
+Private or gated Hugging Face repositories use `HF_TOKEN` or the standard
+Hugging Face token file. Verified direct origins are cached beneath
+`<model.root>/.origins`, reused by later composes, and excluded from
+`waldo model list`. The destination hard-links cached artifacts when possible
+and copies them otherwise. Its `ORIGIN-BOM.json` records the repository,
+requested and resolved revisions, declared license when available, source-file
+hashes, and normalized artifact hashes.
+
+Schema 1 currently accepts standard bias-free Llama Safetensors with
+`OpenWALDOByteTokenizer`, vocabulary size 259, and F32, F16, or BF16 tensors—the
+format produced by WALDO's Hugging Face export. Other tokenizers, architectures,
+tensor layouts, and source providers fail before the destination model is
+published. `base.source` and `model pull` intentionally share this same
+compatibility boundary.
 
 ## Architecture fields
 
@@ -155,7 +254,8 @@ backends receive identical token IDs.
 | `name` | yes | `^[a-z0-9][a-z0-9._-]{0,63}$` | Unique durable stage and run label. |
 | `type` | yes | `pre-training`, `fine-tuning`, `alignment`, or `other` | Records the stage's intended role in provenance. |
 | `objective` | yes | `causal-language-modeling` | The only currently executable objective. |
-| `corpora` | yes | non-empty list of unique index paths | Selects canonical corpus records for the stage. |
+| `filter` | no | record filter | Applies one record-level condition to every selected corpus. |
+| `corpora` | yes | non-empty list of unique scalar paths or configured corpus objects | Selects canonical corpus records for the stage. |
 | `parameters` | yes | object | Declares the portable training budget and controls. |
 
 Relative corpus values are logical paths beneath the selected WALDO index.
@@ -171,11 +271,90 @@ Stage `type` currently records intent; it does not select a different loss or
 framework algorithm. `objective` selects executable behavior, and schema 1
 supports only causal language modeling.
 
+## Corpus selection and record filters
+
+A `corpora` entry may remain a path string, preserving every existing
+schema-1 compose:
+
+```yaml
+corpora:
+  - core/books/gutenberg
+```
+
+Use the object form when a corpus needs configuration. The canonical exclusion
+form is a single deny list whose conditions are ORed:
+
+```yaml
+filter:                         # stage-wide
+  main_content: true
+  exclude:
+    repetitive_content: true
+    boilerplate_content: true
+    licenses: [CC-BY-NC-*, LicenseRef-Restricted-*]
+corpora:
+  - path: core/books/gutenberg
+    weight: 2
+    filter:                     # only this corpus
+      languages:
+        include: [en]
+      sources:
+        exclude: [deprecated-*]
+      date:
+        from: "1900"
+        to: "2025-06-30"
+```
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `path` | yes in object form | Logical index path. |
+| `weight` | only for `causal-pretrain-weighted` | Positive integer relative token exposure. It replaces the legacy map entry for this corpus. |
+| `filter` | no | Record filter local to this corpus. |
+| `filter.main_content` | no | Requires the canonical main-content boolean to equal the declared value. Normally `true`; older schemas default to `true`. |
+| `filter.exclude.repetitive_content` | no | Excludes rows whose schema-2 repeated-token flag equals the declared boolean. The normal policy is `true`. |
+| `filter.exclude.boilerplate_content` | no | Excludes rows whose schema-2 duplicated-structure flag equals the declared boolean. The normal policy is `true`. |
+| `filter.exclude.licenses` | no | Excludes rows whose normalized license matches any listed shell-style pattern. |
+| `licenses` | no | Matches the canonical row's normalized license. |
+| `languages` | no | Matches the canonical row's language. |
+| `sources` | no | Matches either the canonical source identifier or source name. |
+| `date` | no | Selects canonical dates that overlap the inclusive `from`/`to` interval. |
+| `include` | no | At least one shell-style, case-sensitive pattern must match. |
+| `exclude` | no | Any matching pattern rejects the record and takes precedence over `include`. |
+| `from` | no | Inclusive lower date bound: `YYYY`, `YYYY-MM`, `YYYY-MM-DD`, or RFC 3339. |
+| `to` | no | Inclusive upper date bound in the same formats. |
+
+Every declared filter must contain at least one condition. Within the canonical
+`filter.exclude` object, a match on any declared boolean or license pattern
+rejects the row. A stage-wide
+`filter` and a corpus-local `filter` are combined with AND; the local filter
+cannot loosen the global one. Other filter fields are ANDed with the exclusion
+decision. Missing or malformed row values do not satisfy an include or date
+condition.
+
+The older `filter.licenses.include`/`exclude` representation remains accepted.
+It cannot be combined with `filter.exclude.licenses` in the same filter.
+Content-assessment filtering is applied wherever record schema 2 supplies the
+declared facts. Schema-1 rows are unassessed rather than clean: WALDO retains
+them, ignores only the unavailable assessment conditions, and emits a warning
+that names the affected stage, shard count, and fields. Other conditions in the
+same filter still apply. Assessment filters exclude complete rows; they never
+redact or rewrite their text.
+
+Filtering happens while WALDO streams canonical rows, before deterministic
+held-out selection and training shuffle. The versioned effective policy is
+pinned in the corpus OpenWALDO BOM, so a resume or distributed node cannot
+silently train on a different subset. The BOM's manifest totals remain the
+indexed reference totals; run and evaluation evidence describe actual training
+consumption.
+
+For `causal-pretrain-weighted`, prefer inline `weight` fields. Existing
+`parameters.corpus_weights` maps remain valid for compatibility, but a stage
+must use one representation or the other, never both.
+
 ## Training parameter fields
 
 | Field | Required | Default or range | Meaning |
 | --- | --- | --- | --- |
-| `profile` | no | `causal-pretrain-v1` | Selects versioned record ordering, corpus exposure, and held-out selection. |
+| `profile` | no | `causal-pretrain-shuffled` | Selects versioned record ordering, corpus exposure, and held-out selection. |
 | `epochs` | no | default `1`; `1..1000000` | Maximum deterministic passes over the selected canonical records. |
 | `steps` | yes | positive integer | Required optimizer steps and learning-rate schedule length. |
 | `batch_size` | yes | positive integer | Number of packed sequences in each optimizer step. |
@@ -188,7 +367,7 @@ supports only causal language modeling.
 | `evaluate_every` | no | `min(500, steps)`; `0..steps` | Held-out evaluation interval. Explicit zero disables periodic evaluation. |
 | `shuffle_buffer_records` | no | default `1024`; `1..1000000` | Maximum records retained by deterministic bounded shuffle. |
 | `shuffle_buffer_bytes` | no | default 64 MiB; `1 B..16 GiB` | Maximum record text retained by deterministic bounded shuffle. |
-| `corpus_weights` | only for v3 | each weight `1..1000000` | Integer relative token exposure keyed by every selected corpus path. |
+| `corpus_weights` | only for `causal-pretrain-weighted`; legacy form | each weight `1..1000000` | Integer relative token exposure keyed by every selected corpus path. Configured corpus `weight` fields are preferred. |
 | `evaluation_fraction` | no | default `0.01`; `0 <= value < 1` | Candidate fraction for deterministic held-out selection. |
 | `evaluation_max_records` | no | default `256`; `0..1000000` | Held-out record cap. |
 | `evaluation_max_bytes` | no | default 1 MiB; `0 B..16 GiB` | Held-out text-byte cap. |
@@ -223,15 +402,22 @@ than an ignored compose field.
 
 | Profile | Training record order | Held-out selection | Corpus weights |
 | --- | --- | --- | --- |
-| `causal-pretrain-v1` | One bounded deterministic shuffle across the selection. | Deterministic lowest SHA-256 candidates across the selection. | Not accepted. |
-| `causal-pretrain-v2` | Balances emitted tokenizer targets equally across logical corpus paths, with bounded shuffle within each. | Deterministically stratified across corpus paths. | Not accepted. |
-| `causal-pretrain-v3` | Selects the corpus with the lowest emitted-target-to-declared-weight ratio, with bounded shuffle within each. | Deterministically stratified across corpus paths. | Required for every selected corpus. |
+| `causal-pretrain-shuffled` | One bounded deterministic shuffle across the selection. | Deterministic lowest SHA-256 candidates across the selection. | Not accepted. |
+| `causal-pretrain-balanced` | Balances emitted tokenizer targets equally across logical corpus paths, with bounded shuffle within each. | Deterministically stratified across corpus paths. | Not accepted. |
+| `causal-pretrain-weighted` | Selects the corpus with the lowest emitted-target-to-declared-weight ratio, with bounded shuffle within each. | Deterministically stratified across corpus paths. | Required for every selected corpus. |
 
-Use v2 when every selected corpus should receive equal token exposure. Use v3
-when the intended mixture is unequal. Weights are relative—for example, `2`
-and `1` target approximately twice as many emitted training tokens from the
-first corpus while it remains available. They do not duplicate canonical
-records or alter corpus provenance.
+Each named profile currently has `profile_schema: 1` in the resolved run BOM.
+That field versions the behavior contract independently; it is not a model
+architecture version. The former `causal-pretrain-v1`, `-v2`, and `-v3` names
+remain accepted as deprecated input aliases and resolve respectively to
+`shuffled`, `balanced`, and `weighted`. New resolved run BOMs use the
+behavior-named identities.
+
+Use `causal-pretrain-balanced` when every selected corpus should receive equal
+token exposure. Use `causal-pretrain-weighted` when the intended mixture is
+unequal. Weights are relative—for example, `2` and `1` target approximately
+twice as many emitted training tokens from the first corpus while it remains
+available. They do not duplicate canonical records or alter corpus provenance.
 
 ## Common compose patterns
 
@@ -260,7 +446,7 @@ stages:
     objective: causal-language-modeling
     corpora: [core/books/gutenberg, science/plos]
     parameters:
-      profile: causal-pretrain-v2
+      profile: causal-pretrain-balanced
       steps: 32000
       batch_size: 64
       sequence_length: 512
@@ -279,6 +465,18 @@ base:
 Add this block to a complete compose whose architecture exactly matches
 `llama-base`. The base must have pulled origin weights as its current weights.
 
+To acquire the origin directly from a supported external source, pin its
+immutable commit and omit `architecture` to inherit the verified definition:
+
+```yaml
+base:
+  source: huggingface://organization/model@0123456789abcdef0123456789abcdef01234567
+```
+
+See [Base initialization](#base-initialization) for the complete source-based
+compose, acquisition behavior, authentication, cache, provenance, and current
+compatibility boundary.
+
 ### Multiple ordered stages
 
 ```yaml
@@ -288,7 +486,7 @@ stages:
     objective: causal-language-modeling
     corpora: [core/books/gutenberg, science/plos]
     parameters:
-      profile: causal-pretrain-v2
+      profile: causal-pretrain-balanced
       steps: 32000
       batch_size: 64
       sequence_length: 512
@@ -300,7 +498,7 @@ stages:
     objective: causal-language-modeling
     corpora: [core/common-pile/python-enhancement-proposals/peps]
     parameters:
-      profile: causal-pretrain-v1
+      profile: causal-pretrain-shuffled
       steps: 1000
       batch_size: 32
       sequence_length: 512
@@ -322,9 +520,9 @@ WALDO fails before training when a compose has:
 - dropout outside `0..<1` or a sequence longer than the architecture context;
 - no stages, duplicate stage names, no corpus selection, or duplicate corpora;
 - invalid parameter ranges or an overflowing planned token capacity;
-- corpus weights outside v3, missing v3 weights, or weights for unselected
-  corpora;
-- a base whose origin, architecture, or current weights do not match; or
+- corpus weights outside `causal-pretrain-weighted`, missing weighted-profile
+  weights, or weights for unselected corpora;
+- a base whose source is mutable or whose origin, architecture, or current weights do not match; or
 - an existing destination model with a different immutable architecture.
 
 During training, WALDO fails rather than accepting incomplete steps,

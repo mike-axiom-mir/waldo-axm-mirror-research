@@ -37,12 +37,20 @@ func (bom BOM) Validate() error {
 	if !slices.Equal(policy.Include, bom.Policy.Include) || !slices.Equal(policy.Exclude, bom.Policy.Exclude) {
 		return fmt.Errorf("license policy patterns must be non-empty and unique")
 	}
+	if bom.RecordFilter != nil {
+		if err := bom.RecordFilter.Validate(bom.Paths); err != nil {
+			return err
+		}
+	}
 
 	manifests := make(map[string]ManifestPin, len(bom.Manifests))
 	sourceNames := make(map[string]map[string]bool, len(bom.Manifests))
 	manifestTotals := make(map[string]index.Measures, len(bom.Manifests))
 	manifestModalities := make(map[string]index.Modalities, len(bom.Manifests))
 	manifestLicenses := make(map[string]map[string]index.Measures, len(bom.Manifests))
+	manifestEmailRecords := make(map[string]int64, len(bom.Manifests))
+	manifestRepetitiveRecords := make(map[string]int64, len(bom.Manifests))
+	manifestBoilerplateRecords := make(map[string]int64, len(bom.Manifests))
 	for _, manifest := range bom.Manifests {
 		if manifest.Path == "" || manifests[manifest.Path].Path != "" {
 			return fmt.Errorf("manifest paths must be non-empty and unique: %q", manifest.Path)
@@ -82,6 +90,16 @@ func (bom BOM) Validate() error {
 		if manifest.ComposedBy != nil {
 			if err := index.ValidateIngestRecipeEvidence(*manifest.ComposedBy); err != nil {
 				return fmt.Errorf("manifest %s composed_by: %w", manifest.Path, err)
+			}
+		}
+		if manifest.RecordSchema >= waldoshard.TextRecordSchema {
+			if err := validateAssessment(manifest.Assessment, manifest.Totals.Docs); err != nil {
+				return fmt.Errorf("manifest %s assessment: %w", manifest.Path, err)
+			}
+		}
+		if manifest.ConvertedBy.Recipe == waldoshard.TextWriterRecipe {
+			if err := validateRedaction(manifest.Redaction); err != nil {
+				return fmt.Errorf("manifest %s redaction: %w", manifest.Path, err)
 			}
 		}
 		if err := index.ValidateModalities("manifest "+manifest.Path, manifest.Modalities); err != nil {
@@ -127,6 +145,19 @@ func (bom BOM) Validate() error {
 		}
 		if len(shard.Modalities) > 0 && modalityTokens(shard.Modalities) != shard.Tokens {
 			return fmt.Errorf("shard %s modality tokens do not match its token total", shard.SHA256[:12])
+		}
+		if shard.RecordSchema >= waldoshard.TextRecordSchema {
+			if err := validateAssessment(shard.Assessment, shard.Docs); err != nil {
+				return fmt.Errorf("shard %s assessment: %w", shard.SHA256[:12], err)
+			}
+			manifestEmailRecords[shard.Manifest] += shard.Assessment.EmailAddresses.Records
+			manifestRepetitiveRecords[shard.Manifest] += shard.Assessment.RepetitiveContent.Records
+			manifestBoilerplateRecords[shard.Manifest] += shard.Assessment.BoilerplateContent.Records
+		}
+		if shard.ConvertedBy.Recipe == waldoshard.TextWriterRecipe {
+			if err := validateRedaction(shard.Redaction); err != nil {
+				return fmt.Errorf("shard %s redaction: %w", shard.SHA256[:12], err)
+			}
 		}
 		seenSources := map[string]bool{}
 		for _, source := range shard.Sources {
@@ -202,6 +233,41 @@ func (bom BOM) Validate() error {
 		if manifest.Totals != manifestTotals[path] || !maps.Equal(manifest.Licenses, manifestLicenses[path]) || !maps.Equal(manifest.Modalities, manifestModalities[path]) {
 			return fmt.Errorf("manifest %s totals do not match its selected shards", path)
 		}
+		if manifest.RecordSchema >= waldoshard.TextRecordSchema && (manifest.Assessment.EmailAddresses.Records != manifestEmailRecords[path] || manifest.Assessment.RepetitiveContent.Records != manifestRepetitiveRecords[path] || manifest.Assessment.BoilerplateContent.Records != manifestBoilerplateRecords[path]) {
+			return fmt.Errorf("manifest %s assessment does not match its selected shards", path)
+		}
+	}
+	return nil
+}
+
+func validateAssessment(assessment *index.ContentAssessment, documents int64) error {
+	if assessment == nil {
+		return fmt.Errorf("content assessment is required")
+	}
+	for _, field := range []struct {
+		name    string
+		measure *index.DetectionMeasure
+	}{
+		{name: "email_addresses", measure: assessment.EmailAddresses},
+		{name: "repetitive_content", measure: assessment.RepetitiveContent},
+		{name: "boilerplate_content", measure: assessment.BoilerplateContent},
+	} {
+		if field.measure == nil || field.measure.Detector == "" {
+			return fmt.Errorf("%s detector is required", field.name)
+		}
+		if field.measure.Records < 0 || field.measure.Records > documents {
+			return fmt.Errorf("%s record count is invalid", field.name)
+		}
+	}
+	return nil
+}
+
+func validateRedaction(redaction *index.ContentRedaction) error {
+	if redaction == nil || redaction.Policy != waldoshard.PrivacyRedactionPolicy || !redaction.NamesRetained {
+		return fmt.Errorf("privacy policy and names_retained are required")
+	}
+	if redaction.EmailAddresses < 0 || redaction.IPAddresses < 0 || redaction.PhoneNumbers < 0 || redaction.MailRoutingHeaders < 0 || redaction.Credentials < 0 {
+		return fmt.Errorf("redaction counts must be non-negative")
 	}
 	return nil
 }
@@ -231,7 +297,23 @@ func validateShardAttestation(pin ShardPin) error {
 		if len(licenses) == 0 {
 			licenses = []string{pin.License}
 		}
-		if attestation.WriterRecipe != attestation.BOM.WriterRecipe || attestation.BOM.RecordSchema != pin.RecordSchema || attestation.BOM.Records != pin.Docs || attestation.BOM.Tokens != pin.Tokens || !slices.Equal(attestation.BOM.Licenses, licenses) {
+		emailRecords := int64(0)
+		repetitiveRecords := int64(0)
+		boilerplateRecords := int64(0)
+		if pin.Assessment != nil && pin.Assessment.EmailAddresses != nil {
+			emailRecords = pin.Assessment.EmailAddresses.Records
+		}
+		if pin.Assessment != nil && pin.Assessment.RepetitiveContent != nil {
+			repetitiveRecords = pin.Assessment.RepetitiveContent.Records
+		}
+		if pin.Assessment != nil && pin.Assessment.BoilerplateContent != nil {
+			boilerplateRecords = pin.Assessment.BoilerplateContent.Records
+		}
+		redaction := index.ContentRedaction{}
+		if pin.Redaction != nil {
+			redaction = *pin.Redaction
+		}
+		if attestation.WriterRecipe != attestation.BOM.WriterRecipe || attestation.BOM.RecordSchema != pin.RecordSchema || attestation.BOM.Records != pin.Docs || attestation.BOM.Tokens != pin.Tokens || attestation.BOM.EmailAddressRecords != emailRecords || attestation.BOM.RepetitiveContentRecords != repetitiveRecords || attestation.BOM.BoilerplateContentRecords != boilerplateRecords || attestation.BOM.Redaction != redaction || !slices.Equal(attestation.BOM.Licenses, licenses) {
 			return fmt.Errorf("shard %s embedded BOM differs from its corpus pin", pin.SHA256[:12])
 		}
 	case "implicit-v4":

@@ -19,13 +19,15 @@ stages:
   - name: pretrain
     type: pre-training
     objective: causal-language-modeling
+    filter:
+      main_content: true
     corpora:
       - core/common-pile/public-domain-review
       - core/common-pile/python-enhancement-proposals/peps
       - post-train/sft/dolly
       - post-train/sft/oasst1
     parameters:
-      profile: causal-pretrain-v2
+      profile: causal-pretrain-balanced
       steps: 250
       batch_size: 32
       sequence_length: 512

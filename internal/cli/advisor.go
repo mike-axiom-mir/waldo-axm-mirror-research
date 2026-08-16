@@ -488,7 +488,7 @@ func advisorAllowedCorpora(original *model.Compose, corpora []waldoindex.CorpusI
 	if original != nil {
 		for _, stage := range original.Stages {
 			for _, corpus := range stage.Corpora {
-				allowed[corpus] = true
+				allowed[corpus.Path] = true
 			}
 		}
 	}
@@ -563,7 +563,7 @@ func advisorComposeReference(corpora []waldoindex.CorpusInfo) map[string]any {
 			"name": "pretrain", "type": "pre-training", "objective": "causal-language-modeling",
 			"corpora": []string{corpus},
 			"parameters": map[string]any{
-				"profile": "causal-pretrain-v1", "steps": 1000, "batch_size": 64,
+				"profile": "causal-pretrain-shuffled", "steps": 1000, "batch_size": 64,
 				"sequence_length": 512, "learning_rate": 0.0003, "seed": 42,
 				"warmup_steps": 10, "checkpoint_every": 100, "evaluate_every": 100,
 			},
@@ -602,8 +602,8 @@ func parseAdvisorReply(response string, original *model.Compose, allowedCorpora 
 	}
 	for _, stage := range reply.Compose.Stages {
 		for _, corpus := range stage.Corpora {
-			if !allowedCorpora[corpus] {
-				return advisorReply{}, fmt.Errorf("proposed compose introduces corpus %q that is not in the configured index", corpus)
+			if !allowedCorpora[corpus.Path] {
+				return advisorReply{}, fmt.Errorf("proposed compose introduces corpus %q that is not in the configured index", corpus.Path)
 			}
 		}
 	}

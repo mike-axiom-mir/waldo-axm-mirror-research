@@ -115,6 +115,38 @@ func BuildUpdatedManifest(plan Plan, existing index.Manifest, assembly AssemblyR
 	if len(updated.Licenses) == 1 {
 		updated.License, updated.Licenses = updated.Licenses[0], nil
 	}
+	if updated.RecordSchema >= 2 {
+		assessment := &index.ContentAssessment{EmailAddresses: &index.DetectionMeasure{}, RepetitiveContent: &index.DetectionMeasure{}, BoilerplateContent: &index.DetectionMeasure{}}
+		for _, shard := range updated.Shards {
+			if shard.Assessment == nil || shard.Assessment.EmailAddresses == nil || shard.Assessment.RepetitiveContent == nil || shard.Assessment.BoilerplateContent == nil {
+				return index.Manifest{}, fmt.Errorf("schema-%d shard %s is missing content assessment", updated.RecordSchema, shard.SHA256[:12])
+			}
+			for _, pair := range []struct{ aggregate, incoming *index.DetectionMeasure }{
+				{assessment.EmailAddresses, shard.Assessment.EmailAddresses},
+				{assessment.RepetitiveContent, shard.Assessment.RepetitiveContent},
+				{assessment.BoilerplateContent, shard.Assessment.BoilerplateContent},
+			} {
+				if pair.aggregate.Detector == "" {
+					pair.aggregate.Detector = pair.incoming.Detector
+				} else if pair.aggregate.Detector != pair.incoming.Detector {
+					return index.Manifest{}, fmt.Errorf("schema-%d shards use different content-assessment detectors", updated.RecordSchema)
+				}
+				pair.aggregate.Records += pair.incoming.Records
+			}
+		}
+		updated.Assessment = assessment
+	}
+	var redaction *index.ContentRedaction
+	for _, shard := range updated.Shards {
+		if shard.Redaction == nil {
+			continue
+		}
+		if redaction == nil {
+			redaction = newContentRedaction()
+		}
+		addContentRedaction(redaction, *shard.Redaction)
+	}
+	updated.Redaction = redaction
 	updated.Schema = index.ManifestSchema
 	if err := index.ValidateManifest(manifestPath, updated); err != nil {
 		return index.Manifest{}, err
