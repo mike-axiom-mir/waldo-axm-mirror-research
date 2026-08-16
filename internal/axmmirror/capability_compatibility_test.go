@@ -15,7 +15,7 @@ func TestPortableCapabilitySpineFixturesPinInitialReceipts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if self.SnapshotSHA256 != "e6bd00f50f5d3f5c636a546a1185fbe2ed999c7488f8c161c85c2a1491f7e6ca" {
+	if self.SnapshotSHA256 != "96679ab73fe4baeec56debcd792e450e5e5eedf1a527a82a4c8ff08eb6243fa4" {
 		t.Fatalf("self capability snapshot digest = %s", self.SnapshotSHA256)
 	}
 
@@ -35,7 +35,7 @@ func TestPortableCapabilitySpineFixturesPinInitialReceipts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.State != HandoffStateSourceOnly || plan.PlanSHA256 != "53accce73f893b5d1ec8e7c4604095fe7de2cc7c78e28d192876dc6f87d6690a" {
+	if plan.State != HandoffStateSourceOnly || plan.PlanSHA256 != "9e910bfb60f25c60d4a50a7baa32fea336eab669366deb43a2fbe871f3f3b449" {
 		t.Fatalf("capability handoff plan = %s %s", plan.State, plan.PlanSHA256)
 	}
 
@@ -45,7 +45,7 @@ func TestPortableCapabilitySpineFixturesPinInitialReceipts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if translation.State != TranslationStateNotRequired || translation.ReceiptSHA256 != "50873dc0e1da8bc02ea5171cfa641327f883956aa3b936aafbe158142feb6883" {
+	if translation.State != TranslationStateNotRequired || translation.ReceiptSHA256 != "8aa028c33b55126e410f30a70926df7aaf822685f3999af266f43e25b28f8903" {
 		t.Fatalf("translation loss receipt = %s %s", translation.State, translation.ReceiptSHA256)
 	}
 
@@ -55,7 +55,7 @@ func TestPortableCapabilitySpineFixturesPinInitialReceipts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if returned.State != CapabilityReturnPlanHold || returned.ReceiptSHA256 != "a2dffea92f43f44d4519eac7bb1952f7b8c853e28416ce1bf9d15cb89f1859c9" {
+	if returned.State != CapabilityReturnPlanHold || returned.ReceiptSHA256 != "70ca49ca661b7399c60aa52538922378c742156f81f642baf572880252a3e303" {
 		t.Fatalf("capability return receipt = %s %s", returned.State, returned.ReceiptSHA256)
 	}
 }

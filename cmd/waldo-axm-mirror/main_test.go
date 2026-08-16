@@ -1,7 +1,9 @@
 package main
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -218,6 +220,152 @@ func TestPortableCapabilitySpineCLIFlow(t *testing.T) {
 	if returned.State != axmmirror.CapabilityReturnVerified {
 		t.Fatalf("return receipt state = %q", returned.State)
 	}
+}
+
+func TestVerifierEvolutionRepairAndToolMemoryCLIFlows(t *testing.T) {
+	directory := t.TempDir()
+	registry, err := axmmirror.NewVerifierRegistry("cli-waldo-verifiers", []axmmirror.VerifierDefinition{
+		{ID: "schema-guard", Version: "v0.1", Class: axmmirror.VerifierClassSchemaInvariant, IndependenceGroup: "kernel", DefinitionSHA256: repeat("1"), TestPackSHA256: repeat("2"), ImplementationSHA256: repeat("3"), Protected: true},
+		{ID: "provenance-peer", Version: "v0.1", Class: axmmirror.VerifierClassProvenanceBinding, IndependenceGroup: "provenance", DefinitionSHA256: repeat("4"), TestPackSHA256: repeat("5"), ImplementationSHA256: repeat("6")},
+		{ID: "authority-peer", Version: "v0.1", Class: axmmirror.VerifierClassAuthority, IndependenceGroup: "authority", DefinitionSHA256: repeat("7"), TestPackSHA256: repeat("8"), ImplementationSHA256: repeat("9")},
+		{ID: "privacy-boundary", Version: "v0.1", Class: axmmirror.VerifierClassPrivacyBoundary, IndependenceGroup: "privacy", DefinitionSHA256: repeat("a"), TestPackSHA256: repeat("b"), ImplementationSHA256: repeat("c")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registryPath := writeValueTemp(t, registry)
+	request := cliVerifierChangeRequest(t, registry)
+	requestPath := writeValueTemp(t, request)
+	readyPath := filepath.Join(directory, "verifier-ready.json")
+	if err := assessVerifierChangeFile(registryPath, requestPath, readyPath); err != nil {
+		t.Fatalf("assessVerifierChangeFile() error = %v", err)
+	}
+	nextPath := filepath.Join(directory, "verifier-next.json")
+	if err := materializeVerifierChangeFile(registryPath, readyPath, nextPath); err != nil {
+		t.Fatalf("materializeVerifierChangeFile() error = %v", err)
+	}
+	var next axmmirror.VerifierRegistry
+	if err := readStrictJSON(nextPath, &next); err != nil {
+		t.Fatal(err)
+	}
+	if next.Generation != 2 || next.PreviousRegistrySHA256 != registry.RegistrySHA256 {
+		t.Fatalf("next registry = %+v", next)
+	}
+
+	failedRequest := request
+	failedRequest.PeerReviews = append([]axmmirror.VerifierPeerReview(nil), request.PeerReviews...)
+	failedRequest.PeerReviews[0].State = axmmirror.VerifierPeerFail
+	failedRequest.PeerReviews[0].RegressionCount = 1
+	failedRequest.PeerReviews[0].Finding = "regression found"
+	failedPath := filepath.Join(directory, "verifier-failed.json")
+	if err := assessVerifierChangeFile(registryPath, writeValueTemp(t, failedRequest), failedPath); err == nil {
+		t.Fatal("failed verifier change returned success")
+	}
+	var failed axmmirror.VerifierChangeReceipt
+	if err := readStrictJSON(failedPath, &failed); err != nil {
+		t.Fatal(err)
+	}
+	repairRequest := axmmirror.RepairBuddyRequest{
+		Schema: axmmirror.RepairBuddyRequestSchema, RepairID: "cli-repair-0001",
+		FailedChangeReceiptSHA256: failed.ReceiptSHA256, IncidentEvidenceSHA256: repeat("d"),
+		ObservedAt: "2026-08-16T07:00:00Z", MaxAttempts: 2, Authority: axmmirror.Authority{},
+	}
+	repairPath := filepath.Join(directory, "repair-plan.json")
+	if err := planVerifierRepairFile(registryPath, failedPath, writeValueTemp(t, repairRequest), repairPath); err != nil {
+		t.Fatalf("planVerifierRepairFile() error = %v", err)
+	}
+	var repair axmmirror.RepairBuddyPlan
+	if err := readStrictJSON(repairPath, &repair); err != nil {
+		t.Fatal(err)
+	}
+	if repair.State != axmmirror.RepairBuddyCandidateReady || repair.AutomaticRepair {
+		t.Fatalf("repair plan = %+v", repair)
+	}
+
+	experienceDraft := axmmirror.IdentityToolExperience{
+		Schema: axmmirror.IdentityToolExperienceSchema, MemoryID: "cli-render-memory", ExperienceID: "cli-experience-0001",
+		TargetAnsweringIdentitySHA256: repeat("e"), ToolID: "image-render-hand", ToolVersion: "v1",
+		TaskClass: "asset-render", UseTags: []string{"transparent-background", "pixel-art"},
+		InputArtifactSHA256: repeat("1"), OutputArtifactSHA256: repeat("2"), ToolReceiptSHA256: repeat("3"),
+		IndependentVerificationSHA256: repeat("4"), Outcome: axmmirror.ToolOutcomeSuccess,
+		VerificationVerdict: axmmirror.ToolVerificationSuccess, WisdomClass: axmmirror.ToolWisdomReuse,
+		Wisdom:     "Reuse the bounded transparent-background recipe when the exact pixel-art constraints match.",
+		ObservedAt: "2026-08-16T07:00:00Z", TTLMillis: 86_400_000,
+		ContentClass: axmmirror.ToolMemoryContentPublicSafe, Authority: axmmirror.Authority{},
+	}
+	sealedExperiencePath := filepath.Join(directory, "experience.json")
+	if err := sealToolExperienceFile(writeValueTemp(t, experienceDraft), sealedExperiencePath); err != nil {
+		t.Fatalf("sealToolExperienceFile() error = %v", err)
+	}
+	shardPath := filepath.Join(directory, "tool-memory.json")
+	if err := startToolMemoryFile(sealedExperiencePath, shardPath); err != nil {
+		t.Fatalf("startToolMemoryFile() error = %v", err)
+	}
+	query := axmmirror.IdentityWisdomQuery{
+		Schema: axmmirror.IdentityWisdomQuerySchema, QueryID: "cli-query-0001",
+		TargetAnsweringIdentitySHA256: repeat("e"), ToolID: "image-render-hand", ToolVersion: "v1",
+		TaskClass: "asset-render", UseTags: []string{"pixel-art"}, AsOf: "2026-08-16T07:01:00Z",
+		MaxEntries: 2, Authority: axmmirror.Authority{},
+	}
+	viewPath := filepath.Join(directory, "wisdom-view.json")
+	if err := recallToolWisdomFile(shardPath, writeValueTemp(t, query), viewPath); err != nil {
+		t.Fatalf("recallToolWisdomFile() error = %v", err)
+	}
+	var view axmmirror.IdentityWisdomView
+	if err := readStrictJSON(viewPath, &view); err != nil {
+		t.Fatal(err)
+	}
+	if view.State != axmmirror.ToolWisdomReady || len(view.Selected) != 1 {
+		t.Fatalf("wisdom view = %+v", view)
+	}
+}
+
+func cliVerifierChangeRequest(t *testing.T, registry axmmirror.VerifierRegistry) axmmirror.VerifierChangeRequest {
+	t.Helper()
+	definitions := map[string]axmmirror.VerifierDefinition{}
+	for _, definition := range registry.Verifiers {
+		definitions[definition.ID] = definition
+	}
+	target := definitions["privacy-boundary"]
+	candidate := target
+	candidate.Version = "v0.2"
+	candidate.DefinitionSHA256 = repeat("d")
+	intent, err := axmmirror.SealVerifierChangeIntent(axmmirror.VerifierChangeIntent{
+		IntentID: "cli-intent-0001", TargetVerifierID: target.ID,
+		BaselineDefinitionSHA256: cliJSONDigest(t, target), Candidate: candidate,
+		Reason: "tighten the privacy verifier with frozen replay evidence", SourceEvidenceSHA256: repeat("e"),
+		ShadowProtocol: axmmirror.VerifierShadowProtocol{ProtocolID: "cli-shadow-v1", FixtureSetSHA256: repeat("f"), CaseCount: 16},
+		Authority:      axmmirror.Authority{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviews := make([]axmmirror.VerifierPeerReview, 0, 2)
+	for i, id := range []string{"authority-peer", "provenance-peer"} {
+		reviewer := definitions[id]
+		reviews = append(reviews, axmmirror.VerifierPeerReview{
+			ReviewerID: reviewer.ID, ReviewerVersion: reviewer.Version, ReviewerDefinitionSHA256: cliJSONDigest(t, reviewer),
+			ReviewerIndependenceGroup: reviewer.IndependenceGroup, IntentSHA256: intent.IntentSHA256,
+			ProtocolID: intent.ShadowProtocol.ProtocolID, FixtureSetSHA256: intent.ShadowProtocol.FixtureSetSHA256,
+			BaselineResultSetSHA256: repeat("1"), CandidateResultSetSHA256: repeat("2"),
+			EvidenceSHA256: repeat(fmt.Sprintf("%d", i+3)), State: axmmirror.VerifierPeerPass,
+			Finding: "exact frozen replay passed", Authority: axmmirror.Authority{},
+		})
+	}
+	return axmmirror.VerifierChangeRequest{
+		Schema: axmmirror.VerifierChangeRequestSchema, ChangeID: "cli-change-0001",
+		CurrentRegistrySHA256: registry.RegistrySHA256, Intent: intent, PeerReviews: reviews, Authority: axmmirror.Authority{},
+	}
+}
+
+func cliJSONDigest(t *testing.T, value any) string {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(data)
+	return fmt.Sprintf("%x", digest)
 }
 
 func TestWitnessRunFileWritesHeldLifecycleReceipt(t *testing.T) {

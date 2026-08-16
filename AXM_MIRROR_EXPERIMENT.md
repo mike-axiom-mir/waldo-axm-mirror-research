@@ -21,13 +21,14 @@ partnership, endorsement, or ownership of OpenWALDO.
 
 The upstream Apache-2.0 `LICENSE` and `NOTICE` remain intact.
 
-The v0.6 experimental stack merges the exact OpenWALDO head
+The inherited v0.6 stack merges the exact OpenWALDO head
 `451e029abd1f74fd77625984526a1980c48fb477`. The merge and its downstream
 compatibility work are recorded in ADR 9009 and
 `research/openwaldo-upstream-alignment-2026-08-16.json`; neither upstream
-`main` nor this fork's `main` is changed. The inherited v0.6 organ-map overlay
-records the upgraded corpus witness and keeps the still-missing continuity and
-specialist-growth surfaces explicit.
+`main` nor this fork's `main` is changed. The stacked v0.7 layer in ADR 9010
+adds mutually checked verifier candidates, fail-safe rollback, Repair Buddy,
+and identity-scoped tool wisdom. Its organ-map overlay keeps the remaining
+continuity and specialist-growth surfaces explicit.
 
 ## Implemented witness slices
 
@@ -54,6 +55,11 @@ flowchart TD
     R["Self census + external capability snapshot"] --> S["Exact gap and handoff plan"]
     S --> T["Translation-loss receipt"]
     T --> U["Digest-bound return verification"]
+    V["Active verifier registry + sealed change intent"] --> W["Independent peer replay receipts"]
+    W --> X["READY next generation or retained-baseline rollback"]
+    X --> Y["Candidate-only Repair Buddy"]
+    Z["Verified identity + tool experience"] --> AA["Per-tool memory shard"]
+    AA --> AB["Fresh task-specific wisdom view"]
 ```
 
 Build after installing the Go version required by WALDO:
@@ -209,6 +215,72 @@ visual approval. The source contracts and ceilings are pinned in
 `research/portable-capability-spine-knowledge-sources-2026-08-15.json`; ADR
 9008 defines the smaller WALDO-native contract.
 
+### Mutual verifier evolution and Repair Buddy
+
+The Wave 2.4 path lets verifier definitions evolve without letting a changed
+verifier approve itself:
+
+```text
+sealed current registry + sealed candidate intent
+  + two current peers from two independent groups
+  + one frozen fixture/protocol and exact replay-result consensus
+  -> READY next-generation candidate
+  or -> HOLD / ROLLBACK to the still-active current generation
+```
+
+```bash
+./waldo-axm-mirror assess-verifier-change examples/axm-mirror/verifier-registry.json examples/axm-mirror/verifier-change-request.json /tmp/verifier-change.ready.json
+./waldo-axm-mirror materialize-verifier-change examples/axm-mirror/verifier-registry.json /tmp/verifier-change.ready.json /tmp/verifier-registry.next.json
+```
+
+The invariant kernel is compiled outside the changing set. It fixes
+no-self-approval, two-peer/two-group quorum, exact current-definition binding,
+frozen shadow evidence, zero regressions, retained rollback generations,
+protected-change Merge Gate review, and closed authority. READY materializes a
+candidate file to a new no-replace path; it does not activate a runtime
+registry.
+
+The regression example deliberately returns nonzero after writing a
+`ROLLBACK_PEER_REJECTED` receipt. Because no active pointer moved, rollback
+means retaining the exact current registry rather than overwriting history:
+
+```bash
+./waldo-axm-mirror assess-verifier-change examples/axm-mirror/verifier-registry.json examples/axm-mirror/verifier-change-regression-request.json /tmp/verifier-change.failed.json
+./waldo-axm-mirror plan-verifier-repair examples/axm-mirror/verifier-registry.json /tmp/verifier-change.failed.json examples/axm-mirror/repair-buddy-request.json /tmp/verifier-repair.plan.json
+```
+
+Repair Buddy reassesses the failed receipt, contains the candidate, diagnoses
+the typed failure, and proposes a bounded next action. Simulation,
+authorization, repair, verification, and learning remain blocked until a new
+intent passes the original independent gates. Repair Buddy contains no patch,
+installer, activation, promotion, or CANON path.
+
+### Identity-scoped tool wisdom
+
+The Wave 2.5 path stores verified experience in one exact answering-identity,
+tool-ID, and tool-version shard, then recalls only the relevant slice:
+
+```text
+artifact digests + tool receipt + independent verification
+  -> compact REUSE or AVOID distillation
+  -> append-only per-tool shard
+  -> exact task-class + use-tag + TTL query
+  -> at most eight fresh model-facing lessons
+```
+
+```bash
+./waldo-axm-mirror seal-tool-experience examples/axm-mirror/identity-tool-experience-draft.json /tmp/tool-experience.json
+./waldo-axm-mirror start-tool-memory /tmp/tool-experience.json /tmp/tool-memory.json
+./waldo-axm-mirror recall-tool-wisdom /tmp/tool-memory.json examples/axm-mirror/identity-wisdom-query.json /tmp/tool-wisdom.json
+```
+
+Only independently verified success or independently verified failure can be
+appended. The shard refuses cross-identity/tool/version growth, duplicates,
+backdated entries, raw prompts, payloads, outputs, hidden reasoning, and
+secrets. Stale entries are omitted. The model sees the bounded wisdom view, not
+the entire shard or a cross-tool blob. This is selective evidence context, not
+hidden weight training or proof of general competence.
+
 Receipt writes are atomic and refuse to replace an existing output path. Use a
 new output name, or remove an old disposable example deliberately before
 rerunning a command.
@@ -223,8 +295,9 @@ They do not grant capture or tool access, install or restore skills, run a
 model, verify artifact bytes merely by reading BOM entries, certify safety or
 legal usability, convert discovery or dissent into a score, expose hidden
 reasoning, invoke or select an external capability provider, infer schema
-semantics or permissions, approve or install an asset, or make any AXM result
-CANON.
+semantics or permissions, approve or install an asset, execute peer-verifier
+digests, activate a verifier generation, repair code, convert tool memory into
+model weights, or make any AXM result CANON.
 
 ## Next experimental rungs
 
@@ -241,9 +314,14 @@ CANON.
 7. Add resource leases and real provider transport only as separately
    permissioned contracts; keep provider selection and execution outside the
    learned clone.
-8. Add continuity/replay capsules and artifact-byte or visual verification as
+8. Add a portable continuity capsule spanning active verifier generation,
+   task state, memory-shard catalog, evidence freshness, and open dissent.
+9. Add specialist-need classification, reviewed memory compaction, and
+   authenticated external generation activation without giving those gates to
+   the learned clone.
+10. Add artifact-byte or visual verification as
    separate evidence, not upgrades to handoff metadata.
-9. Only then evaluate whether a small WALDO-trained Mirror research clone is
+11. Only then evaluate whether a small WALDO-trained Mirror research clone is
    technically and legally appropriate for the selected corpus.
 
 Large or upstream-facing changes stay out until this fork has something tested

@@ -68,3 +68,4 @@ logs.
 - [9007: Give the WALDO specialist a bounded inner asset foundry](9007-axm-waldo-inner-asset-foundry.md)
 - [9008: Add a portable capability spine without importing the Workshop](9008-axm-waldo-portable-capability-spine.md)
 - [9009: Align the witness clone with the current OpenWALDO body](9009-axm-waldo-current-upstream-body-alignment.md)
+- [9010: Grow verifiers and tool wisdom without self-authority](9010-axm-waldo-mutual-verifier-evolution-and-tool-wisdom.md)

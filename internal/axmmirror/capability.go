@@ -911,6 +911,10 @@ func selfCapabilityCatalog() []CapabilityDeclaration {
 		{ID: "discovery.dual.stance", Version: "v0.1", Command: "discover", InputSchemas: []string{DiscoveryStanceRequestSchema}, OutputSchemas: []string{DiscoveryStancePacketSchema}, EvidenceState: "COMPILED_DECLARATION"},
 		{ID: "evaluation.contamination.check", Version: "v0.1", Command: "contamination", InputSchemas: []string{EvaluationComparisonSchema}, OutputSchemas: []string{ContaminationReportSchema}, EvidenceState: "COMPILED_DECLARATION"},
 		{ID: "evaluation.protocol.seal", Version: "v0.1", Command: "seal-evaluation", InputSchemas: []string{EvaluationProtocolDraftSchema}, OutputSchemas: []string{EvaluationProtocolSealSchema}, EvidenceState: "COMPILED_DECLARATION"},
+		{ID: "identity.tool.experience.seal", Version: "v0.1", Command: "seal-tool-experience", InputSchemas: []string{IdentityToolExperienceSchema}, OutputSchemas: []string{IdentityToolExperienceSchema}, EvidenceState: "COMPILED_DECLARATION"},
+		{ID: "identity.tool.memory.grow", Version: "v0.1", Command: "grow-tool-memory", InputSchemas: []string{IdentityToolMemorySchema, IdentityToolExperienceSchema}, OutputSchemas: []string{IdentityToolMemorySchema}, EvidenceState: "COMPILED_DECLARATION"},
+		{ID: "identity.tool.memory.start", Version: "v0.1", Command: "start-tool-memory", InputSchemas: []string{IdentityToolExperienceSchema}, OutputSchemas: []string{IdentityToolMemorySchema}, EvidenceState: "COMPILED_DECLARATION"},
+		{ID: "identity.tool.wisdom.recall", Version: "v0.1", Command: "recall-tool-wisdom", InputSchemas: []string{IdentityToolMemorySchema, IdentityWisdomQuerySchema}, OutputSchemas: []string{IdentityWisdomViewSchema}, EvidenceState: "COMPILED_DECLARATION"},
 		{ID: "origin.anchor", Version: "v0.1", Command: "anchor", InputSchemas: []string{"openwaldo-bom/model/v1", "openwaldo-bom/model-release/v1"}, OutputSchemas: []string{OriginAnchorSchema}, EvidenceState: "COMPILED_DECLARATION"},
 		{ID: "profile.contract.lens", Version: "v0.1", Command: "profile-contract", InputSchemas: []string{"openwaldo-bom/training-run/v1"}, OutputSchemas: []string{TrainingProfileContractSchema}, EvidenceState: "COMPILED_DECLARATION"},
 		{ID: "provenance.context.build", Version: "v0.1", Command: "context", InputSchemas: []string{ProvenanceContextRequestSchema}, OutputSchemas: []string{ProvenanceContextSchema}, EvidenceState: "COMPILED_DECLARATION"},
@@ -920,6 +924,9 @@ func selfCapabilityCatalog() []CapabilityDeclaration {
 		{ID: "skills.continuity.assess", Version: "v0.1", Command: "assess-skills", InputSchemas: []string{SkillContinuityRequestSchema}, OutputSchemas: []string{SkillContinuityReceiptSchema}, EvidenceState: "COMPILED_DECLARATION"},
 		{ID: "source.claim.gate", Version: "v0.1", Command: "gate-claims", InputSchemas: []string{SourceClaimSubmissionSchema}, OutputSchemas: []string{SourceClaimAssessmentSchema}, EvidenceState: "COMPILED_DECLARATION"},
 		{ID: "training.run.witness", Version: "v0.1", Command: "witness-run", InputSchemas: []string{"openwaldo-bom/training-run/v1"}, OutputSchemas: []string{TrainingRunWitnessSchema}, EvidenceState: "COMPILED_DECLARATION"},
+		{ID: "verifier.change.assess", Version: "v0.1", Command: "assess-verifier-change", InputSchemas: []string{VerifierRegistrySchema, VerifierChangeRequestSchema}, OutputSchemas: []string{VerifierChangeReceiptSchema}, EvidenceState: "COMPILED_DECLARATION"},
+		{ID: "verifier.change.materialize", Version: "v0.1", Command: "materialize-verifier-change", InputSchemas: []string{VerifierRegistrySchema, VerifierChangeReceiptSchema}, OutputSchemas: []string{VerifierRegistrySchema}, EvidenceState: "COMPILED_DECLARATION"},
+		{ID: "verifier.repair.plan", Version: "v0.1", Command: "plan-verifier-repair", InputSchemas: []string{VerifierRegistrySchema, VerifierChangeReceiptSchema, RepairBuddyRequestSchema}, OutputSchemas: []string{RepairBuddyPlanSchema}, EvidenceState: "COMPILED_DECLARATION"},
 	}
 	canonical, err := canonicalizeCapabilityDeclarations(catalog)
 	if err != nil {
