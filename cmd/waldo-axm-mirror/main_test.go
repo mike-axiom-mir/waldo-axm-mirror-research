@@ -123,6 +123,75 @@ func TestWitnessRunFileWritesHeldLifecycleReceipt(t *testing.T) {
 	}
 }
 
+func TestProfileContractFileWritesLegacyAliasReceipt(t *testing.T) {
+	runBOM := filepath.Join("..", "..", "examples", "axm-mirror", "run-bom.json")
+	run := filepath.Join("..", "..", "examples", "axm-mirror", "run.json")
+	runBOMData, err := os.ReadFile(runBOM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runData, err := os.ReadFile(run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	witness, err := axmmirror.WitnessTrainingRun(runBOMData, runData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	witnessData, err := json.Marshal(witness)
+	if err != nil {
+		t.Fatal(err)
+	}
+	witnessPath := writeTemp(t, string(witnessData))
+	output := filepath.Join(t.TempDir(), "profile-contract.json")
+	if err := profileContractFile(runBOM, witnessPath, output); err != nil {
+		t.Fatalf("profileContractFile() error = %v", err)
+	}
+	var contract axmmirror.TrainingProfileContract
+	if err := readStrictJSON(output, &contract); err != nil {
+		t.Fatalf("read profile contract: %v", err)
+	}
+	if contract.State != axmmirror.ProfileContractStateLegacyAlias || contract.CanonicalProfile != "causal-pretrain-shuffled" {
+		t.Fatalf("profile contract = %+v", contract)
+	}
+}
+
+func TestProfileContractFileWritesHoldBeforeReturningError(t *testing.T) {
+	runBOM := filepath.Join("..", "..", "examples", "axm-mirror", "run-bom.json")
+	run := filepath.Join("..", "..", "examples", "axm-mirror", "run.json")
+	runBOMData, err := os.ReadFile(runBOM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runData, err := os.ReadFile(run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	witness, err := axmmirror.WitnessTrainingRun(runBOMData, runData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	witnessData, err := json.Marshal(witness)
+	if err != nil {
+		t.Fatal(err)
+	}
+	witnessPath := writeTemp(t, string(witnessData))
+	// Whitespace changes the exact document digest without changing the
+	// canonical run BOM. The mismatch must remain inspectable as a HOLD.
+	differentRunBOM := writeTemp(t, "\n"+string(runBOMData))
+	output := filepath.Join(t.TempDir(), "profile-contract.json")
+	if err := profileContractFile(differentRunBOM, witnessPath, output); err == nil {
+		t.Fatal("profileContractFile() did not return a HOLD error")
+	}
+	var contract axmmirror.TrainingProfileContract
+	if err := readStrictJSON(output, &contract); err != nil {
+		t.Fatalf("read held profile contract: %v", err)
+	}
+	if contract.State != axmmirror.ProfileContractStateParameterMismatch || len(contract.Holds) == 0 {
+		t.Fatalf("held profile contract = %+v", contract)
+	}
+}
+
 func writeTemp(t *testing.T, content string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "input.json")

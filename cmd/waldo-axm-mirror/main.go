@@ -30,6 +30,12 @@ func main() {
 			os.Exit(2)
 		}
 		err = witnessRunFile(os.Args[2], os.Args[3], os.Args[4])
+	case "profile-contract":
+		if len(os.Args) != 5 {
+			usage()
+			os.Exit(2)
+		}
+		err = profileContractFile(os.Args[2], os.Args[3], os.Args[4])
 	case "anchor":
 		if len(os.Args) != 4 {
 			usage()
@@ -86,6 +92,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "usage:")
 	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror lens-corpus <corpus-bom.json> <lens.json>")
 	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror witness-run <run-bom.json> <run.json> <witness.json>")
+	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror profile-contract <run-bom.json> <run-witness.json> <profile-contract.json>")
 	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror anchor <waldo-bom.json> <anchor.json>")
 	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror lock <expected-anchor.json> <observed-bom.json> <receipt.json>")
 	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror contamination <comparison.json> <report.json>")
@@ -130,6 +137,29 @@ func witnessRunFile(runBOMPath, runPath, outputPath string) error {
 	fmt.Println(witness.State, witness.RunBOMSHA256)
 	if witness.State != axmmirror.RunWitnessStateReady {
 		return errors.New("training run witness is HOLD; inspect the written receipt")
+	}
+	return nil
+}
+
+func profileContractFile(runBOMPath, witnessPath, outputPath string) error {
+	runBOMData, err := os.ReadFile(runBOMPath)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", runBOMPath, err)
+	}
+	var witness axmmirror.TrainingRunWitness
+	if err := readStrictJSON(witnessPath, &witness); err != nil {
+		return err
+	}
+	contract, err := axmmirror.WitnessTrainingProfileContract(runBOMData, witness)
+	if err != nil {
+		return err
+	}
+	if err := writeJSON(outputPath, contract); err != nil {
+		return err
+	}
+	fmt.Println(contract.State, contract.CanonicalProfile)
+	if contract.State != axmmirror.ProfileContractStateWitnessed && contract.State != axmmirror.ProfileContractStateLegacyAlias {
+		return fmt.Errorf("training profile contract is %s; inspect the written receipt", contract.State)
 	}
 	return nil
 }

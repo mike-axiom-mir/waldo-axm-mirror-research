@@ -31,12 +31,13 @@ flowchart TD
     A["WALDO corpus BOM"] --> B["Corpus evidence lens"]
     B --> C["RUN-BOM.json + RUN.json"]
     C --> D["Training-run witness"]
-    E["WALDO model/release BOM"] --> F["Origin anchor + identity lock"]
-    D --> G["Witnessed behavior-evidence seal"]
-    F --> G
-    H["Evaluation inventories"] --> I["Contamination guard"]
-    I --> G
-    G --> J["Later verification and dissent"]
+    D --> E["Training-profile contract"]
+    F["WALDO model/release BOM"] --> G["Origin anchor + identity lock"]
+    D --> H["Witnessed behavior-evidence seal"]
+    G --> H
+    I["Evaluation inventories"] --> J["Contamination guard"]
+    J --> H
+    H --> K["Later verification and dissent"]
 ```
 
 Build after installing the Go version required by WALDO:
@@ -56,6 +57,17 @@ Bind its immutable run plan to the current durable run record:
 ```bash
 ./waldo-axm-mirror witness-run examples/axm-mirror/run-bom.json examples/axm-mirror/run.json /tmp/example.run-witness.json
 ```
+
+Project the exact behavior-named or historical training-selection contract
+without rewriting the run BOM:
+
+```bash
+./waldo-axm-mirror profile-contract examples/axm-mirror/run-bom.json /tmp/example.run-witness.json /tmp/example.profile-contract.json
+```
+
+The checked-in example deliberately uses historical `causal-pretrain-v1`; the
+receipt preserves that declaration and resolves its canonical behavior as
+`causal-pretrain-shuffled` with state `LEGACY_ALIAS_WITNESSED`.
 
 Anchor a WALDO-produced model or release BOM. All checked-in files are
 contract-only examples with placeholder digests and observations, not a
@@ -112,19 +124,22 @@ can be recorded honestly.
 
 They do not grant tool access, run a model, verify the artifact bytes merely by
 reading their BOM entries, certify safety or legal usability, convert dissent
-into a score, expose hidden reasoning, or make any AXM result CANON.
+into a score, expose hidden reasoning, prove that a selected source caused an
+output, or make any AXM result CANON.
 
 ## Next experimental rungs
 
-1. Bind a real WALDO-produced corpus, run, and model/release chain to a behavior
+1. Review and project the current upstream corpus and model-interaction additions
+   recorded as HOLDs in `research/openwaldo-upstream-delta-2026-08-22.json`.
+2. Bind a real WALDO-produced corpus, run, and model/release chain to a behavior
    record; the checked-in chain is intentionally synthetic.
-2. Add a bounded read-only provenance context surface and source-claim gate.
-3. Add a small public-safe Mirror evaluation fixture set without private memory
+3. Add a bounded read-only provenance context surface and source-claim gate.
+4. Add a small public-safe Mirror evaluation fixture set without private memory
    or hidden reasoning.
-4. Run a local model through bounded scenarios and preserve outputs by digest.
-5. Compare exact releases without flattening behavior, verification, and dissent
+5. Run a local model through bounded scenarios and preserve outputs by digest.
+6. Compare exact releases without flattening behavior, verification, and dissent
    into one score.
-6. Only then evaluate whether a small WALDO-trained Mirror research clone is
+7. Only then evaluate whether a small WALDO-trained Mirror research clone is
    technically and legally appropriate for the selected corpus.
 
 Large or upstream-facing changes stay out until this fork has something tested

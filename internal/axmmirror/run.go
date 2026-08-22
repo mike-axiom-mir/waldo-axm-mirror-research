@@ -147,6 +147,7 @@ type waldoResolvedParameters struct {
 	Profile              string                 `json:"profile"`
 	ProfileSchema        int                    `json:"profile_schema"`
 	Epochs               int64                  `json:"epochs,omitempty"`
+	RequestedTokens      int64                  `json:"requested_tokens,omitempty"`
 	Steps                int64                  `json:"steps"`
 	BatchSize            int64                  `json:"batch_size"`
 	SequenceLength       int64                  `json:"sequence_length"`
@@ -159,6 +160,18 @@ type waldoResolvedParameters struct {
 	CheckpointEvery      int64                  `json:"checkpoint_every"`
 	EvaluateEvery        int64                  `json:"evaluate_every"`
 	PlannedTokenCapacity int64                  `json:"planned_token_capacity"`
+}
+
+// waldoConversationTransform mirrors the documented schema-1 model-side
+// conversation view. Keeping it in the local wire projection preserves the
+// exact WALDO run BOM identity without importing WALDO's internal packages.
+type waldoConversationTransform struct {
+	Template        string   `json:"template"`
+	SupervisedRoles []string `json:"supervised_roles"`
+}
+
+func (transform waldoConversationTransform) isZero() bool {
+	return transform.Template == "" && len(transform.SupervisedRoles) == 0
 }
 
 type waldoEvaluationSet struct {
@@ -184,22 +197,23 @@ type waldoInitialization struct {
 }
 
 type waldoRunBOM struct {
-	Kind               string                  `json:"kind"`
-	Schema             int                     `json:"schema"`
-	Subject            string                  `json:"subject"`
-	ID                 string                  `json:"id"`
-	ModelID            string                  `json:"model_id"`
-	Stage              string                  `json:"stage"`
-	StageType          string                  `json:"stage_type"`
-	Ordinal            int                     `json:"ordinal"`
-	Objective          string                  `json:"objective"`
-	Execution          RunExecutionEvidence    `json:"execution"`
-	ArchitectureSHA256 string                  `json:"architecture_sha256"`
-	CorpusBOMSHA256    string                  `json:"corpus_bom_sha256"`
-	CorpusBOM          waldoCorpusBOM          `json:"corpus_bom"`
-	Parameters         waldoResolvedParameters `json:"parameters"`
-	EvaluationSet      *waldoEvaluationSet     `json:"evaluation_set,omitempty"`
-	Initialization     *waldoInitialization    `json:"initialization,omitempty"`
+	Kind               string                     `json:"kind"`
+	Schema             int                        `json:"schema"`
+	Subject            string                     `json:"subject"`
+	ID                 string                     `json:"id"`
+	ModelID            string                     `json:"model_id"`
+	Stage              string                     `json:"stage"`
+	StageType          string                     `json:"stage_type"`
+	Ordinal            int                        `json:"ordinal"`
+	Objective          string                     `json:"objective"`
+	Conversation       waldoConversationTransform `json:"conversation,omitzero"`
+	Execution          RunExecutionEvidence       `json:"execution"`
+	ArchitectureSHA256 string                     `json:"architecture_sha256"`
+	CorpusBOMSHA256    string                     `json:"corpus_bom_sha256"`
+	CorpusBOM          waldoCorpusBOM             `json:"corpus_bom"`
+	Parameters         waldoResolvedParameters    `json:"parameters"`
+	EvaluationSet      *waldoEvaluationSet        `json:"evaluation_set,omitempty"`
+	Initialization     *waldoInitialization       `json:"initialization,omitempty"`
 }
 
 type waldoRunCheckpoint struct {
@@ -579,6 +593,9 @@ func validateRunBOM(bom waldoRunBOM) error {
 	if err := validateResolvedParameters(bom.Parameters); err != nil {
 		return err
 	}
+	if err := validateConversationTransform(bom.Objective, bom.Conversation); err != nil {
+		return err
+	}
 	if err := validateEvaluationSet(bom); err != nil {
 		return err
 	}
@@ -620,6 +637,15 @@ func validateResolvedParameters(parameters waldoResolvedParameters) error {
 	if overflow || capacity != parameters.PlannedTokenCapacity {
 		return errors.New("training run planned token capacity does not match steps, batch size, and sequence length")
 	}
+	if parameters.RequestedTokens < 0 || parameters.RequestedTokens > parameters.PlannedTokenCapacity {
+		return errors.New("training run requested token budget is outside the planned capacity")
+	}
+	if parameters.RequestedTokens > 0 {
+		stepCapacity, stepOverflow := multiplyPositive(parameters.BatchSize, parameters.SequenceLength)
+		if stepOverflow || parameters.PlannedTokenCapacity-parameters.RequestedTokens >= stepCapacity {
+			return errors.New("training run requested token budget is not rounded to the smallest complete optimizer step")
+		}
+	}
 	if strings.TrimSpace(parameters.Optimizer.Name) == "" || parameters.Optimizer.WeightDecay < 0 || parameters.Optimizer.WeightDecay > 1 || !finite(parameters.Optimizer.WeightDecay) || !finite(parameters.Optimizer.Beta1) || !finite(parameters.Optimizer.Beta2) || !finitePositive(parameters.Optimizer.Epsilon) {
 		return errors.New("training run optimizer is incomplete or non-finite")
 	}
@@ -641,6 +667,26 @@ func validateResolvedParameters(parameters waldoResolvedParameters) error {
 		if strings.TrimSpace(policy.Selection) == "" || !finite(policy.Fraction) || policy.Fraction < 0 || policy.Fraction >= 1 || policy.MaxRecords < 0 || policy.MaxBytes < 0 {
 			return errors.New("training run evaluation policy is invalid")
 		}
+	}
+	return nil
+}
+
+func validateConversationTransform(objective string, transform waldoConversationTransform) error {
+	if transform.isZero() {
+		if objective == "assistant-response-modeling" {
+			return errors.New("assistant-response-modeling requires a conversation transform")
+		}
+		return nil
+	}
+	if !oneOf(transform.Template, "user-assistant-v1", "chatml-v1") || len(transform.SupervisedRoles) == 0 {
+		return errors.New("training run conversation transform has an unsupported template or no supervised roles")
+	}
+	seen := map[string]bool{}
+	for _, role := range transform.SupervisedRoles {
+		if !oneOf(role, "system", "user", "assistant", "tool") || seen[role] {
+			return fmt.Errorf("training run conversation transform has invalid or duplicate supervised role %q", role)
+		}
+		seen[role] = true
 	}
 	return nil
 }
@@ -779,10 +825,16 @@ func validateRunObservation(observation waldoRunObservation, bom waldoRunBOM) er
 		return errors.New("training run observation simulation state does not match its backend")
 	}
 	if bom.Parameters.Data.Order == "corpus-balanced-shuffle-v1" || bom.Parameters.Data.Order == "corpus-weighted-shuffle-v1" {
+		selected := make(map[string]bool, len(bom.CorpusBOM.Paths))
+		for _, path := range bom.CorpusBOM.Paths {
+			selected[path] = true
+		}
 		seen := map[string]bool{}
 		var total int64
 		for _, item := range observation.Consumption {
-			if strings.TrimSpace(item.Corpus) == "" || item.TokenTargets <= 0 || seen[item.Corpus] {
+			// The empty string is WALDO's documented whole-index selection, so
+			// membership in the pinned corpus paths is the authoritative check.
+			if !selected[item.Corpus] || item.TokenTargets <= 0 || seen[item.Corpus] {
 				return errors.New("training run observation has invalid corpus consumption evidence")
 			}
 			seen[item.Corpus] = true

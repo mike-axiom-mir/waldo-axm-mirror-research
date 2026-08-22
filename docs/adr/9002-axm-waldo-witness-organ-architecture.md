@@ -175,6 +175,16 @@ Checks may include:
 
 Any incomplete comparison becomes HOLD/UNKNOWN, never "independent by default."
 
+#### Wave 2 addition — Evaluation Protocol Seal Organ
+
+Purpose: freeze the evaluation pack, target identities, visible inputs,
+answer-key boundary, allowed metrics, execution limits, and closed authority
+before an evaluated output exists. A later output cannot rewrite the protocol
+under which it is compared.
+
+This organ remains proposed. It was added to the build order after the Wave 2
+contract-pattern review; implementation requires its own ADR and tests.
+
 #### 10. Behavior Delta Comparator Organ
 
 Purpose: compare the same sealed evaluation across two exact model/release
@@ -287,7 +297,8 @@ Implementation note: ADR 9003 implements the Origin Anchor, Release Identity
 Lock, and Evaluation Independence / Contamination Guard. ADR 9004 implements
 the Corpus Evidence Lens and Training Run Witness and binds run-backed behavior
 evidence to both receipts. All Wave 1 deterministic lineage slices now exist;
-this does not mean a learned clone has been trained.
+this does not mean a learned clone has been trained. ADR 9005 adds the separate
+Wave 1.1 Training Profile Contract Lens without changing older witness receipts.
 
 ### Wave 1 — required before a real clone run
 
@@ -298,21 +309,26 @@ this does not mean a learned clone has been trained.
 5. Behavior Evidence Seal Organ (started)
 6. Evaluation Independence / Contamination Guard Organ
 
+### Wave 1.1 — upstream training-contract bridge
+
+7. Training Profile Contract Lens Organ
+
 ### Wave 2 — required for useful comparative research
 
-7. Provenance Context Surface Organ
-8. Source-Claim Gate Organ
-9. Behavior Delta Comparator Organ
-10. Dissent Continuity Ledger Organ
-11. Reproducibility Twin Organ
+8. Provenance Context Surface Organ
+9. Source-Claim Gate Organ
+10. Evaluation Protocol Seal Organ
+11. Behavior Delta Comparator Organ
+12. Dissent Continuity Ledger Organ
+13. Reproducibility Twin Organ
 
 ### Wave 3 — research that may be valuable back to WALDO
 
-12. Source Change Impact Router Organ
-13. Controlled Attribution Experiment Planner Organ
-14. Memorization / Leakage Audit Organ
-15. License Assertion Boundary Organ hardening
-16. Upstream Contribution Extractor Organ
+14. Source Change Impact Router Organ
+15. Controlled Attribution Experiment Planner Organ
+16. Memorization / Leakage Audit Organ
+17. License Assertion Boundary Organ hardening
+18. Upstream Contribution Extractor Organ
 
 ## Relationship to WALDO internals
 
