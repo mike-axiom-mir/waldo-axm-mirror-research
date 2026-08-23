@@ -14,8 +14,8 @@ import (
 const (
 	ConversationWitnessRequestSchema = "axm.waldo-witness.conversation-witness-request/v0.1"
 	ConversationWitnessReceiptSchema = "axm.waldo-witness.conversation-witness-receipt/v0.1"
-	ContinuityCapsuleDraftSchema      = "axm.waldo-witness.continuity-capsule-draft/v0.1"
-	ContinuityCapsuleSchema           = "axm.waldo-witness.continuity-capsule/v0.1"
+	ContinuityCapsuleDraftSchema     = "axm.waldo-witness.continuity-capsule-draft/v0.1"
+	ContinuityCapsuleSchema          = "axm.waldo-witness.continuity-capsule/v0.1"
 
 	ConversationWitnessReady               = "CONVERSATION_WITNESS_READY"
 	ConversationWitnessTemplateHold        = "HOLD_INTERACTION_TEMPLATE_MISMATCH"
@@ -442,13 +442,13 @@ func SealContinuityCapsule(draft ContinuityCapsuleDraft, witness ConversationWit
 	capsule := ContinuityCapsule{
 		Schema: ContinuityCapsuleSchema, State: ContinuityCapsuleReady,
 		CapsuleID: canonical.CapsuleID, CapturedAt: canonical.CapturedAt, ExpiresAt: canonical.ExpiresAt,
-		AnsweringIdentitySHA256: canonical.AnsweringIdentitySHA256,
+		AnsweringIdentitySHA256:   canonical.AnsweringIdentitySHA256,
 		ConversationWitnessSHA256: canonical.ConversationWitnessSHA256, ConversationWitnessState: witness.State,
 		ConversationSHA256: witness.ConversationSHA256, InteractionTemplate: witness.Interaction.ModelTemplate,
 		LastTurnSHA256: witness.LastTurnSHA256, TurnCount: witness.MessageCount,
 		TaskStateSHA256: canonical.TaskStateSHA256, ActiveVerifierRegistrySHA256: canonical.ActiveVerifierRegistrySHA256,
 		SkillContinuityReceiptSHA256: canonical.SkillContinuityReceiptSHA256,
-		MemoryShardSHA256: canonical.MemoryShardSHA256, OpenDissentSHA256: canonical.OpenDissentSHA256,
+		MemoryShardSHA256:            canonical.MemoryShardSHA256, OpenDissentSHA256: canonical.OpenDissentSHA256,
 		EvidenceSHA256: canonical.EvidenceSHA256, DraftSHA256: draftDigest,
 		Notices: []string{
 			"the capsule stores references and conversation turn lineage only; raw dialogue, task payloads, memories, dissent text, evidence, verifier definitions, and skills remain outside the capsule",

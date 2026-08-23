@@ -30,15 +30,15 @@ func testConversationRequest(t *testing.T, conversation record.Conversation) Con
 		t.Fatalf("encode conversation: %v", err)
 	}
 	return ConversationWitnessRequest{
-		Schema: ConversationWitnessRequestSchema,
-		WitnessID: "conversation-fixture-001",
+		Schema:                  ConversationWitnessRequestSchema,
+		WitnessID:               "conversation-fixture-001",
 		AnsweringIdentitySHA256: strings.Repeat("a", 64),
-		SourceRecordSHA256: record.TextHash(encoded),
+		SourceRecordSHA256:      record.TextHash(encoded),
 		Interaction: ConversationInteractionBinding{
-			ModelTemplate: InteractionTemplateChatMLV1,
+			ModelTemplate:    InteractionTemplateChatMLV1,
 			TrainingTemplate: InteractionTemplateChatMLV1,
-			Objective: ConversationObjectiveAssistant,
-			SupervisedRoles: []string{"assistant"},
+			Objective:        ConversationObjectiveAssistant,
+			SupervisedRoles:  []string{"assistant"},
 		},
 		RequestedAuthority: Authority{},
 	}
@@ -135,19 +135,19 @@ func TestWitnessConversationRefusesAuthorityGrowth(t *testing.T) {
 
 func testContinuityDraft(witness ConversationWitnessReceipt) ContinuityCapsuleDraft {
 	return ContinuityCapsuleDraft{
-		Schema: ContinuityCapsuleDraftSchema,
-		CapsuleID: "continuity-fixture-001",
-		CapturedAt: "2026-08-23T05:00:00Z",
-		ExpiresAt: "2026-08-30T05:00:00Z",
-		AnsweringIdentitySHA256: witness.AnsweringIdentitySHA256,
-		ConversationWitnessSHA256: witness.ReceiptSHA256,
-		TaskStateSHA256: strings.Repeat("b", 64),
+		Schema:                       ContinuityCapsuleDraftSchema,
+		CapsuleID:                    "continuity-fixture-001",
+		CapturedAt:                   "2026-08-23T05:00:00Z",
+		ExpiresAt:                    "2026-08-30T05:00:00Z",
+		AnsweringIdentitySHA256:      witness.AnsweringIdentitySHA256,
+		ConversationWitnessSHA256:    witness.ReceiptSHA256,
+		TaskStateSHA256:              strings.Repeat("b", 64),
 		ActiveVerifierRegistrySHA256: strings.Repeat("c", 64),
 		SkillContinuityReceiptSHA256: strings.Repeat("d", 64),
-		MemoryShardSHA256: []string{strings.Repeat("f", 64), strings.Repeat("e", 64)},
-		OpenDissentSHA256: []string{strings.Repeat("1", 64)},
-		EvidenceSHA256: []string{strings.Repeat("3", 64), strings.Repeat("2", 64)},
-		RequestedAuthority: Authority{},
+		MemoryShardSHA256:            []string{strings.Repeat("f", 64), strings.Repeat("e", 64)},
+		OpenDissentSHA256:            []string{strings.Repeat("1", 64)},
+		EvidenceSHA256:               []string{strings.Repeat("3", 64), strings.Repeat("2", 64)},
+		RequestedAuthority:           Authority{},
 	}
 }
 

@@ -663,7 +663,19 @@ func (monitor *advisorCheckpointMonitor) Close() {
 func (monitor *advisorCheckpointMonitor) run() {
 	defer close(monitor.done)
 	for event := range monitor.events {
-		report, err := currentAdvisorEvidence(monitor.root, monitor.name)
+		var report model.Advice
+		var err error
+		for attempt := 0; attempt < 100; attempt++ {
+			report, err = currentAdvisorEvidence(monitor.root, monitor.name)
+			if err == nil {
+				break
+			}
+			select {
+			case <-monitor.ctx.Done():
+				return
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
 		if err != nil {
 			fmt.Fprintf(monitor.warnings, "warning: advisor checkpoint monitor: %v\n", err)
 			continue
