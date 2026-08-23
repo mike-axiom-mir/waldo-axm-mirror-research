@@ -85,3 +85,4 @@ logs.
 - [9017: Put a Capability Fabric contract above WALDO gap evidence without importing the local implementation](9017-axm-capability-fabric-contract-probe.md)
 - [9018: Hold multi-capability composition when a declared link is missing](9018-axm-capability-composition-contract.md)
 - [9019: Separate capability feasibility from selection authority](9019-axm-capability-feasibility-selection-authority.md)
+- [9020: Keep selection authority separate from execution authority](9020-axm-selection-does-not-grant-execution.md)
