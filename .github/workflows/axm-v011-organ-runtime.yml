@@ -8,6 +8,7 @@ on:
       - 'internal/axmmirror/testdata/organ-runtime-bridge-v0.11.json'
       - 'research/v0.11-organ-fabric/**'
       - 'docs/adr/9013-axm-waldo-organ-fabric-runtime-bridge.md'
+      - '.github/workflows/axm-v011-organ-runtime.yml'
 
 jobs:
   organ-runtime-witness:
@@ -17,6 +18,10 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - name: Global format inventory
+        run: |
+          echo 'gofmt inventory:'
+          gofmt -l .
       - name: Format check
         run: test -z "$(gofmt -l internal/axmmirror/organ_runtime_bridge.go internal/axmmirror/organ_runtime_bridge_test.go)"
       - name: Focused witness tests
