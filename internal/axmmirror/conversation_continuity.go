@@ -50,12 +50,12 @@ type ConversationInteractionBinding struct {
 // conversation is supplied separately to WitnessConversation so a receipt can
 // be retained without retaining the raw dialogue in the receipt itself.
 type ConversationWitnessRequest struct {
-	Schema                        string                         `json:"schema"`
-	WitnessID                     string                         `json:"witness_id"`
-	AnsweringIdentitySHA256       string                         `json:"answering_identity_sha256"`
-	SourceRecordSHA256            string                         `json:"source_record_sha256"`
-	Interaction                   ConversationInteractionBinding `json:"interaction"`
-	RequestedAuthority            Authority                      `json:"requested_authority"`
+	Schema                  string                         `json:"schema"`
+	WitnessID               string                         `json:"witness_id"`
+	AnsweringIdentitySHA256 string                         `json:"answering_identity_sha256"`
+	SourceRecordSHA256      string                         `json:"source_record_sha256"`
+	Interaction             ConversationInteractionBinding `json:"interaction"`
+	RequestedAuthority      Authority                      `json:"requested_authority"`
 }
 
 type ConversationRoleCounts struct {
@@ -140,8 +140,8 @@ func WitnessConversation(request ConversationWitnessRequest, conversation record
 
 	for position, message := range conversation.Messages {
 		turn := ConversationTurnWitness{
-			Position: position + 1,
-			Role: message.Role,
+			Position:      position + 1,
+			Role:          message.Role,
 			ContentSHA256: record.TextHash(message.Content),
 		}
 		if message.Context != "" {
@@ -240,15 +240,6 @@ func supportedInteractionTemplate(value string) bool {
 	return oneOf(value, InteractionTemplateUserAssistantV1, InteractionTemplateChatMLV1)
 }
 
-func containsString(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
-		}
-	}
-	return false
-}
-
 func canonicalToolDigest(raw json.RawMessage) (string, error) {
 	var value any
 	decoder := json.NewDecoder(strings.NewReader(string(raw)))
@@ -290,10 +281,10 @@ func VerifyConversationWitness(receipt ConversationWitnessReceipt) error {
 	}
 	for name, digest := range map[string]string{
 		"answering_identity_sha256": receipt.AnsweringIdentitySHA256,
-		"conversation_sha256": receipt.ConversationSHA256,
-		"last_turn_sha256": receipt.LastTurnSHA256,
-		"request_sha256": receipt.RequestSHA256,
-		"receipt_sha256": receipt.ReceiptSHA256,
+		"conversation_sha256":       receipt.ConversationSHA256,
+		"last_turn_sha256":          receipt.LastTurnSHA256,
+		"request_sha256":            receipt.RequestSHA256,
+		"receipt_sha256":            receipt.ReceiptSHA256,
 	} {
 		if err := validateSHA256("conversation witness "+name, digest); err != nil {
 			return err
@@ -311,6 +302,19 @@ func VerifyConversationWitness(receipt ConversationWitnessReceipt) error {
 	}
 	if !oneOf(receipt.Interaction.Objective, ConversationObjectiveCausal, ConversationObjectiveAssistant) {
 		return fmt.Errorf("unsupported conversation witness objective %q", receipt.Interaction.Objective)
+	}
+	canonicalRoles := append([]string(nil), receipt.Interaction.SupervisedRoles...)
+	sort.Strings(canonicalRoles)
+	for index, role := range canonicalRoles {
+		if !oneOf(role, "system", "user", "assistant", "tool") {
+			return fmt.Errorf("conversation witness has unsupported supervised role %q", role)
+		}
+		if index > 0 && canonicalRoles[index-1] == role {
+			return fmt.Errorf("conversation witness has duplicate supervised role %q", role)
+		}
+	}
+	if !stringSlicesEqual(canonicalRoles, receipt.Interaction.SupervisedRoles) {
+		return errors.New("conversation witness supervised_roles are not canonical")
 	}
 	if receipt.MessageCount <= 0 || len(receipt.Turns) != receipt.MessageCount {
 		return errors.New("conversation witness message_count does not match turns")
@@ -375,19 +379,19 @@ func VerifyConversationWitness(receipt ConversationWitnessReceipt) error {
 // contain the underlying task, memory, dissent, skill, verifier, or dialogue
 // payloads; those remain separately governed artifacts.
 type ContinuityCapsuleDraft struct {
-	Schema                        string    `json:"schema"`
-	CapsuleID                     string    `json:"capsule_id"`
-	CapturedAt                    string    `json:"captured_at"`
-	ExpiresAt                     string    `json:"expires_at"`
-	AnsweringIdentitySHA256       string    `json:"answering_identity_sha256"`
-	ConversationWitnessSHA256     string    `json:"conversation_witness_sha256"`
-	TaskStateSHA256               string    `json:"task_state_sha256"`
-	ActiveVerifierRegistrySHA256  string    `json:"active_verifier_registry_sha256"`
-	SkillContinuityReceiptSHA256  string    `json:"skill_continuity_receipt_sha256,omitempty"`
-	MemoryShardSHA256             []string  `json:"memory_shard_sha256,omitempty"`
-	OpenDissentSHA256             []string  `json:"open_dissent_sha256,omitempty"`
-	EvidenceSHA256                []string  `json:"evidence_sha256,omitempty"`
-	RequestedAuthority            Authority `json:"requested_authority"`
+	Schema                       string    `json:"schema"`
+	CapsuleID                    string    `json:"capsule_id"`
+	CapturedAt                   string    `json:"captured_at"`
+	ExpiresAt                    string    `json:"expires_at"`
+	AnsweringIdentitySHA256      string    `json:"answering_identity_sha256"`
+	ConversationWitnessSHA256    string    `json:"conversation_witness_sha256"`
+	TaskStateSHA256              string    `json:"task_state_sha256"`
+	ActiveVerifierRegistrySHA256 string    `json:"active_verifier_registry_sha256"`
+	SkillContinuityReceiptSHA256 string    `json:"skill_continuity_receipt_sha256,omitempty"`
+	MemoryShardSHA256            []string  `json:"memory_shard_sha256,omitempty"`
+	OpenDissentSHA256            []string  `json:"open_dissent_sha256,omitempty"`
+	EvidenceSHA256               []string  `json:"evidence_sha256,omitempty"`
+	RequestedAuthority           Authority `json:"requested_authority"`
 }
 
 // ContinuityCapsule is a portable, digest-only resumption spine. It carries
@@ -395,29 +399,29 @@ type ContinuityCapsuleDraft struct {
 // conversation lineage, verifier generation, task state, memory catalog, and
 // dissent set?" without importing the underlying private payloads.
 type ContinuityCapsule struct {
-	Schema                        string   `json:"schema"`
-	State                         string   `json:"state"`
-	CapsuleID                     string   `json:"capsule_id"`
-	CapturedAt                    string   `json:"captured_at"`
-	ExpiresAt                     string   `json:"expires_at"`
-	AnsweringIdentitySHA256       string   `json:"answering_identity_sha256"`
-	ConversationWitnessSHA256     string   `json:"conversation_witness_sha256"`
-	ConversationWitnessState      string   `json:"conversation_witness_state"`
-	ConversationSHA256            string   `json:"conversation_sha256"`
-	InteractionTemplate           string   `json:"interaction_template"`
-	LastTurnSHA256                string   `json:"last_turn_sha256"`
-	TurnCount                     int      `json:"turn_count"`
-	TaskStateSHA256               string   `json:"task_state_sha256"`
-	ActiveVerifierRegistrySHA256  string   `json:"active_verifier_registry_sha256"`
-	SkillContinuityReceiptSHA256  string   `json:"skill_continuity_receipt_sha256,omitempty"`
-	MemoryShardSHA256             []string `json:"memory_shard_sha256,omitempty"`
-	OpenDissentSHA256             []string `json:"open_dissent_sha256,omitempty"`
-	EvidenceSHA256                []string `json:"evidence_sha256,omitempty"`
-	DraftSHA256                   string   `json:"draft_sha256"`
-	CapsuleSHA256                 string   `json:"capsule_sha256,omitempty"`
-	Holds                         []string `json:"holds,omitempty"`
-	Notices                       []string `json:"notices"`
-	Authority                     Authority `json:"authority"`
+	Schema                       string    `json:"schema"`
+	State                        string    `json:"state"`
+	CapsuleID                    string    `json:"capsule_id"`
+	CapturedAt                   string    `json:"captured_at"`
+	ExpiresAt                    string    `json:"expires_at"`
+	AnsweringIdentitySHA256      string    `json:"answering_identity_sha256"`
+	ConversationWitnessSHA256    string    `json:"conversation_witness_sha256"`
+	ConversationWitnessState     string    `json:"conversation_witness_state"`
+	ConversationSHA256           string    `json:"conversation_sha256"`
+	InteractionTemplate          string    `json:"interaction_template"`
+	LastTurnSHA256               string    `json:"last_turn_sha256"`
+	TurnCount                    int       `json:"turn_count"`
+	TaskStateSHA256              string    `json:"task_state_sha256"`
+	ActiveVerifierRegistrySHA256 string    `json:"active_verifier_registry_sha256"`
+	SkillContinuityReceiptSHA256 string    `json:"skill_continuity_receipt_sha256,omitempty"`
+	MemoryShardSHA256            []string  `json:"memory_shard_sha256,omitempty"`
+	OpenDissentSHA256            []string  `json:"open_dissent_sha256,omitempty"`
+	EvidenceSHA256               []string  `json:"evidence_sha256,omitempty"`
+	DraftSHA256                  string    `json:"draft_sha256"`
+	CapsuleSHA256                string    `json:"capsule_sha256,omitempty"`
+	Holds                        []string  `json:"holds,omitempty"`
+	Notices                      []string  `json:"notices"`
+	Authority                    Authority `json:"authority"`
 }
 
 // SealContinuityCapsule binds a continuity draft to one verified conversation
@@ -495,9 +499,9 @@ func canonicalizeContinuityDraft(draft ContinuityCapsuleDraft) (ContinuityCapsul
 		return ContinuityCapsuleDraft{}, errors.New("continuity expires_at must be after captured_at")
 	}
 	for name, digest := range map[string]string{
-		"answering_identity_sha256": draft.AnsweringIdentitySHA256,
-		"conversation_witness_sha256": draft.ConversationWitnessSHA256,
-		"task_state_sha256": draft.TaskStateSHA256,
+		"answering_identity_sha256":       draft.AnsweringIdentitySHA256,
+		"conversation_witness_sha256":     draft.ConversationWitnessSHA256,
+		"task_state_sha256":               draft.TaskStateSHA256,
 		"active_verifier_registry_sha256": draft.ActiveVerifierRegistrySHA256,
 	} {
 		if err := validateSHA256("continuity "+name, digest); err != nil {
@@ -569,14 +573,14 @@ func VerifyContinuityCapsule(capsule ContinuityCapsule) error {
 		return errors.New("continuity capsule expires_at must be after captured_at")
 	}
 	for name, digest := range map[string]string{
-		"answering_identity_sha256": capsule.AnsweringIdentitySHA256,
-		"conversation_witness_sha256": capsule.ConversationWitnessSHA256,
-		"conversation_sha256": capsule.ConversationSHA256,
-		"last_turn_sha256": capsule.LastTurnSHA256,
-		"task_state_sha256": capsule.TaskStateSHA256,
+		"answering_identity_sha256":       capsule.AnsweringIdentitySHA256,
+		"conversation_witness_sha256":     capsule.ConversationWitnessSHA256,
+		"conversation_sha256":             capsule.ConversationSHA256,
+		"last_turn_sha256":                capsule.LastTurnSHA256,
+		"task_state_sha256":               capsule.TaskStateSHA256,
 		"active_verifier_registry_sha256": capsule.ActiveVerifierRegistrySHA256,
-		"draft_sha256": capsule.DraftSHA256,
-		"capsule_sha256": capsule.CapsuleSHA256,
+		"draft_sha256":                    capsule.DraftSHA256,
+		"capsule_sha256":                  capsule.CapsuleSHA256,
 	} {
 		if err := validateSHA256("continuity capsule "+name, digest); err != nil {
 			return err
@@ -593,14 +597,18 @@ func VerifyContinuityCapsule(capsule ContinuityCapsule) error {
 	if capsule.TurnCount <= 0 {
 		return errors.New("continuity capsule turn_count must be positive")
 	}
-	if _, err := canonicalDigestSet("continuity capsule memory_shard_sha256", capsule.MemoryShardSHA256); err != nil {
-		return err
-	}
-	if _, err := canonicalDigestSet("continuity capsule open_dissent_sha256", capsule.OpenDissentSHA256); err != nil {
-		return err
-	}
-	if _, err := canonicalDigestSet("continuity capsule evidence_sha256", capsule.EvidenceSHA256); err != nil {
-		return err
+	for name, values := range map[string][]string{
+		"memory_shard_sha256": valuesOrEmpty(capsule.MemoryShardSHA256),
+		"open_dissent_sha256": valuesOrEmpty(capsule.OpenDissentSHA256),
+		"evidence_sha256":     valuesOrEmpty(capsule.EvidenceSHA256),
+	} {
+		canonical, err := canonicalDigestSet("continuity capsule "+name, values)
+		if err != nil {
+			return err
+		}
+		if !stringSlicesEqual(canonical, values) {
+			return fmt.Errorf("continuity capsule %s is not canonical", name)
+		}
 	}
 	if !capsule.Authority.closed() {
 		return errors.New("continuity capsule must carry closed authority")
@@ -613,6 +621,13 @@ func VerifyContinuityCapsule(capsule ContinuityCapsule) error {
 		return errors.New("continuity capsule digest mismatch")
 	}
 	return nil
+}
+
+func valuesOrEmpty(values []string) []string {
+	if values == nil {
+		return []string{}
+	}
+	return values
 }
 
 // FreshAt evaluates only the capsule's declared freshness interval. It does not
