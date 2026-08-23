@@ -1,0 +1,33 @@
+{
+  "schema": "axm.waldo-mirror.platform-code-fabric-donor/v0.1",
+  "status": "EXPERIMENTAL",
+  "repository": "mike-axiom-mir/axm-collaboration-platform",
+  "commit": "fd6ec98a6a98a6666a980c359730ccec57a8cbe9",
+  "experiment": {
+    "branch": "experiment/waldo-mirror-code-fabric-bridge-v0.1",
+    "pullRequest": 45,
+    "headAtCreation": "78840c61a18b0af53b28616394c69c235954d5f1"
+  },
+  "blobs": {
+    "shared/code-capability-fabric/code-capability-fabric-v2.js": "7b20769ccf296943cddce192d601bde3ec6f2334",
+    "shared/code-capability-fabric/grounded-consent-scope-v1.js": "a05190bb58c50b8782f2c404b5e7dfde3d7feae3",
+    "shared/code-capability-fabric/slow-creation-pilot-v1.js": "4e667b166ab5d018aad88828fae45dcc25529627",
+    "shared/code-capability-fabric/declarative-blueprint-composer-v1.js": "388343fade0bfc1507c6a526a7f3471a2d0595e5",
+    "shared/code-capability-fabric/blueprint-schema-compiler-v1.js": "f0460d40d53c266065b4876ab0bd3d6dd971b00d",
+    "tools/deterministic-json-core/index.js": "5f6720fb6e887158c7d501fdc41be422a315050f"
+  },
+  "executionModel": {
+    "deterministicDefault": true,
+    "aiOptIn": true,
+    "aiRole": "external proposal source only; the same deterministic Fabric validates and composes the proposal",
+    "fabricExecutionLocation": "native platform repository",
+    "waldoMirrorRole": "verify and witness typed receipts; do not execute copied Fabric code"
+  },
+  "privateOrganFactory": {
+    "included": false,
+    "availability": "NOT_PUBLIC_IN_DONOR",
+    "effectOnBaseline": "NONE",
+    "futureComparison": "rerun the same challenge after an explicitly supplied donor snapshot becomes available"
+  },
+  "authority": "NONE"
+}
