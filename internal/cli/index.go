@@ -13,8 +13,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"text/tabwriter"
 
 	"github.com/openwaldo/waldo/internal/config"
@@ -59,6 +61,9 @@ func runIndexList(context Context, args []string, stdout, stderr io.Writer) erro
 	if err != nil {
 		return err
 	}
+	languages := repeatedCommaOptions(context, "language")
+	programmingLanguages := repeatedCommaOptions(context, "programming-language")
+	corpora = filterCorporaByLanguage(corpora, languages, programmingLanguages)
 	if context.JSON {
 		return writeJSON(stdout, struct {
 			Path    string                  `json:"path"`
@@ -70,13 +75,47 @@ func runIndexList(context Context, args []string, stdout, stderr io.Writer) erro
 		return nil
 	}
 	table := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(table, "PATH\tTITLE\tSHARDS\tDOCS\tTOKENS\tSIZE\tLICENSE")
+	fmt.Fprintln(table, "PATH\tTITLE\tLANGUAGES\tPROGRAMMING\tSHARDS\tDOCS\tTOKENS\tSIZE\tLICENSE")
 	for _, corpus := range corpora {
-		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			corpus.Path, corpus.Title, humanInteger(corpus.Shards), humanCount(corpus.Docs),
+		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			corpus.Path, corpus.Title, declaredList(corpus.Languages), declaredList(corpus.ProgrammingLanguages), humanInteger(corpus.Shards), humanCount(corpus.Docs),
 			humanCount(corpus.Tokens), humanBytes(corpus.Bytes), licenseSummary(corpus.Licenses))
 	}
 	return table.Flush()
+}
+
+func filterCorporaByLanguage(corpora []waldoindex.CorpusInfo, languages, programmingLanguages []string) []waldoindex.CorpusInfo {
+	if len(languages) == 0 && len(programmingLanguages) == 0 {
+		return corpora
+	}
+	filtered := make([]waldoindex.CorpusInfo, 0, len(corpora))
+	for _, corpus := range corpora {
+		if matchesAnyFold(corpus.Languages, languages) && matchesAnyFold(corpus.ProgrammingLanguages, programmingLanguages) {
+			filtered = append(filtered, corpus)
+		}
+	}
+	return filtered
+}
+
+func matchesAnyFold(declared, requested []string) bool {
+	if len(requested) == 0 {
+		return true
+	}
+	for _, want := range requested {
+		for _, have := range declared {
+			if strings.EqualFold(have, want) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func declaredList(values []string) string {
+	if len(values) == 0 {
+		return "(unknown)"
+	}
+	return truncateDisplay(strings.Join(values, ","), 40)
 }
 
 func runIndexShow(context Context, args []string, stdout, stderr io.Writer) error {
@@ -207,9 +246,7 @@ func runIndexAudit(context Context, args []string, stdout, progress io.Writer) e
 			if event.Phase != "complete" {
 				return
 			}
-			if event.Current == 1 || event.Current == event.Total || event.Current%25 == 0 {
-				fmt.Fprintf(progress, "  fetched %s/%s  %s\n", humanInteger(int64(event.Current)), humanInteger(int64(event.Total)), event.Shard.SHA256[:12])
-			}
+			writeIndexProgressRange(progress, event.Current, event.Total, "objects fetched")
 		})
 		if err != nil {
 			return err
@@ -228,7 +265,7 @@ func runIndexAudit(context Context, args []string, stdout, progress io.Writer) e
 			err = corpus.AttachShardAttestations(&bom, materialized.Objects)
 		}
 	} else {
-		audited, err = verifyAuditStream(context.Execution, &bom, cache, progress)
+		audited, err = verifyAuditStream(context.Execution, &bom, cache, auditOptions, progress)
 	}
 	if err != nil {
 		return err
@@ -259,9 +296,9 @@ func runIndexAudit(context Context, args []string, stdout, progress io.Writer) e
 // verifyAuditStream bounds disk use to the retained cache policy by verifying
 // each content-addressed object immediately after Fetch. Unlike a deep audit,
 // the attestation path never requires the entire corpus to coexist locally.
-func verifyAuditStream(ctx context.Context, bom *corpus.BOM, cache *lookaside.Cache, progress io.Writer) (shard.Summary, error) {
+func verifyAuditStream(ctx context.Context, bom *corpus.BOM, cache *lookaside.Cache, options shard.AuditOptions, progress io.Writer) (shard.Summary, error) {
 	seen := make(map[string]int64)
-	totalUnique := 0
+	unique := make([]corpus.ShardPin, 0, len(bom.Shards))
 	for _, pin := range bom.Shards {
 		if size, ok := seen[pin.SHA256]; ok {
 			if size != pin.Bytes {
@@ -270,46 +307,88 @@ func verifyAuditStream(ctx context.Context, bom *corpus.BOM, cache *lookaside.Ca
 			continue
 		}
 		seen[pin.SHA256] = pin.Bytes
-		totalUnique++
+		unique = append(unique, pin)
 	}
-	clear(seen)
+	workers := options.Workers
+	if workers <= 0 {
+		workers = min(runtime.GOMAXPROCS(0), 4)
+	}
+	workers = min(workers, len(unique))
+	if workers == 0 {
+		return shard.Summary{}, nil
+	}
+	type auditOutcome struct {
+		pin     corpus.ShardPin
+		path    string
+		summary shard.Summary
+		err     error
+	}
+	auditContext, cancel := context.WithCancel(ctx)
+	defer cancel()
+	jobs := make(chan corpus.ShardPin)
+	outcomes := make(chan auditOutcome, workers)
+	var group sync.WaitGroup
+	for range workers {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			for pin := range jobs {
+				path, err := cache.Fetch(auditContext, pin.URL, pin.SHA256, pin.Bytes)
+				var one shard.Summary
+				if err == nil {
+					one, err = shard.VerifyWithOptions(auditContext, []string{path}, shard.AuditOptions{Workers: 1})
+				}
+				outcomes <- auditOutcome{pin: pin, path: path, summary: one, err: err}
+				if err != nil {
+					cancel()
+					return
+				}
+			}
+		}()
+	}
+	go func() {
+		defer close(jobs)
+		for _, pin := range unique {
+			select {
+			case jobs <- pin:
+			case <-auditContext.Done():
+				return
+			}
+		}
+	}()
+	go func() {
+		group.Wait()
+		close(outcomes)
+	}()
 	licenses, recipes := map[string]bool{}, map[string]bool{}
 	var total shard.Summary
 	current := 0
-	for _, pin := range bom.Shards {
-		if _, ok := seen[pin.SHA256]; ok {
+	var auditErr error
+	for outcome := range outcomes {
+		if outcome.err != nil {
+			if auditErr == nil || errors.Is(auditErr, context.Canceled) {
+				auditErr = fmt.Errorf("%s shard %s: %w", outcome.pin.Manifest, outcome.pin.SHA256[:12], outcome.err)
+			}
 			continue
 		}
-		seen[pin.SHA256] = pin.Bytes
-		path, err := cache.Fetch(ctx, pin.URL, pin.SHA256, pin.Bytes)
-		if err != nil {
-			return shard.Summary{}, fmt.Errorf("%s shard %s: %w", pin.Manifest, pin.SHA256[:12], err)
+		if err := corpus.AttachShardAttestation(bom, corpus.MaterializedObject{Shard: outcome.pin, Path: outcome.path}); err != nil {
+			cancel()
+			if auditErr == nil {
+				auditErr = err
+			}
+			continue
 		}
-		one, err := shard.VerifyWithOptions(ctx, []string{path}, shard.AuditOptions{Workers: 1})
-		if err != nil {
-			return shard.Summary{}, fmt.Errorf("%s shard %s: %w", pin.Manifest, pin.SHA256[:12], err)
-		}
-		if err := corpus.AttachShardAttestation(bom, corpus.MaterializedObject{Shard: pin, Path: path}); err != nil {
-			return shard.Summary{}, err
-		}
-		total.Shards += one.Shards
-		total.Attested += one.Attested
-		total.DeepScanned += one.DeepScanned
-		total.Records += one.Records
-		total.Tokens += one.Tokens
-		total.ContentBytes += one.ContentBytes
-		total.EncodedBytes += one.EncodedBytes
-		total.RowGroups += one.RowGroups
-		for _, value := range one.Licenses {
-			licenses[value] = true
-		}
-		for _, value := range one.Recipes {
-			recipes[value] = true
-		}
+		addAuditSummary(&total, outcome.summary, licenses, recipes)
 		current++
-		if current == 1 || current == totalUnique || current%25 == 0 {
-			fmt.Fprintf(progress, "  verified %s/%s  %s\n", humanInteger(int64(current)), humanInteger(int64(totalUnique)), pin.SHA256[:12])
+		if current == 1 || current == len(unique) || current%25 == 0 {
+			fmt.Fprintf(progress, "  verified %s/%s  %s\n", humanInteger(int64(current)), humanInteger(int64(len(unique))), outcome.pin.SHA256[:12])
 		}
+	}
+	if auditErr != nil {
+		return shard.Summary{}, auditErr
+	}
+	if err := ctx.Err(); err != nil {
+		return shard.Summary{}, err
 	}
 	for value := range licenses {
 		total.Licenses = append(total.Licenses, value)
@@ -323,6 +402,35 @@ func verifyAuditStream(ctx context.Context, bom *corpus.BOM, cache *lookaside.Ca
 		return shard.Summary{}, err
 	}
 	return total, nil
+}
+
+func addAuditSummary(total *shard.Summary, one shard.Summary, licenses, recipes map[string]bool) {
+	total.Shards += one.Shards
+	total.Attested += one.Attested
+	total.DeepScanned += one.DeepScanned
+	total.Records += one.Records
+	total.Tokens += one.Tokens
+	total.ContentBytes += one.ContentBytes
+	total.EncodedBytes += one.EncodedBytes
+	total.RowGroups += one.RowGroups
+	total.EmailAddressRecords += one.EmailAddressRecords
+	total.RepetitiveContentRecords += one.RepetitiveContentRecords
+	total.BoilerplateContentRecords += one.BoilerplateContentRecords
+	total.Redaction.EmailAddresses += one.Redaction.EmailAddresses
+	total.Redaction.IPAddresses += one.Redaction.IPAddresses
+	total.Redaction.PhoneNumbers += one.Redaction.PhoneNumbers
+	total.Redaction.MailRoutingHeaders += one.Redaction.MailRoutingHeaders
+	total.Redaction.Credentials += one.Redaction.Credentials
+	if one.Redaction.Policy != "" {
+		total.Redaction.Policy = one.Redaction.Policy
+		total.Redaction.NamesRetained = one.Redaction.NamesRetained
+	}
+	for _, value := range one.Licenses {
+		licenses[value] = true
+	}
+	for _, value := range one.Recipes {
+		recipes[value] = true
+	}
 }
 
 func printShardBOMEvidence(output io.Writer, bom corpus.BOM, details bool) {
@@ -413,9 +521,7 @@ func runIndexVerifyWithProgress(context Context, args []string, stdout, progress
 		fmt.Fprintf(progress, "checking %s canonical object URLs (%s declared; headers only)\n",
 			humanInteger(int64(len(bom.Shards))), humanBytes(bom.Totals.Bytes))
 		availability, err := corpus.CheckAvailability(context.Execution, bom, cache, 8, func(event corpus.AvailabilityProgress) {
-			if event.Current == 1 || event.Current == event.Total || event.Current%25 == 0 {
-				fmt.Fprintf(progress, "  %s/%s  %s  %s\n", humanInteger(int64(event.Current)), humanInteger(int64(event.Total)), event.Shard.SHA256[:12], event.Probe.Method)
-			}
+			writeIndexProgressRange(progress, event.Current, event.Total, "objects checked")
 		})
 		if err != nil {
 			return err
@@ -443,9 +549,7 @@ func runIndexVerifyWithProgress(context Context, args []string, stdout, progress
 		if event.Phase != "complete" {
 			return
 		}
-		if event.Current == 1 || event.Current == event.Total || event.Current%25 == 0 {
-			fmt.Fprintf(progress, "  %s/%s  %s\n", humanInteger(int64(event.Current)), humanInteger(int64(event.Total)), event.Shard.SHA256[:12])
-		}
+		writeIndexProgressRange(progress, event.Current, event.Total, "objects verified")
 	})
 	if err != nil {
 		return err
@@ -454,7 +558,7 @@ func runIndexVerifyWithProgress(context Context, args []string, stdout, progress
 	if err != nil {
 		return fmt.Errorf("purge successful verification cache: %w", err)
 	}
-	if !cache.Retained() {
+	if purged.Objects > 0 {
 		fmt.Fprintf(progress, "purged %s cached objects (%s)\n", humanInteger(purged.Objects), humanBytes(purged.Bytes))
 	}
 	if context.JSON {
@@ -471,6 +575,23 @@ func runIndexVerifyWithProgress(context Context, args []string, stdout, progress
 		displayPath(target.Rel), humanInteger(verification.Directories), humanInteger(verification.Corpora),
 		humanInteger(int64(len(materialized.Objects))), humanBytes(bom.Totals.Bytes))
 	return nil
+}
+
+func indexProgressRange(current, total int) (int, int, bool) {
+	if current <= 0 || total <= 0 || current > total || current != total && current%25 != 0 {
+		return 0, 0, false
+	}
+	return (current-1)/25*25 + 1, current, true
+}
+
+func writeIndexProgressRange(output io.Writer, current, total int, label string) {
+	start, end, report := indexProgressRange(current, total)
+	if !report {
+		return
+	}
+	fmt.Fprintf(output, "  %s-%s/%s  %s %s\n",
+		humanInteger(int64(start)), humanInteger(int64(end)), humanInteger(int64(total)),
+		humanInteger(int64(end-start+1)), label)
 }
 
 func resolveIndexArgument(execution context.Context, args []string, warnings io.Writer) (waldoindex.Target, error) {
@@ -542,11 +663,6 @@ func resolveIndexSelection(execution context.Context, args []string, progress io
 		var target waldoindex.Target
 		if len(targets) == 0 {
 			target, err = waldoindex.ResolveConfigured(knownRoot, value)
-			if err == nil && explicit && refresh {
-				if err = refreshIndexCheckout(execution, target.Root, progress); err == nil {
-					target, err = waldoindex.ResolveConfigured(knownRoot, value)
-				}
-			}
 		} else {
 			target, err = waldoindex.Resolve(knownRoot, value)
 		}
@@ -601,7 +717,7 @@ func refreshIndexCheckout(execution context.Context, root string, progress io.Wr
 }
 
 func explicitIndexPath(value string) bool {
-	return filepath.IsAbs(value) || value == "~" || strings.HasPrefix(value, "~/")
+	return waldoindex.IsFilesystemPath(value)
 }
 
 func managedIndexMutationError(action string) error {
@@ -618,6 +734,9 @@ func printManifest(w io.Writer, path string, manifest waldoindex.Manifest) {
 	fmt.Fprintf(w, "  name         %s\n", manifest.Name)
 	fmt.Fprintf(w, "  license      %s\n", manifest.License)
 	fmt.Fprintf(w, "  description  %s\n", manifest.Description)
+	languages, programmingLanguages := waldoindex.DeclaredLanguages(manifest)
+	fmt.Fprintf(w, "  languages    %s\n", declaredList(languages))
+	fmt.Fprintf(w, "  programming  %s\n", declaredList(programmingLanguages))
 	var shards, docs, tokens, bytes int64
 	if manifest.Rollup != nil {
 		shards, docs, tokens, bytes = manifest.Rollup.Count, manifest.Rollup.Docs, manifest.Rollup.Tokens, manifest.Rollup.Bytes

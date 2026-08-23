@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/openwaldo/waldo/internal/corpus"
+	"github.com/openwaldo/waldo/internal/record"
 	"github.com/openwaldo/waldo/internal/shard"
 	"github.com/parquet-go/parquet-go"
 )
@@ -108,15 +109,63 @@ func TestRecordMapUsesFallbackTextOnlyWhenPrimaryTextIsEmpty(t *testing.T) {
 	}
 }
 
-func TestRecordMapRejectsTopLevelJSONArray(t *testing.T) {
+func TestRecordMapAcceptsTopLevelJSONArray(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "records.json")
 	if err := os.WriteFile(path, []byte(`[{"text":"one"},{"text":"two"}]`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	plan := mappedFixturePlan(t, path, InputProfile{Type: ProfileRecordMap, Fields: ProfileFields{Text: []string{"text"}}})
-	err := StreamCanonicalTextBatches(context.Background(), plan, func(TextBatch) error { return nil })
-	if err == nil || !strings.Contains(err.Error(), "top-level JSON arrays are not supported") {
-		t.Fatalf("error = %v", err)
+	rows := collectMappedRows(t, plan)
+	if len(rows) != 2 || rows[0].Text != "one" || rows[1].Text != "two" {
+		t.Fatalf("rows = %+v", rows)
+	}
+}
+
+func TestChatMessagesPreservesSeparateSystemPrompt(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "chat.json")
+	contents := `{"system":"Use careful reasoning.","messages":[{"role":"user","content":"Why?"},{"role":"assistant","content":"Because."}]}`
+	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	profile := InputProfile{Type: ProfileChatMessages, Messages: ChatMessagesMapping{
+		Role: "messages[].role", Content: "messages[].content", System: "system",
+	}}
+	rows := collectMappedRows(t, mappedFixturePlan(t, path, profile))
+	if len(rows) != 1 {
+		t.Fatalf("rows = %+v", rows)
+	}
+	conversation, err := record.DecodeConversation(rows[0].Text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(conversation.Messages) != 3 || conversation.Messages[0].Role != "system" || conversation.Messages[0].Content != "Use careful reasoning." {
+		t.Fatalf("conversation = %+v", conversation)
+	}
+}
+
+func TestDialoguePairPreservesTools(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tools.json")
+	contents := `{"query":"Find it","answer":"[{\"name\":\"search\"}]","tools":"[{\"name\":\"search\"}]"}`
+	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	profile := InputProfile{Type: ProfileDialoguePair, Fields: ProfileFields{
+		Text: []string{"query"}, Response: "answer", Tools: "tools",
+	}}
+	rows := collectMappedRows(t, mappedFixturePlan(t, path, profile))
+	conversation, err := record.DecodeConversation(rows[0].Text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(conversation.Tools) != `[{"name":"search"}]` {
+		t.Fatalf("tools = %s", conversation.Tools)
+	}
+}
+
+func TestParquetMappingMatchesTerminalRepeatedScalar(t *testing.T) {
+	physical := []string{"chat_template_kwargs", "xml_tools", "list", "element"}
+	if !parquetPathMatches("chat_template_kwargs.xml_tools[]", physical) {
+		t.Fatal("terminal repeated scalar did not match its Parquet LIST wrappers")
 	}
 }
 
@@ -130,6 +179,40 @@ func TestRecordMapUsesExistingCompressedJSONLReader(t *testing.T) {
 	}
 }
 
+func TestMappedCompressedJSONLReportsEncodedInputProgress(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "records.jsonl.gz")
+	writeCompressedJSONL(t, path, "gzip", "{\"text\":\"first document\"}\n{\"text\":\"second document\"}\n")
+	plan := mappedFixturePlan(t, path, InputProfile{Type: ProfileRecordMap, Fields: ProfileFields{Text: []string{"text"}}})
+	var progress []int64
+	err := streamMappedJSONL(t.Context(), plan, plan.Inputs[0], func(_ shard.TextRow, inputBytes int64) error {
+		progress = append(progress, inputBytes)
+		return nil
+	}, func(string) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(progress) != 2 {
+		t.Fatalf("progress = %v", progress)
+	}
+	for _, encodedBytes := range progress {
+		if encodedBytes <= 0 || encodedBytes > plan.Inputs[0].Artifact.Bytes {
+			t.Fatalf("progress = %v, total = %d", progress, plan.Inputs[0].Artifact.Bytes)
+		}
+	}
+	plan.Writer.AdapterBatchBytes = 1
+	var events []ProgressEvent
+	ctx := WithProgress(t.Context(), func(event ProgressEvent) { events = append(events, event) })
+	if _, err := AssembleTextObjects(ctx, plan, t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if event.Phase == "ingest" && event.Status == "records" && event.Bytes > 0 {
+			return
+		}
+	}
+	t.Fatalf("ingest events lack encoded byte progress: %+v", events)
+}
+
 func TestRecordMapClassifiesMainContentFromOneScalarField(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "wikimedia.jsonl")
 	contents := "{\"text\":\"Article\",\"metadata\":{\"namespace\":0}}\n" +
@@ -140,6 +223,24 @@ func TestRecordMapClassifiesMainContentFromOneScalarField(t *testing.T) {
 	profile := InputProfile{
 		Type: ProfileRecordMap, MainContent: map[string]any{"metadata.namespace": 0},
 		Fields: ProfileFields{Text: []string{"text"}},
+	}
+	rows := collectMappedRows(t, mappedFixturePlan(t, path, profile))
+	if len(rows) != 2 || !rows[0].MainContent || rows[1].MainContent {
+		t.Fatalf("main-content rows = %+v", rows)
+	}
+}
+
+func TestRecordMapClassifiesMainContentFromConjoinedScalarFields(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "quality.jsonl")
+	contents := "{\"text\":\"keep\",\"helpfulness\":4,\"correctness\":4,\"coherence\":4}\n" +
+		"{\"text\":\"omit\",\"helpfulness\":4,\"correctness\":3,\"coherence\":4}\n"
+	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	profile := InputProfile{
+		Type:        ProfileRecordMap,
+		MainContent: map[string]any{"helpfulness": 4, "correctness": 4, "coherence": 4},
+		Fields:      ProfileFields{Text: []string{"text"}},
 	}
 	rows := collectMappedRows(t, mappedFixturePlan(t, path, profile))
 	if len(rows) != 2 || !rows[0].MainContent || rows[1].MainContent {
@@ -161,6 +262,21 @@ func TestRecordMapMainContentDefaultsTrueAndMissingDeclaredFieldFails(t *testing
 	err := StreamCanonicalTextBatches(context.Background(), mappedFixturePlan(t, path, declared), func(TextBatch) error { return nil })
 	if err == nil || !strings.Contains(err.Error(), `main_content classification failed: field "metadata.namespace" is absent`) {
 		t.Fatalf("missing main-content field error = %v", err)
+	}
+}
+
+func TestRecordMapMainContentChecksEveryDeclaredFieldForSchemaDrift(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "records.jsonl")
+	if err := os.WriteFile(path, []byte("{\"text\":\"Auxiliary\",\"a\":0}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	profile := InputProfile{
+		Type: ProfileRecordMap, MainContent: map[string]any{"a": 1, "z": 1},
+		Fields: ProfileFields{Text: []string{"text"}},
+	}
+	err := StreamCanonicalTextBatches(context.Background(), mappedFixturePlan(t, path, profile), func(TextBatch) error { return nil })
+	if err == nil || !strings.Contains(err.Error(), `main_content classification failed: field "z" is absent`) {
+		t.Fatalf("missing later main-content field error = %v", err)
 	}
 }
 
@@ -201,6 +317,45 @@ func TestRecordMapReadsMappedParquetFields(t *testing.T) {
 	}
 }
 
+func TestMappedParquetReportsProgressWithinFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "records.parquet")
+	if err := parquet.WriteFile(path, []mappedParquetRow{
+		{Title: "First", Body: "Body", ID: 1, Metadata: mappedParquetMetadata{License: "CC0-1.0"}},
+		{Title: "Second", Body: "Body", ID: 2, Metadata: mappedParquetMetadata{License: "CC0-1.0"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	plan := mappedFixturePlan(t, path, InputProfile{Type: ProfileRecordMap, Fields: ProfileFields{
+		Text: []string{"title", "body"}, ID: "id", License: "metadata.license",
+	}})
+	var progress []int64
+	err := streamMappedParquet(t.Context(), plan, plan.Inputs[0], func(_ shard.TextRow, inputBytes int64) error {
+		progress = append(progress, inputBytes)
+		return nil
+	}, func(string) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(progress) != 2 || progress[0] <= 0 || progress[0] >= plan.Inputs[0].Artifact.Bytes || progress[1] != plan.Inputs[0].Artifact.Bytes {
+		t.Fatalf("progress = %v, total = %d", progress, plan.Inputs[0].Artifact.Bytes)
+	}
+	plan.Writer.AdapterBatchBytes = 1
+	var events []ProgressEvent
+	ctx := WithProgress(t.Context(), func(event ProgressEvent) { events = append(events, event) })
+	if _, err := AssembleTextObjects(ctx, plan, t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	foundIntermediate := false
+	for _, event := range events {
+		if event.Phase == "ingest" && event.Status == "records" && event.Bytes > 0 && event.Bytes < event.TotalBytes {
+			foundIntermediate = true
+		}
+	}
+	if !foundIntermediate {
+		t.Fatalf("ingest events lack intermediate byte progress: %+v", events)
+	}
+}
+
 func TestPerRecordLicensesShareObjectsAndRemainInManifest(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "licenses.jsonl")
 	contents := "{\"text\":\"same\",\"license\":\"CC0-1.0\"}\n{\"text\":\"same\",\"license\":\"CC-BY-4.0\"}\n"
@@ -224,6 +379,9 @@ func TestPerRecordLicensesShareObjectsAndRemainInManifest(t *testing.T) {
 	}
 	if got := strings.Join(manifest.Licenses, ","); got != "CC-BY-4.0,CC0-1.0" || len(manifest.Shards) != 1 || strings.Join(manifest.Shards[0].Licenses, ",") != got {
 		t.Fatalf("manifest shards = %+v", manifest.Shards)
+	}
+	if len(manifest.Shards[0].LicenseUsage) != 2 {
+		t.Fatalf("mixed-license shard usage = %+v", manifest.Shards[0].LicenseUsage)
 	}
 }
 
@@ -257,9 +415,136 @@ func TestDialoguePairRendersPromptContextAndResponse(t *testing.T) {
 		Text: []string{"instruction"}, Context: "context", Response: "response",
 	}})
 	rows := collectMappedRows(t, plan)
-	want := "User: Summarize\n\nA long passage\n\nAssistant: Short summary\n"
+	want := `{"messages":[{"role":"user","content":"Summarize","context":"A long passage"},{"role":"assistant","content":"Short summary"}]}`
 	if len(rows) != 1 || rows[0].Text != want || rows[0].Meta == nil || !strings.Contains(*rows[0].Meta, `"turns":2`) {
 		t.Fatalf("rows = %+v", rows)
+	}
+}
+
+func TestDialoguePairPreservesMappedMetadata(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dialogue.jsonl")
+	contents := "{\"prompt\":\"Question\",\"response\":\"Answer\",\"helpfulness\":4,\"correctness\":3}\n"
+	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	profile := InputProfile{
+		Type: ProfileDialoguePair,
+		Fields: ProfileFields{
+			Text: []string{"prompt"}, Response: "response",
+			Meta: map[string]string{"helpfulness": "helpfulness", "correctness": "correctness"},
+		},
+	}
+	rows := collectMappedRows(t, mappedFixturePlan(t, path, profile))
+	if len(rows) != 1 || rows[0].Meta == nil || !strings.Contains(*rows[0].Meta, `"helpfulness":"4"`) || !strings.Contains(*rows[0].Meta, `"correctness":"3"`) || !strings.Contains(*rows[0].Meta, `"format":"structured-conversation"`) {
+		t.Fatalf("rows = %+v", rows)
+	}
+}
+
+func TestChatMessagesPreservesRolesAndToolResults(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "chat.jsonl")
+	contents := `{"id":"tool-1","tools":"[{\"name\":\"weather\"}]","messages":[{"role":"human","content":"Weather?"},{"role":"model","content":"<tool_call>weather</tool_call>"},{"role":"tool","content":"Sunny"},{"role":"model","content":"It is sunny."}]}` + "\n"
+	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	profile := InputProfile{
+		Type:   ProfileChatMessages,
+		Fields: ProfileFields{ID: "id"},
+		Messages: ChatMessagesMapping{
+			Role: "messages[].role", Content: "messages[].content", Tools: "tools",
+			RoleAliases: map[string]string{"human": "user", "model": "assistant"},
+		},
+	}
+	plan := mappedFixturePlan(t, path, profile)
+	rows := collectMappedRows(t, plan)
+	want := `{"messages":[{"role":"user","content":"Weather?"},{"role":"assistant","content":"\u003ctool_call\u003eweather\u003c/tool_call\u003e"},{"role":"tool","content":"Sunny"},{"role":"assistant","content":"It is sunny."}],"tools":[{"name":"weather"}]}`
+	if len(rows) != 1 || rows[0].Text != want || rows[0].Meta == nil || !strings.Contains(*rows[0].Meta, `"turns":4`) {
+		t.Fatalf("rows = %+v", rows)
+	}
+	assembly, err := AssembleTextObjects(context.Background(), plan, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := BuildManifest(plan, assembly, "s3://openwaldo/lookaside/v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(assembly.Objects) != 1 || assembly.Objects[0].RecordKind != record.KindConversation || manifest.RecordKind != record.KindConversation || manifest.ConvertedBy.Recipe != shard.ConversationWriterRecipe {
+		t.Fatalf("conversation assembly = %+v, manifest = %+v", assembly, manifest)
+	}
+}
+
+type chatParquetMessage struct {
+	Role    string `parquet:"role"`
+	Content string `parquet:"content"`
+}
+
+type chatParquetRow struct {
+	ID       string               `parquet:"id"`
+	Messages []chatParquetMessage `parquet:"messages,list"`
+}
+
+func TestChatMessagesReadsNestedParquetLists(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "chat.parquet")
+	if err := parquet.WriteFile(path, []chatParquetRow{{
+		ID: "chat-1",
+		Messages: []chatParquetMessage{
+			{Role: "user", Content: "Question"},
+			{Role: "assistant", Content: "Answer"},
+		},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	profile := InputProfile{
+		Type: ProfileChatMessages, Fields: ProfileFields{ID: "id"},
+		Messages: ChatMessagesMapping{Role: "messages[].role", Content: "messages[].content"},
+	}
+	rows := collectMappedRows(t, mappedFixturePlan(t, path, profile))
+	if len(rows) != 1 || rows[0].Text != `{"messages":[{"role":"user","content":"Question"},{"role":"assistant","content":"Answer"}]}` {
+		t.Fatalf("rows = %+v", rows)
+	}
+}
+
+func TestChatMessagesReplacesNULByDefaultAndSupportsStrictMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "chat.jsonl")
+	contents := `{"messages":[{"role":"user","content":"Question"},{"role":"assistant","content":"before\u0000after"}]}` + "\n"
+	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	profile := InputProfile{
+		Type:     ProfileChatMessages,
+		Messages: ChatMessagesMapping{Role: "messages[].role", Content: "messages[].content"},
+	}
+	rows := collectMappedRows(t, mappedFixturePlan(t, path, profile))
+	conversation, err := record.DecodeConversation(rows[0].Text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := conversation.Messages[1].Content; got != "before after" {
+		t.Fatalf("default normalized content = %q", got)
+	}
+	profile.NUL = "error"
+	err = StreamCanonicalTextBatches(context.Background(), mappedFixturePlan(t, path, profile), func(TextBatch) error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "set nul = space in the fetcher [input] profile") {
+		t.Fatalf("NUL policy error = %v", err)
+	}
+}
+
+func TestChatMessagesPrivacyCheckPreservesMessageBoundaries(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "chat.jsonl")
+	contents := `{"messages":[{"role":"user","content":"Received: this is ordinary message content"},{"role":"assistant","content":"Subject: response\n\nNothing private here."}]}` + "\n"
+	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	profile := InputProfile{
+		Type:     ProfileChatMessages,
+		Messages: ChatMessagesMapping{Role: "messages[].role", Content: "messages[].content"},
+	}
+	result, err := AssembleTextObjects(t.Context(), mappedFixturePlan(t, path, profile), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.InputDocs != 1 || result.RetainedDocs != 1 {
+		t.Fatalf("assembly = %+v", result)
 	}
 }
 
@@ -306,7 +591,7 @@ func TestRankedConversationTreeChoosesLowestRankAtEveryLevel(t *testing.T) {
 		Tree:   ConversationTree{Root: "prompt", Replies: "children.replies", Text: "text", Rank: "rank", Role: "role", AssistantRole: "assistant"},
 	})
 	rows := collectMappedRows(t, plan)
-	want := "User: Question\n\nAssistant: Better\n\nUser: Follow up\n\nAssistant: Final answer\n"
+	want := `{"messages":[{"role":"user","content":"Question"},{"role":"assistant","content":"Better"},{"role":"user","content":"Follow up"},{"role":"assistant","content":"Final answer"}]}`
 	if len(rows) != 1 || rows[0].Text != want || rows[0].Source != "tree-1" || rows[0].Meta == nil || !strings.Contains(*rows[0].Meta, `"turns":4`) {
 		t.Fatalf("rows = %+v", rows)
 	}
@@ -331,7 +616,7 @@ func TestRankedConversationTreeUsesDeclaredSourceOrderForUnrankedLevel(t *testin
 		Tree: ConversationTree{Root: "prompt", Replies: "replies", Text: "text", Rank: "rank", MissingRank: "source-order", Role: "role", AssistantRole: "assistant"},
 	})
 	rows := collectMappedRows(t, plan)
-	want := "User: Question\n\nAssistant: Ranked answer\n\nUser: First follow up\n"
+	want := `{"messages":[{"role":"user","content":"Question"},{"role":"assistant","content":"Ranked answer"},{"role":"user","content":"First follow up"}]}`
 	if len(rows) != 1 || rows[0].Text != want {
 		t.Fatalf("rows = %+v", rows)
 	}

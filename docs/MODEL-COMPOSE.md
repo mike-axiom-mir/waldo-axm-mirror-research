@@ -18,6 +18,11 @@ waldo model train babble composes/0001-babble.yaml
 exist, or appends the declared stages when the existing model has exactly the
 same architecture.
 
+Forecasts calculate fixed-token stages immediately. Epoch-driven stage sizes
+depend on the selected index revision, filters, held-out records, tokenizer,
+and objective, so their exact tokens, steps, and added runtime are reported
+during training preflight rather than guessed.
+
 ## Why the profile is called causal pretraining
 
 The name is **causal**, not casual. In causal language modeling, the model
@@ -48,6 +53,11 @@ schema: 1
 # architecture may be omitted and inherited from the verified origin.
 # base:
 #   source: huggingface://organization/model@<commit>
+
+# Optional: declare the exact inference-time dialogue format learned by the
+# model. Omit this block for raw causal continuation.
+interaction:
+  template: user-assistant-v1
 
 architecture:
   family: decoder-transformer
@@ -90,8 +100,7 @@ stages:
             exclude: [deprecated-*]
     parameters:
       profile: causal-pretrain-weighted
-      epochs: 1
-      steps: 60000
+      tokens: 1966080000
       batch_size: 32
       sequence_length: 1024
       learning_rate: 0.0002
@@ -118,7 +127,27 @@ field names and structure.
 | `schema` | yes | `1` | Selects the compose schema. |
 | `base` | no | object | Optionally initializes a new model from pulled origin weights. |
 | `architecture` | normally | object | Defines immutable model structure and tokenizer identity. It may be omitted with `base.source`, in which case WALDO inherits the verified source architecture. |
+| `interaction` | no | object | Declares a versioned inference-time prompt contract. Omit it for raw causal continuation. |
 | `stages` | yes | non-empty list | Ordered training stages. Stage names must be unique. |
+
+### Interaction fields
+
+Schema 1 supports `interaction.template: user-assistant-v1` and
+`interaction.template: chatml-v1`. The former renders each turn as:
+
+```text
+User: <message>
+
+Assistant: <response>
+```
+
+`chatml-v1` uses versioned `<|im_start|>` and `<|im_end|>` textual framing.
+Conversation ingestion does not select either template. `waldo model chat`
+maintains the selected transcript across interactive turns and
+stops generation before the model begins a new `User:` turn. The interaction
+contract is stored in the immutable model plan, model record, and model BOM.
+It changes model identity but not parameter count. Models without an
+interaction block retain raw causal-continuation behavior.
 
 ### Base fields
 
@@ -177,7 +206,7 @@ stages:
     corpora: [core/books/gutenberg]
     parameters:
       profile: causal-pretrain-shuffled
-      steps: 1000
+      epochs: 1
       batch_size: 8
       sequence_length: 512
       learning_rate: 0.00005
@@ -253,7 +282,8 @@ backends receive identical token IDs.
 | --- | --- | --- | --- |
 | `name` | yes | `^[a-z0-9][a-z0-9._-]{0,63}$` | Unique durable stage and run label. |
 | `type` | yes | `pre-training`, `fine-tuning`, `alignment`, or `other` | Records the stage's intended role in provenance. |
-| `objective` | yes | `causal-language-modeling` | The only currently executable objective. |
+| `objective` | yes | `causal-language-modeling` or `assistant-response-modeling` | Causal loss covers every next token; assistant-response loss supervises roles selected by a structured conversation transformation. |
+| `conversation` | for assistant-response modeling and conversation shards | object | Pins `template` (`user-assistant-v1` or `chatml-v1`) and a non-empty `supervised_roles` list. It must match `interaction.template`. |
 | `filter` | no | record filter | Applies one record-level condition to every selected corpus. |
 | `corpora` | yes | non-empty list of unique scalar paths or configured corpus objects | Selects canonical corpus records for the stage. |
 | `parameters` | yes | object | Declares the portable training budget and controls. |
@@ -261,6 +291,10 @@ backends receive identical token IDs.
 Relative corpus values are logical paths beneath the selected WALDO index.
 Absolute paths may identify another index checkout. Values select indexed
 corpora, never raw source directories or exported corpus files.
+
+Before downloading any shard, `model train` refreshes the selected index and
+checks every corpus path in every stage. A failed sanity check reports all
+unavailable paths with their stage names and performs no shard materialization.
 
 Stages execute in listed order. Each completed stage produces the current
 weights used to initialize the next stage. If a stage fails, later stages do
@@ -355,8 +389,9 @@ must use one representation or the other, never both.
 | Field | Required | Default or range | Meaning |
 | --- | --- | --- | --- |
 | `profile` | no | `causal-pretrain-shuffled` | Selects versioned record ordering, corpus exposure, and held-out selection. |
-| `epochs` | no | default `1`; `1..1000000` | Maximum deterministic passes over the selected canonical records. |
-| `steps` | yes | positive integer | Required optimizer steps and learning-rate schedule length. |
+| `tokens` | one training budget | positive integer | Fixed pretraining target budget. WALDO rounds it up to a complete optimizer step and persists the derived step count. Cannot be combined with `epochs` or `steps`. |
+| `epochs` | one training budget | `1..1000000` | Complete deterministic passes over every selected canonical record. When `steps` is omitted, WALDO derives the exact optimizer-step count after filtering and held-out selection. |
+| `steps` | legacy/fixed-step budget | positive integer | Explicit optimizer steps and learning-rate schedule length. Retained for existing composes and exact fixed-step experiments; it may be combined with `epochs` as a repetition limit. |
 | `batch_size` | yes | positive integer | Number of packed sequences in each optimizer step. |
 | `sequence_length` | yes | positive integer, at most `context_tokens` | Number of predicted token targets per packed sequence. |
 | `learning_rate` | yes | finite positive number | Peak AdamW learning rate. |
@@ -372,16 +407,23 @@ must use one representation or the other, never both.
 | `evaluation_max_records` | no | default `256`; `0..1000000` | Held-out record cap. |
 | `evaluation_max_bytes` | no | default 1 MiB; `0 B..16 GiB` | Held-out text-byte cap. |
 
-The planned token capacity is:
+Exactly one of `tokens`, `epochs`, or legacy `steps` is normally declared. A
+legacy compose may declare both `steps` and `epochs`; steps remains the exact
+stop while epochs limits the finite source passes available to reach it.
+
+For fixed-token and fixed-step stages, the planned token capacity is:
 
 ```text
-steps * batch_size * sequence_length
+derived_steps * batch_size * sequence_length
 ```
 
-The canonical stream must contain enough packed targets across the declared
-epochs to reach every requested step. A run fails rather than silently
-shortening its budget. Records are continuously packed with an EOS token
-between records; document boundaries do not force padding to a new sequence.
+Records are continuously packed with an EOS token between records; document
+boundaries do not force padding to a new sequence. Epoch-driven stages scan the
+finite filtered stream and derive their exact steps before creating a run.
+Fixed-token stages derive steps without a full scan and retain a single source
+pass. Legacy stages declaring both fields verify that their epochs contain
+enough packed targets to reach the requested steps. A run fails rather than
+silently shortening its declared budget.
 
 Setting any one of `evaluation_fraction`, `evaluation_max_records`, or
 `evaluation_max_bytes` to zero disables the held-out set and resolves all
@@ -393,12 +435,13 @@ All profiles resolve to AdamW with betas `0.9` and `0.95`, epsilon `1e-8`, and
 a cosine schedule ending at 10% of the peak learning rate. Those values and
 continuous EOS packing are versioned profile facts, not compose fields.
 
-A schema-1 compose also has no fields for a chat template, optimizer choice,
-gradient accumulation, activation checkpointing, mixture-of-experts routing,
-or distributed topology. The current objective produces a raw causal base
-model. Hardware and backend topology remain machine-local policy; other
-training behaviors require a separately versioned portable contract rather
-than an ignored compose field.
+A schema-1 compose has no fields for arbitrary chat-template expressions,
+optimizer choice, gradient accumulation, activation checkpointing,
+mixture-of-experts routing, or distributed topology. The optional built-in
+interaction contract controls inference formatting; it does not change the
+causal training objective. Hardware and backend topology remain machine-local
+policy; other training behaviors require a separately versioned portable
+contract rather than an ignored compose field.
 
 | Profile | Training record order | Held-out selection | Corpus weights |
 | --- | --- | --- | --- |
@@ -418,6 +461,10 @@ token exposure. Use `causal-pretrain-weighted` when the intended mixture is
 unequal. Weights are relative—for example, `2` and `1` target approximately
 twice as many emitted training tokens from the first corpus while it remains
 available. They do not duplicate canonical records or alter corpus provenance.
+Consequently, weights determine total mixture exposure for a fixed-token stage
+that stops early; an epoch-driven stage still consumes every filtered record
+from every selected corpus once per epoch, with weights affecting interleaving
+rather than final totals.
 
 ## Common compose patterns
 
@@ -447,7 +494,7 @@ stages:
     corpora: [core/books/gutenberg, science/plos]
     parameters:
       profile: causal-pretrain-balanced
-      steps: 32000
+      tokens: 1048576000
       batch_size: 64
       sequence_length: 512
       learning_rate: 0.0003
@@ -487,7 +534,7 @@ stages:
     corpora: [core/books/gutenberg, science/plos]
     parameters:
       profile: causal-pretrain-balanced
-      steps: 32000
+      tokens: 1048576000
       batch_size: 64
       sequence_length: 512
       learning_rate: 0.0003
@@ -499,7 +546,7 @@ stages:
     corpora: [core/common-pile/python-enhancement-proposals/peps]
     parameters:
       profile: causal-pretrain-shuffled
-      steps: 1000
+      epochs: 1
       batch_size: 32
       sequence_length: 512
       learning_rate: 0.00005

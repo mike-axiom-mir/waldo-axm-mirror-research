@@ -28,6 +28,11 @@ const (
 var modalityNamePattern = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 
 func validateManifestProvenance(manifest Manifest) error {
+	if manifest.Content != nil {
+		if err := validateContent(*manifest.Content); err != nil {
+			return fmt.Errorf("content: %w", err)
+		}
+	}
 	hasModalityFacts := manifest.Rollup != nil && len(manifest.Rollup.Modalities) > 0
 	shardModalities := Modalities{}
 	if manifest.Rollup != nil {
@@ -102,10 +107,13 @@ func modalityTokens(modalities Modalities) int64 {
 }
 
 func validateSourceProvenance(source Source) error {
+	if len(source.InputFormats) > 0 && !sortedUniqueStrings(source.InputFormats) {
+		return fmt.Errorf("input_formats must be sorted, unique, and non-empty")
+	}
 	if err := validateModalities("usage", source.Usage); err != nil {
 		return err
 	}
-	hasNewFacts := len(source.Usage) > 0 || source.Content != nil || source.Acquisition != nil || source.LicenseEvidence != nil || source.CollectedFrom != "" || source.CollectedTo != ""
+	hasNewFacts := len(source.InputFormats) > 0 || len(source.Usage) > 0 || source.Content != nil || source.Acquisition != nil || source.LicenseEvidence != nil || source.CollectedFrom != "" || source.CollectedTo != ""
 	category := source.Category
 	if category == "public" {
 		category = SourcePublicDataset
@@ -200,7 +208,8 @@ func addModalities(target Modalities, source Modalities) {
 func validateContent(content Content) error {
 	for label, values := range map[string][]string{
 		"types": content.Types, "languages": content.Languages,
-		"geographies": content.Geographies, "demographics": content.Demographics,
+		"programming_languages": content.ProgrammingLanguages,
+		"geographies":           content.Geographies, "demographics": content.Demographics,
 	} {
 		if err := validateStrings(label, values, true); err != nil {
 			return err

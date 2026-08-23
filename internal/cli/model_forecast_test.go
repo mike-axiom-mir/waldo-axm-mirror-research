@@ -47,7 +47,7 @@ func TestModelForecastAcceptsConfiguredMultipleIndexPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"--json", "model", "forecast", "./books", "books/books.json"}, &stdout, &stderr)
+	code := Run([]string{"--json", "model", "forecast", "books", "books/books.json"}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("code = %d, stderr = %q", code, stderr.String())
 	}
@@ -115,6 +115,17 @@ func TestWriteModelForecastUsesApprovedCompactColumns(t *testing.T) {
 	for _, unwanted := range []string{"BACKEND", "FIT", "~", "unified"} {
 		if strings.Contains(output.String(), unwanted) {
 			t.Errorf("output unexpectedly contains %q:\n%s", unwanted, output.String())
+		}
+	}
+}
+
+func TestWriteModelForecastIdentifiesEpochDerivedWork(t *testing.T) {
+	report := model.ResourceForecast{ApproximateParameters: 10, PlannedTokens: 1000, EpochDerivedStages: []string{"midtrain", "post-train"}}
+	var output bytes.Buffer
+	writeModelForecast(&output, report)
+	for _, want := range []string{"at least 1.0K plus 2 epoch-derived stage(s)", "midtrain, post-train resolve during training preflight"} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("forecast output missing %q: %q", want, output.String())
 		}
 	}
 }

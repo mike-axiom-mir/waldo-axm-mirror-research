@@ -32,14 +32,21 @@ type WorkerBegin struct {
 }
 
 type tokenizedRecordSource struct {
-	source RecordSource
-	codec  TokenCodec
+	source       RecordSource
+	codec        TokenCodec
+	objective    string
+	conversation ConversationTransform
 }
 
 func (source tokenizedRecordSource) Stream(ctx context.Context, consume func(Record) error) error {
 	return source.source.Stream(ctx, func(record Record) error {
-		record.Tokens = source.codec.Encode(record.Text)
+		var err error
+		record.Tokens, record.LossMask, err = tokenizeRecord(record, source.codec, source.objective, source.conversation)
+		if err != nil {
+			return fmt.Errorf("tokenize record %s: %w", record.ID, err)
+		}
 		record.Text = ""
+		record.Conversation = nil
 		return consume(record)
 	})
 }

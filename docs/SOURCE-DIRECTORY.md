@@ -1,128 +1,196 @@
 # Source directory contract
 
-A source directory is a recursive collection of raw inputs for one declared
-source. WALDO converts its records to canonical Parquet; the directory itself
-contains no WALDO-specific manifest.
+A completed fetcher handoff is a corpus directory. WALDO ingests it with an
+explicit index destination:
 
-## Directory rules
-
-- Every entry below the root is examined in stable path order.
-- Files must be regular files. Symlinks and special files reject the source.
-- Every non-empty file must use a supported container. A source has at most one
-  input profile, and it must apply to every file in that source.
-- Unknown, binary, HTML, WARC, archive, and unsupported compressed files reject
-  the source. Archives must be safely extracted by acquisition first.
-- Files must not change after probing. WALDO pins their paths, sizes, and
-  SHA-256 identities before conversion.
-- Do not add metadata sidecars: WALDO will treat them as inputs. Put shared
-  source facts in the CLI/recipe declaration and per-record facts in the
-  records themselves.
-
-During canonical assembly WALDO automatically assesses, but does not alter,
-every row for common email-shaped strings, repetitive token sequences, and
-duplicated structural boilerplate. This applies uniformly to every input type,
-including books, mailing lists, and source code. The booleans are stored in
-record schema 2; acquisition scripts must not add assessment sidecars.
-
-Recipe acquisition may leave empty regular files; WALDO ignores them. Each
-declared source must still produce at least one supported non-empty input.
-
-## Shared source evidence
-
-Shared facts live in the CLI or recipe, never in directory sidecars:
-
-- `license` is WALDO's normalized effective/default license;
-  `source.license_evidence` preserves the upstream declaration and/or URL.
-- `source.collected_from` and `source.collected_to` are the acquisition period.
-- `source.content.from` and `source.content.to` are the underlying content
-  period; `source.content.selection` states any subset rule.
-- `source.content` also carries types, languages, geography/demography, and
-  tri-state content characteristics. `source.acquisition` carries general or
-  category-specific acquisition evidence.
-
-## Ingestible containers
-
-| Container | Physical record | Without an input profile |
-| --- | --- | --- |
-| UTF-8 text or Markdown | one file | the complete file is `text` |
-| `.json` | one top-level object; arrays rejected | profile required |
-| `.jsonl` | one object per nonblank line | top-level string `text` required |
-| `.jsonl.gz`, `.jsonl.zst` | streamed; one object per nonblank line | top-level string `text` required |
-| Parquet | one row | one flat, non-null string column named `text`, `content`, or `document`, or an explicit `text_column` |
-| XML | one file | `xml-record` profile required |
-
-Text must be valid UTF-8 and NUL-free. One logical record is limited to 64 MiB
-by default; a reviewed recipe may set `record_maximum_bytes` from 16 MiB through
-256 MiB. WALDO never silently splits a file, JSON value, line, or Parquet row.
-
-Profiles change only how physical records become canonical text:
-
-- `record-map` and `dialogue-pair`: JSON, JSONL, compressed JSONL, or Parquet.
-- `ranked-conversation-tree`: JSON or JSONL, including compressed JSONL.
-- `bounded-text`: UTF-8 text files.
-- `xml-record`: XML files.
-
-Structured record profiles may classify primary material with one exact scalar
-condition:
-
-```yaml
-input:
-  main_content:
-    metadata.namespace: 0
+```sh
+waldo index ingest /path/to/handoff core/example
 ```
 
-Matching rows receive `main_content: true`; other values receive `false`, and
-a missing declared field rejects ingestion as source-schema drift. When the
-mapping is omitted, every retained row is main content. Older canonical schemas
-also read as `main_content: true`.
+The fetcher owns acquisition and shared source facts. WALDO owns format
+detection, logical mapping, redaction, canonical Parquet, token/document
+counts, lookaside publication, and index contribution generation.
 
-## Recipe application
+## One source
 
-Schema 1 has one source directory. All steps share its `WALDO_FETCH_DIR`, and
-the recipe's source metadata, license, and input profile apply to every record.
+A single-source corpus places `manifest.json` and raw files in the same
+directory. Raw files may be nested arbitrarily.
 
-Schema 2 has one private source directory per `sources[]` entry. That entry's
-steps receive its directory as `WALDO_FETCH_DIR`; its metadata, license, and
-profile apply only to records beneath that directory. WALDO may pack records
-from several source directories into the same size-bounded Parquet shard while
-preserving source path, source identity, and license on every row.
+```text
+handoff/
+├── manifest.json
+├── archive.jsonl.gz
+└── nested/document.txt
+```
 
-## Automatic privacy redaction and row assessment
+The schema-1 manifest is:
 
-Before canonical identity is calculated, WALDO applies
-`waldo/privacy-redaction-v1` to every record from every source. It retains names
-and public attribution, replaces email addresses, IP addresses, phone numbers,
-and high-confidence credentials with typed placeholders, and removes routing
-headers from recognized RFC 822 message blocks. The redacted text is then
-hashed, deduplicated, measured, assessed, and packed. Raw values never enter a
-canonical shard.
+```json
+{
+  "kind": "waldo-corpus-directory",
+  "schema": 1,
+  "corpus": {
+    "id": "example",
+    "title": "Example",
+    "description": "Example training material."
+  },
+  "source": {
+    "id": "example",
+    "license": "CC-BY-4.0",
+    "source": {
+      "name": "Example upstream",
+      "url": "https://example.org/data",
+      "category": "public-dataset",
+      "content": {
+        "languages": ["en"],
+        "programming_languages": ["Python"]
+      },
+      "license_evidence": {
+        "declaration": "Creative Commons Attribution 4.0",
+        "url": "https://example.org/license"
+      }
+    },
+    "input": {"format": "text"}
+  },
+  "fetcher": {
+    "name": "waldo-fetcher-1",
+    "retrieved_at": "2026-08-19T00:00:00Z"
+  },
+  "raw": {
+    "file_count": 2,
+    "byte_count": 1234,
+    "tree_sha256": "64-lowercase-hex-characters"
+  }
+}
+```
 
-Schema-2 rows carry replacement/removal counts in
-`redacted_email_addresses`, `redacted_ip_addresses`,
-`redacted_phone_numbers`, `removed_mail_routing_headers`, and
-`redacted_credentials`. Footer, shard BOM, manifest, and OpenWALDO BOM evidence
-pins the policy and aggregates those counts. Existing v8/v7 schema-2 and
-schema-1 shards remain readable but have no redaction guarantee.
+The source ID may be omitted; WALDO then uses the corpus ID. `input.format` is
+required even when the format has an automatic reader. `content.languages`
+declares human languages using BCP 47 tags; use `mul` for known multilingual
+material or `und` when unknown. Programming languages are declared separately
+in `content.programming_languages`. These are corpus/source declarations, not
+inferred per-record statistics.
 
-Every newly ingested row receives three required booleans:
+WALDO preserves the verified `input.format` declaration in the generated index
+manifest as `sources[].input_formats`. This records the upstream physical input
+format; canonical WALDO shards remain Parquet regardless of the source format.
 
-| Column | Detector | Meaning |
-| --- | --- | --- |
-| `email_addresses` | `waldo/email-address-v1` | A common Internet email-shaped string remains after redaction; current ingestion rejects this condition. |
-| `repetitive_content` | `waldo/gopher-ngram-repetition-v1` | Repeated token n-grams exceeded a pinned within-document threshold. |
-| `boilerplate_content` | `waldo/gopher-structural-duplication-v1` | Duplicate lines or paragraphs exceeded a pinned within-document threshold. |
+## Multiple sources
 
-The repetition rules are a deterministic, language-neutral adaptation of the
-[Gopher quality filters](https://arxiv.org/abs/2112.11446). Documents with fewer than 50 alphanumeric tokens are
-not marked repetitive. Longer documents are marked when the most frequent
-trigram covers more than 18% of tokens or non-overlapping duplicate 8-grams
-cover more than 12%. At least four non-empty lines or paragraphs are required
-for structural assessment; a document is marked as boilerplate when duplicates
-exceed 30% of those elements or 20% of the source bytes. Whitespace is
-normalized for structural comparison and tokens are Unicode letters/numbers
-lowercased for n-gram comparison.
+Different sources or effective licenses use separate child directories. The
+root manifest lists every allowed child explicitly:
 
-Assessment does not make a legal, safety, or overall-quality determination.
-Manifests preserve detector identities and aggregate flagged-row
-counts. Existing schema-1 shards remain readable but unassessed and are upgraded
-only through an explicit corpus rebuild.
+```text
+handoff/
+├── manifest.json
+├── source-one/
+│   ├── manifest.json
+│   └── records.jsonl.gz
+└── source-two/
+    ├── manifest.json
+    └── messages.mbox.gz
+```
+
+Root manifest:
+
+```json
+{
+  "kind": "waldo-corpus-directory",
+  "schema": 1,
+  "corpus": {
+    "id": "example-suite",
+    "title": "Example Suite",
+    "description": "Two independently sourced collections."
+  },
+  "sources": ["source-one", "source-two"]
+}
+```
+
+Each child manifest has this shape:
+
+```json
+{
+  "kind": "waldo-source-directory",
+  "schema": 1,
+  "source": {
+    "id": "source-one",
+    "license": "CC0-1.0",
+    "source": {
+      "name": "Source one",
+      "url": "https://example.org/one",
+      "category": "public-dataset",
+      "content": {"languages": ["en"]},
+      "license_evidence": {"declaration": "CC0 1.0"}
+    },
+    "input": {
+      "format": "jsonl",
+      "type": "record-map",
+      "fields": {"text": ["text"]}
+    }
+  },
+  "fetcher": {"name": "waldo-fetcher-1"},
+  "raw": {
+    "file_count": 1,
+    "byte_count": 100,
+    "tree_sha256": "64-lowercase-hex-characters"
+  }
+}
+```
+
+The child directory name and source ID must match. Undeclared root entries,
+symlinks, special files, and nested manifests are rejected.
+
+## Raw-tree evidence
+
+For every regular raw file, calculate its SHA-256 and byte count. Sort entries
+by slash-separated relative path, then hash the UTF-8 inventory:
+
+```text
+FILE_SHA256<TAB>BYTES<TAB>RELATIVE_PATH<LF>
+```
+
+`file_count`, `byte_count`, and `tree_sha256` describe only raw files; the
+boundary's `manifest.json` is excluded. WALDO independently probes each exact
+file and rejects a mismatch.
+
+## General input formats
+
+The fetcher manifest declares the physical format, and WALDO independently
+probes the bytes to verify that declaration:
+
+| Format | Physical record |
+| --- | --- |
+| UTF-8 text or Markdown | one file |
+| mbox, plain/gzip/zstd | one RFC 822 message |
+| JSON | one top-level object or one top-level array of objects |
+| JSONL, plain/gzip/zstd | one object per nonblank line |
+| Parquet | one row |
+| XML | one file |
+
+JSON/JSONL/Parquet mappings use `record-map`, `dialogue-pair`,
+`chat-messages`, or `ranked-conversation-tree`. Whole-file text may use
+`bounded-text`; XML uses `xml-record`. Fetchers retain general raw upstream
+formats and do not render corpus-specific conversation templates.
+
+Text must be NUL-free UTF-8. Archives that WALDO does not read directly must be
+safely unpacked by acquisition. Empty files are not trainable records. WALDO
+pins file identity before conversion and rejects files that change afterward.
+Every non-empty file must resolve to one of the supported adapters above.
+Structured JSON, JSONL, Parquet, and XML must carry the required logical input
+mapping. WALDO fails before conversion on unsupported, ambiguous, or unmapped
+formats; it does not silently convert raw markup to text or binary bytes to
+base64 training records.
+
+Before hashing, deduplication, measurement, and packing, WALDO applies its
+pinned privacy-redaction policy. Canonical shard and manifest statistics—not
+the handoff manifest—are authoritative for retained documents and tokens.
+
+During ingestion, the verified raw `file_count` and `byte_count` provide the
+known progress totals. WALDO reports completed files/bytes plus live retained
+document and token counts as canonical batches are processed. Exact final
+counts are persisted in the generated index manifest; fetcher manifests never
+guess token or retained-document totals.
+
+The earlier `waldo-source-directory` root containing a `raw/` directory remains
+readable for compatibility. New fetchers must produce the corpus-directory
+layout above.

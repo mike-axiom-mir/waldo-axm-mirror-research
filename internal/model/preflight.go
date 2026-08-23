@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/openwaldo/waldo/internal/corpus"
+	"github.com/openwaldo/waldo/internal/record"
 	"github.com/openwaldo/waldo/internal/shard"
 	"github.com/openwaldo/waldo/internal/training"
 )
@@ -37,8 +38,20 @@ func PrepareStage(stage Stage, bom corpus.BOM, inputs []training.Input) (Prepare
 		return PreparedStage{}, fmt.Errorf("stage %s corpus selection contains no training records", stage.Name)
 	}
 	for _, selected := range bom.Shards {
-		if selected.Format != "parquet" || selected.RecordSchema < shard.FormerTextRecordSchema || selected.RecordSchema > shard.TextRecordSchema {
+		kind := selected.RecordKind
+		if kind == "" {
+			kind = record.KindPretrain
+		}
+		supportedText := kind == record.KindPretrain && selected.RecordSchema >= shard.FormerTextRecordSchema && selected.RecordSchema <= shard.TextRecordSchema
+		supportedConversation := kind == record.KindConversation && selected.RecordSchema == shard.ConversationRecordSchema
+		if selected.Format != "parquet" || (!supportedText && !supportedConversation) {
 			return PreparedStage{}, fmt.Errorf("stage %s shard %s is %s record schema %d; causal-language-modeling requires supported Parquet record schema", stage.Name, selected.SHA256[:12], selected.Format, selected.RecordSchema)
+		}
+		if stage.Objective == "assistant-response-modeling" && !supportedConversation {
+			return PreparedStage{}, fmt.Errorf("stage %s assistant-response-modeling requires structured conversation shards; %s is %s", stage.Name, selected.SHA256[:12], kind)
+		}
+		if supportedConversation && stage.Conversation == nil {
+			return PreparedStage{}, fmt.Errorf("stage %s selects conversation shard %s without a conversation transformation", stage.Name, selected.SHA256[:12])
 		}
 	}
 	if len(inputs) == 0 {
@@ -57,7 +70,7 @@ func PrepareStage(stage Stage, bom corpus.BOM, inputs []training.Input) (Prepare
 		expected[selected.SHA256] = value
 	}
 	seen := make(map[string]bool, len(inputs))
-	resolved, err := stage.ResolveParameters()
+	resolved, err := stage.ResolvePlanningParameters()
 	if err != nil {
 		return PreparedStage{}, fmt.Errorf("stage %s training parameters: %w", stage.Name, err)
 	}
@@ -138,7 +151,7 @@ func composePlan(name string, compose Compose) (Plan, error) {
 	plan := Plan{
 		Kind: "waldo-model-plan", Schema: PlanSchema, Name: name,
 		ArchitectureSHA256: architectureHash, Architecture: compose.Architecture,
-		Forecast: forecast,
+		Interaction: compose.Interaction, Forecast: forecast,
 	}
 	if compose.Base != nil {
 		plan.OriginBOMSHA256 = compose.Base.OriginSHA256
@@ -152,11 +165,15 @@ func forecastPlanForCompose(compose Compose) (Plan, error) {
 		return Plan{}, err
 	}
 	for _, stage := range compose.Stages {
-		capacity, overflow := multiplyInt64(stage.Parameters.Steps, stage.Parameters.BatchSize, stage.Parameters.SequenceLength)
-		if overflow {
-			return Plan{}, fmt.Errorf("stage %s planned token capacity overflows int64", stage.Name)
+		resolved, err := stage.ResolvePlanningParameters()
+		if err != nil {
+			return Plan{}, fmt.Errorf("stage %s training parameters: %w", stage.Name, err)
 		}
-		plan.Stages = append(plan.Stages, PlannedStage{Name: stage.Name, Type: stage.Type, Objective: stage.Objective, Parameters: stage.Parameters, PlannedTokens: capacity})
+		plannedTokens := resolved.PlannedTokenCapacity
+		if stage.Parameters.Steps == 0 && stage.Parameters.Tokens == 0 {
+			plannedTokens = 0
+		}
+		plan.Stages = append(plan.Stages, PlannedStage{Name: stage.Name, Type: stage.Type, Objective: stage.Objective, Parameters: stage.Parameters, PlannedTokens: plannedTokens})
 	}
 	return plan, nil
 }
@@ -168,11 +185,18 @@ func validateStage(stage Stage, architecture Architecture) error {
 	if stage.Type != "pre-training" && stage.Type != "fine-tuning" && stage.Type != "alignment" && stage.Type != "other" {
 		return fmt.Errorf("stage %s has unsupported type %q", stage.Name, stage.Type)
 	}
-	if stage.Objective != "causal-language-modeling" {
+	if stage.Objective != "causal-language-modeling" && stage.Objective != "assistant-response-modeling" {
 		return fmt.Errorf("stage %s has unsupported objective %q", stage.Name, stage.Objective)
 	}
+	if stage.Conversation != nil {
+		if err := stage.Conversation.Validate(); err != nil {
+			return fmt.Errorf("stage %s conversation: %w", stage.Name, err)
+		}
+	} else if stage.Objective == "assistant-response-modeling" {
+		return fmt.Errorf("stage %s assistant-response-modeling requires conversation transformation", stage.Name)
+	}
 	parameters := stage.Parameters
-	if _, err := stage.ResolveParameters(); err != nil {
+	if _, err := stage.ResolvePlanningParameters(); err != nil {
 		return fmt.Errorf("stage %s training parameters: %w", stage.Name, err)
 	}
 	if architecture.ContextTokens > 0 && uint64(parameters.SequenceLength) > architecture.ContextTokens {

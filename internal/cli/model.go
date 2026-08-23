@@ -7,6 +7,7 @@ package cli
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -27,11 +28,13 @@ import (
 	"github.com/openwaldo/waldo/internal/config"
 	"github.com/openwaldo/waldo/internal/corpus"
 	"github.com/openwaldo/waldo/internal/disclosure"
+	waldoindex "github.com/openwaldo/waldo/internal/index"
 	"github.com/openwaldo/waldo/internal/inference"
 	"github.com/openwaldo/waldo/internal/lookaside"
 	"github.com/openwaldo/waldo/internal/model"
 	"github.com/openwaldo/waldo/internal/modelexport"
 	"github.com/openwaldo/waldo/internal/modelquant"
+	"github.com/openwaldo/waldo/internal/record"
 	"github.com/openwaldo/waldo/internal/shard"
 	"github.com/openwaldo/waldo/internal/signing"
 	"github.com/openwaldo/waldo/internal/training"
@@ -112,6 +115,9 @@ func runModelIndexForecast(context Context, paths []string, stdout, warnings io.
 	if err != nil {
 		return err
 	}
+	if _, err := cache.PurgeUsed(); err != nil {
+		return fmt.Errorf("purge successful forecast cache: %w", err)
+	}
 	if context.JSON {
 		return writeJSON(stdout, struct {
 			Index      any                    `json:"index"`
@@ -131,7 +137,16 @@ func runModelIndexForecast(context Context, paths []string, stdout, warnings io.
 
 func writeModelForecast(stdout io.Writer, report model.ResourceForecast) {
 	fmt.Fprintf(stdout, "PARAMETERS:  %s\n", humanModelParameters(report.ApproximateParameters))
-	fmt.Fprintf(stdout, "TOKENS:      %s\n", humanCount(report.PlannedTokens))
+	if len(report.EpochDerivedStages) == 0 {
+		fmt.Fprintf(stdout, "TOKENS:      %s\n", humanCount(report.PlannedTokens))
+	} else if report.PlannedTokens > 0 {
+		fmt.Fprintf(stdout, "TOKENS:      at least %s plus %d epoch-derived stage(s)\n", humanCount(report.PlannedTokens), len(report.EpochDerivedStages))
+	} else {
+		fmt.Fprintf(stdout, "TOKENS:      derived from %d epoch-driven stage(s) at training preflight\n", len(report.EpochDerivedStages))
+	}
+	if len(report.EpochDerivedStages) > 0 {
+		fmt.Fprintf(stdout, "EPOCHS:      %s resolve during training preflight\n", strings.Join(report.EpochDerivedStages, ", "))
+	}
 	fmt.Fprintln(stdout)
 
 	type row struct {
@@ -197,6 +212,9 @@ func hardwareMemory(bytes uint64) string {
 }
 
 func approximateDuration(seconds int64) string {
+	if seconds < 0 {
+		return "epoch-derived"
+	}
 	hours := float64(seconds) / float64(time.Hour/time.Second)
 	if hours < 1 {
 		return "under 1 hour"
@@ -340,6 +358,9 @@ func runModelSummary(context Context, args []string, stdout, _ io.Writer) error 
 		humanIntegerUint(inspection.Model.Architecture.Layers), humanIntegerUint(inspection.Model.Architecture.HiddenSize),
 		humanIntegerUint(inspection.Model.Architecture.AttentionHeads), humanIntegerUint(inspection.Model.Architecture.KeyValueHeads))
 	fmt.Fprintf(stdout, "TOKENIZER:     %s@%s\n", inspection.Model.Architecture.Tokenizer.Name, inspection.Model.Architecture.Tokenizer.Revision)
+	if inspection.Model.Interaction.Template != "" {
+		fmt.Fprintf(stdout, "INTERACTION:   %s\n", inspection.Model.Interaction.Template)
+	}
 	if inspection.Origin != nil {
 		fmt.Fprintf(stdout, "ORIGIN:        %s@%s (%s)\n", inspection.Origin.Source.Repository, shortModelHash(inspection.Origin.Source.Revision), inspection.Origin.Source.Provider)
 	}
@@ -621,15 +642,16 @@ func runModelTrainWorker(commandContext Context, _ []string, stdout, stderr io.W
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if _, purgeErr := cache.PurgeUsed(); purgeErr != nil {
-			fmt.Fprintf(stderr, "warning: purge secondary training scratch: %v\n", purgeErr)
-		}
-	}()
 	run := func(runCluster training.Cluster, request training.Request) error {
 		return training.RunSecondaryTorchTitan(commandContext.Execution, runCluster, request)
 	}
-	return runSecondaryStages(commandContext, cluster, modelRoot, scratch, cache, planWait, run, stdout, stderr)
+	if err := runSecondaryStages(commandContext, cluster, modelRoot, scratch, cache, planWait, run, stdout, stderr); err != nil {
+		return err
+	}
+	if _, err := cache.PurgeUsed(); err != nil {
+		return fmt.Errorf("purge successful secondary training cache: %w", err)
+	}
+	return nil
 }
 
 func runSecondaryStages(commandContext Context, cluster training.Cluster, modelRoot, scratch string, cache *lookaside.Cache, planWait time.Duration, run func(training.Cluster, training.Request) error, stdout, stderr io.Writer) error {
@@ -739,7 +761,7 @@ func secondaryTrainingRequest(commandContext Context, plan model.MultiNodePlan, 
 	if err != nil {
 		return training.Request{}, fmt.Errorf("resolve primary plan tokenizer: %w", err)
 	}
-	partition, err := training.NewRecordPartitionContextWithTokenizer(commandContext.Execution, inputs, plan.Parameters, codec, nil)
+	partition, err := training.NewRecordPartitionContextWithTransform(commandContext.Execution, inputs, plan.Parameters, codec, plan.Objective, plan.Conversation, nil)
 	if err != nil {
 		return training.Request{}, fmt.Errorf("reselect held-out evaluation split: %w", err)
 	}
@@ -759,6 +781,7 @@ func secondaryTrainingRequest(commandContext Context, plan model.MultiNodePlan, 
 	}
 	return training.Request{
 		RunID: plan.RunID, Stage: plan.Stage, Objective: plan.Objective,
+		Conversation:       plan.Conversation,
 		ArchitectureSHA256: plan.ArchitectureSHA256, Architecture: plan.Architecture,
 		Parameters: plan.Parameters, Records: records, EvaluationRecords: partition.EvaluationRecords(),
 		EvaluationSet: model.EvaluationSetValue(plan.EvaluationSet), Initialization: initialization,
@@ -810,7 +833,39 @@ func runModelComposeTraining(context Context, name, path string, cluster trainin
 	if err := builder.CheckComposeTarget(name, compose); err != nil {
 		return err
 	}
+	pending, err := model.HasPendingCompose(builder.Root, name)
+	if err != nil {
+		return err
+	}
+	var skipped []model.SkippedCorpus
+	if exists, err := model.Exists(builder.Root, name); err != nil {
+		return err
+	} else if exists && !pending {
+		inspection, err := model.Inspect(builder.Root, name)
+		if err != nil {
+			return err
+		}
+		compose, skipped = model.SkipCompletedCorpora(compose, inspection)
+		for _, corpus := range skipped {
+			fmt.Fprintf(stderr, "preflight/%s          skipped %s (already completed by this model)\n", corpus.Stage, corpus.Path)
+		}
+		if len(compose.Stages) == 0 {
+			if context.JSON {
+				return writeJSON(stdout, struct {
+					Compose string                `json:"compose"`
+					Result  model.Inspection      `json:"result"`
+					Skipped []model.SkippedCorpus `json:"skipped"`
+				}{Compose: composePath, Result: inspection, Skipped: skipped})
+			}
+			fmt.Fprintf(stdout, "model %s unchanged; all selected corpora were already completed\n", name)
+			return nil
+		}
+	}
 	builder.ComposeName = filepath.Base(composePath)
+	corpusTargets, err := sanityCheckComposeCorpora(context.Execution, compose, stderr)
+	if err != nil {
+		return err
+	}
 	objectives := make([]string, 0, len(compose.Stages))
 	for _, stage := range compose.Stages {
 		if !slices.Contains(objectives, stage.Objective) {
@@ -826,7 +881,7 @@ func runModelComposeTraining(context Context, name, path string, cluster trainin
 	}
 	prepared := make([]model.PreparedStage, 0, len(compose.Stages))
 	for _, stage := range compose.Stages {
-		resolved, err := prepareModelStage(context, stage, cache, stderr, boolOption(context, "audit"))
+		resolved, err := prepareModelStage(context, stage, corpusTargets[stage.Name], cache, stderr, boolOption(context, "audit"))
 		if err != nil {
 			return err
 		}
@@ -846,6 +901,58 @@ func runModelComposeTraining(context Context, name, path string, cluster trainin
 		}{Compose: composePath, Result: result})
 	}
 	return writeModelMutationResult(context, stdout, result, "trained")
+}
+
+func sanityCheckComposeCorpora(execution context.Context, compose model.Compose, progress io.Writer) (map[string][]waldoindex.Target, error) {
+	rootTargets, err := resolveIndexArgumentsWithWarningPolicy(execution, []string{""}, progress, true)
+	if err != nil {
+		return nil, fmt.Errorf("compose corpus sanity check: resolve selected index: %w", err)
+	}
+	configuredRoot := rootTargets[0].Root
+	references := 0
+	for _, stage := range compose.Stages {
+		references += len(stage.Corpora)
+	}
+	fmt.Fprintf(progress, "preflight               checking %s corpus paths against index %s\n", humanInteger(int64(references)), configuredRoot)
+
+	resolved := make(map[string][]waldoindex.Target, len(compose.Stages))
+	refreshedRoots := map[string]bool{configuredRoot: true}
+	var unavailable []string
+	for _, stage := range compose.Stages {
+		stageRoot := configuredRoot
+		for index, selection := range stage.Corpora {
+			var target waldoindex.Target
+			if index == 0 {
+				target, err = waldoindex.ResolveConfigured(configuredRoot, selection.Path)
+			} else {
+				target, err = waldoindex.Resolve(stageRoot, selection.Path)
+			}
+			if err != nil {
+				unavailable = append(unavailable, fmt.Sprintf("  - stage %s: %s", stage.Name, selection.Path))
+				continue
+			}
+			if index == 0 {
+				if !refreshedRoots[target.Root] {
+					if err := refreshIndexCheckout(execution, target.Root, progress); err != nil {
+						return nil, fmt.Errorf("compose corpus sanity check: refresh index checkout %s: %w", target.Root, err)
+					}
+					refreshedRoots[target.Root] = true
+					target, err = waldoindex.ResolveConfigured(configuredRoot, selection.Path)
+					if err != nil {
+						unavailable = append(unavailable, fmt.Sprintf("  - stage %s: %s", stage.Name, selection.Path))
+						continue
+					}
+				}
+				stageRoot = target.Root
+			}
+			resolved[stage.Name] = append(resolved[stage.Name], target)
+		}
+	}
+	if len(unavailable) > 0 {
+		return nil, fmt.Errorf("compose corpus sanity check failed before shard download\nselected index: %s\nunavailable corpus paths:\n%s\nrun `waldo index pull`; if the paths remain unavailable, publish the required index entries or correct the compose", configuredRoot, strings.Join(unavailable, "\n"))
+	}
+	fmt.Fprintf(progress, "preflight               passed; all %s corpus paths are available\n", humanInteger(int64(references)))
+	return resolved, nil
 }
 
 func runModelContinue(context Context, args []string, stdout, stderr io.Writer) error {
@@ -1121,9 +1228,9 @@ func runModelChat(context Context, args []string, stdout, stderr io.Writer) erro
 	}
 	var chatErr error
 	if interactive {
-		chatErr = runInteractiveChat(context.Execution, opened, options, stdout)
+		chatErr = runInteractiveChat(context.Execution, opened, inspection.Model.Interaction, options, stdout)
 	} else {
-		chatErr = runOneShotChat(context, opened, *prompt, options, stdout)
+		chatErr = runOneShotChat(context, opened, inspection.Model.Interaction, *prompt, options, stdout)
 	}
 	return errors.Join(chatErr, opened.Session.Close())
 }
@@ -1143,44 +1250,56 @@ func cobraModelChatOptions(context Context, args []string) (string, *string, inf
 	return args[0], nil, options, nil
 }
 
-func runOneShotChat(context Context, opened inference.Opened, prompt string, options inference.Options, stdout io.Writer) error {
-	var renderer safeTokenWriter
-	if !context.JSON {
-		renderer.writer = stdout
-	}
-	result, err := opened.Session.Generate(context.Execution, prompt, options, func(token inference.Token) error {
+func runOneShotChat(context Context, opened inference.Opened, interaction model.Interaction, prompt string, options inference.Options, stdout io.Writer) error {
+	renderedPrompt := interaction.Prompt("", prompt)
+	options.Stop = interaction.Stops()
+	markdownOutput := newLiveMarkdownOutput(stdout)
+	renderer := safeTokenWriter{writer: markdownOutput}
+	stopper := stoppingTokenWriter{stops: options.Stop, write: renderer.Write}
+	result, err := opened.Session.Generate(context.Execution, renderedPrompt, options, func(token inference.Token) error {
 		if context.JSON {
 			return nil
 		}
-		return renderer.Write(token.Bytes)
+		return stopper.Write(token.Bytes)
 	})
 	if err != nil {
 		return err
 	}
 	if context.JSON {
+		result.Text = interaction.TrimResponse(result.Text)
+		rendered := ""
+		if interaction.Conversational() {
+			rendered = renderedPrompt
+		}
 		return writeJSON(stdout, struct {
-			Model      string           `json:"model"`
-			SourceType string           `json:"source_type"`
-			SourceID   string           `json:"source_id"`
-			RunID      string           `json:"run_id,omitempty"`
-			Prompt     string           `json:"prompt"`
-			Result     inference.Result `json:"result"`
-		}{opened.Description.Model, opened.Description.SourceType, opened.Description.SourceID, opened.Description.RunID, prompt, result})
+			Model          string           `json:"model"`
+			SourceType     string           `json:"source_type"`
+			SourceID       string           `json:"source_id"`
+			RunID          string           `json:"run_id,omitempty"`
+			Prompt         string           `json:"prompt"`
+			RenderedPrompt string           `json:"rendered_prompt,omitempty"`
+			Result         inference.Result `json:"result"`
+		}{opened.Description.Model, opened.Description.SourceType, opened.Description.SourceID, opened.Description.RunID, prompt, rendered, result})
+	}
+	if err := stopper.Flush(); err != nil {
+		return err
 	}
 	if err := renderer.Flush(); err != nil {
 		return err
 	}
-	if !strings.HasSuffix(result.Text, "\n") {
-		_, err = fmt.Fprintln(stdout)
-	}
-	return err
+	return markdownOutput.Finish()
 }
 
-func runInteractiveChat(ctx context.Context, opened inference.Opened, options inference.Options, stdout io.Writer) error {
+func runInteractiveChat(ctx context.Context, opened inference.Opened, interaction model.Interaction, options inference.Options, stdout io.Writer) error {
 	fmt.Fprintf(stdout, "OpenWALDO model %s\n", opened.Description.Model)
 	fmt.Fprintf(stdout, "Backend: %s\n", strings.ToUpper(opened.Description.Backend))
 	fmt.Fprintf(stdout, "Context: %d tokens\n", opened.Description.ContextTokens)
-	fmt.Fprintln(stdout, "Mode: raw causal continuation (this model has no chat template)")
+	if interaction.Conversational() {
+		fmt.Fprintf(stdout, "Mode: user/assistant conversation (%s)\n", interaction.Template)
+		options.Stop = interaction.Stops()
+	} else {
+		fmt.Fprintln(stdout, "Mode: raw causal continuation (this model has no chat template)")
+	}
 	fmt.Fprintln(stdout, "Commands: /clear, /help, /exit")
 	reader := bufio.NewReader(modelChatInput)
 	history := ""
@@ -1206,29 +1325,87 @@ func runInteractiveChat(ctx context.Context, opened inference.Opened, options in
 			fmt.Fprintln(stdout, "/clear resets context; /exit or Ctrl-D closes the session")
 			continue
 		}
-		prompt := line
-		if history != "" {
-			prompt = history + "\n" + line
-		}
-		fmt.Fprintf(stdout, "%s> ", opened.Description.Model)
-		renderer := safeTokenWriter{writer: stdout}
+		prompt := interaction.Prompt(history, line)
+		fmt.Fprintf(stdout, "%s>\n", opened.Description.Model)
+		markdownOutput := newLiveMarkdownOutput(stdout)
+		renderer := safeTokenWriter{writer: markdownOutput}
+		stopper := stoppingTokenWriter{stops: options.Stop, write: renderer.Write}
 		result, generateErr := opened.Session.Generate(ctx, prompt, options, func(token inference.Token) error {
-			return renderer.Write(token.Bytes)
+			return stopper.Write(token.Bytes)
 		})
 		if generateErr != nil {
 			return generateErr
 		}
+		if err := stopper.Flush(); err != nil {
+			return err
+		}
 		if err := renderer.Flush(); err != nil {
 			return err
 		}
-		if !strings.HasSuffix(result.Text, "\n") {
-			fmt.Fprintln(stdout)
+		response := interaction.TrimResponse(result.Text)
+		if err := markdownOutput.Finish(); err != nil {
+			return err
 		}
-		history = boundChatHistory(prompt+result.Text, opened.Description.ContextTokens)
+		history = boundChatHistory(interaction.CompleteTurn(prompt, response), opened.Description.ContextTokens)
 		if errors.Is(err, io.EOF) {
 			return nil
 		}
 	}
+}
+
+type stoppingTokenWriter struct {
+	stops   []string
+	pending []byte
+	write   func([]byte) error
+	stopped bool
+}
+
+func (writer *stoppingTokenWriter) Write(value []byte) error {
+	if writer.stopped || len(value) == 0 {
+		return nil
+	}
+	writer.pending = append(writer.pending, value...)
+	stopAt := -1
+	maxStop := 0
+	for _, stop := range writer.stops {
+		maxStop = max(maxStop, len(stop))
+		if index := bytes.Index(writer.pending, []byte(stop)); index >= 0 && (stopAt < 0 || index < stopAt) {
+			stopAt = index
+		}
+	}
+	if stopAt >= 0 {
+		if stopAt > 0 && writer.write != nil {
+			if err := writer.write(writer.pending[:stopAt]); err != nil {
+				return err
+			}
+		}
+		writer.pending = nil
+		writer.stopped = true
+		return nil
+	}
+	keep := maxStop - 1
+	if keep < 0 {
+		keep = 0
+	}
+	if emit := len(writer.pending) - keep; emit > 0 {
+		if writer.write != nil {
+			if err := writer.write(writer.pending[:emit]); err != nil {
+				return err
+			}
+		}
+		writer.pending = append(writer.pending[:0], writer.pending[emit:]...)
+	}
+	return nil
+}
+
+func (writer *stoppingTokenWriter) Flush() error {
+	if !writer.stopped && len(writer.pending) > 0 && writer.write != nil {
+		if err := writer.write(writer.pending); err != nil {
+			return err
+		}
+	}
+	writer.pending = nil
+	return nil
 }
 
 func boundChatHistory(history string, contextTokens int) string {
@@ -1384,11 +1561,7 @@ func prepareDefaultTrainingStage(context Context, inspection model.Inspection, p
 	return model.PrepareStage(prepared.Stage, prepared.BOM, prepared.Inputs)
 }
 
-func prepareModelStage(context Context, stage model.Stage, cache *lookaside.Cache, progress io.Writer, audit bool) (model.PreparedStage, error) {
-	targets, err := resolveIndexArguments(context.Execution, model.CorpusPaths(stage.Corpora), progress)
-	if err != nil {
-		return model.PreparedStage{}, fmt.Errorf("stage %s: %w", stage.Name, err)
-	}
+func prepareModelStage(context Context, stage model.Stage, targets []waldoindex.Target, cache *lookaside.Cache, progress io.Writer, audit bool) (model.PreparedStage, error) {
 	policy, err := corpus.NewLicensePolicy(nil, nil)
 	if err != nil {
 		return model.PreparedStage{}, err
@@ -1416,7 +1589,7 @@ func emitUnassessedFilterWarning(output io.Writer, stageName string, bom corpus.
 	fields := map[string]bool{}
 	affected := 0
 	for _, selected := range bom.Shards {
-		if selected.RecordSchema >= shard.TextRecordSchema {
+		if selected.RecordKind == record.KindConversation || selected.RecordSchema >= shard.TextRecordSchema {
 			continue
 		}
 		corpusPath := selectedCorpusGroup(selected.Manifest, bom.Paths)

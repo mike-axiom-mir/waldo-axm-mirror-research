@@ -48,12 +48,14 @@ type Manifest struct {
 	Name         string                `json:"name"`
 	Title        string                `json:"title"`
 	Description  string                `json:"description"`
+	Content      *Content              `json:"content,omitempty"`
 	License      string                `json:"license,omitempty"`
 	Licenses     []string              `json:"licenses,omitempty"`
 	Format       string                `json:"format,omitempty"`
 	Sources      []Source              `json:"sources"`
 	ConvertedBy  Conversion            `json:"converted_by"`
 	RecordSchema int                   `json:"record_schema,omitempty"`
+	RecordKind   string                `json:"record_kind,omitempty"`
 	Assessment   *ContentAssessment    `json:"assessment,omitempty"`
 	Redaction    *ContentRedaction     `json:"redaction,omitempty"`
 	Processing   *Processing           `json:"processing,omitempty"`
@@ -136,6 +138,7 @@ type Source struct {
 	Name            string           `json:"name"`
 	Source          string           `json:"source"`
 	Version         string           `json:"version,omitempty"`
+	InputFormats    []string         `json:"input_formats,omitempty"`
 	License         string           `json:"license,omitempty"`
 	LicenseEvidence *LicenseEvidence `json:"license_evidence,omitempty"`
 	URL             string           `json:"url"`
@@ -174,16 +177,17 @@ type ModalityMeasure struct {
 // encoded it. Tri-state declarations use "yes", "no", or "unknown"; absence
 // means the contributor did not make a declaration.
 type Content struct {
-	Types            []string `json:"types,omitempty" yaml:"types,omitempty"`
-	Languages        []string `json:"languages,omitempty" yaml:"languages,omitempty"`
-	Geographies      []string `json:"geographies,omitempty" yaml:"geographies,omitempty"`
-	Demographics     []string `json:"demographics,omitempty" yaml:"demographics,omitempty"`
-	From             string   `json:"from,omitempty" yaml:"from,omitempty"`
-	To               string   `json:"to,omitempty" yaml:"to,omitempty"`
-	Selection        string   `json:"selection,omitempty" yaml:"selection,omitempty"`
-	PersonalData     string   `json:"personal_data,omitempty" yaml:"personal_data,omitempty"`
-	Copyrighted      string   `json:"copyrighted,omitempty" yaml:"copyrighted,omitempty"`
-	MachineGenerated string   `json:"machine_generated,omitempty" yaml:"machine_generated,omitempty"`
+	Types                []string `json:"types,omitempty" yaml:"types,omitempty"`
+	Languages            []string `json:"languages,omitempty" yaml:"languages,omitempty"`
+	ProgrammingLanguages []string `json:"programming_languages,omitempty" yaml:"programming_languages,omitempty"`
+	Geographies          []string `json:"geographies,omitempty" yaml:"geographies,omitempty"`
+	Demographics         []string `json:"demographics,omitempty" yaml:"demographics,omitempty"`
+	From                 string   `json:"from,omitempty" yaml:"from,omitempty"`
+	To                   string   `json:"to,omitempty" yaml:"to,omitempty"`
+	Selection            string   `json:"selection,omitempty" yaml:"selection,omitempty"`
+	PersonalData         string   `json:"personal_data,omitempty" yaml:"personal_data,omitempty"`
+	Copyrighted          string   `json:"copyrighted,omitempty" yaml:"copyrighted,omitempty"`
+	MachineGenerated     string   `json:"machine_generated,omitempty" yaml:"machine_generated,omitempty"`
 }
 
 // Acquisition records how an upstream source was obtained. Variant details

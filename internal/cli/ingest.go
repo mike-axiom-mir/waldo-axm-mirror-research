@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"io"
 	"path"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -29,6 +28,9 @@ var newIngestPublisher = func(ctx context.Context, publish config.Publish) (look
 var ingestRecipeRunner ingest.CommandRunner = ingest.ExecCommandRunner{}
 
 func runIndexIngest(context Context, args []string, stdout, stderr io.Writer) error {
+	if boolOption(context, "update") {
+		return runIndexIngestUpdate(context, args, stdout, stderr)
+	}
 	options, err := cobraIndexIngestOptions(context, args)
 	if err != nil {
 		return err
@@ -37,7 +39,19 @@ func runIndexIngest(context Context, args []string, stdout, stderr io.Writer) er
 	if err != nil {
 		return err
 	}
+	loadedCorpus, isCorpusDirectory, err := ingest.LoadCorpusDirectory(options.Inputs[0])
+	if err != nil {
+		return err
+	}
+	loadedSource, isSourceDirectory, err := ingest.LoadSourceDirectory(options.Inputs[0])
+	if err != nil {
+		return err
+	}
+	requestedDestination := options.Request.Destination
 	if isRecipe {
+		if requestedDestination == "" {
+			return fmt.Errorf("ingest recipes require an explicit destination")
+		}
 		if len(options.MetadataOptions) > 0 {
 			return fmt.Errorf("recipe input owns corpus metadata; remove %s", strings.Join(options.MetadataOptions, ", "))
 		}
@@ -50,8 +64,28 @@ func runIndexIngest(context Context, args []string, stdout, stderr io.Writer) er
 			options.Request.RecordMaximumBytes = loadedRecipe.Recipe.RecordMaximumBytes
 			options.Request.Profile = loadedRecipe.Recipe.Input
 		}
-	} else if options.Request.Title == "" || options.Request.License == "" || options.Request.Source.URL == "" || options.Request.Source.Category == "" {
-		return fmt.Errorf("direct index ingest requires --title, --license, --source, and --source-category")
+	} else if isCorpusDirectory {
+		if requestedDestination == "" {
+			return fmt.Errorf("corpus directory ingestion requires an explicit destination")
+		}
+		if len(options.MetadataOptions) > 0 {
+			return fmt.Errorf("corpus directory manifest owns corpus metadata; remove %s", strings.Join(options.MetadataOptions, ", "))
+		}
+		loadedCorpus.Apply(&options.Request)
+		options.Inputs = loadedCorpus.InputPaths()
+	} else if isSourceDirectory {
+		if requestedDestination == "" {
+			return fmt.Errorf("source directory ingestion requires an explicit destination")
+		}
+		if len(options.MetadataOptions) > 0 {
+			return fmt.Errorf("source directory manifest owns corpus metadata; remove %s", strings.Join(options.MetadataOptions, ", "))
+		}
+		loadedSource.Apply(&options.Request)
+		options.Inputs = loadedSource.InputPaths()
+	} else if options.Request.Destination == "" {
+		return fmt.Errorf("direct index ingest requires a destination")
+	} else if options.Request.Title == "" || options.Request.License == "" || options.Request.Source.URL == "" || options.Request.Source.Category == "" || options.Request.Source.Content == nil || len(options.Request.Source.Content.Languages) == 0 {
+		return fmt.Errorf("direct index ingest requires --title, --license, --source, --source-category, and --language (repeat for each human language; use und if unknown)")
 	}
 	if !isRecipe && options.InputProfile != "" {
 		options.Request.Profile, err = ingest.LoadInputProfile(options.InputProfile)
@@ -74,24 +108,9 @@ func runIndexIngest(context Context, args []string, stdout, stderr io.Writer) er
 	if managedDefault && !explicitIndexPath(options.Request.Destination) {
 		return managedIndexMutationError("ingest into")
 	}
-	explicitDestination := explicitIndexPath(options.Request.Destination)
-	if !explicitDestination {
-		if err := refreshIndexCheckout(context.Execution, configuredRoot, stderr); err != nil {
-			return err
-		}
-	}
 	target, err := waldoindex.ResolveDestinationConfigured(configuredRoot, options.Request.Destination)
 	if err != nil {
 		return err
-	}
-	if explicitDestination {
-		if err := refreshIndexCheckout(context.Execution, target.Root, stderr); err != nil {
-			return err
-		}
-		target, err = waldoindex.ResolveDestinationConfigured(configuredRoot, options.Request.Destination)
-		if err != nil {
-			return err
-		}
 	}
 	managed, err := config.IsManagedIndexPath(target.Root)
 	if err != nil {
@@ -152,11 +171,21 @@ func runIndexIngest(context Context, args []string, stdout, stderr io.Writer) er
 		if err != nil {
 			return err
 		}
+		if isCorpusDirectory {
+			if err := loadedCorpus.VerifyProbe(probe); err != nil {
+				return err
+			}
+		} else if isSourceDirectory {
+			if err := loadedSource.VerifyProbe(probe); err != nil {
+				return err
+			}
+		}
 	}
 	plan, err := ingest.NewPlan(probe, options.Request)
 	if err != nil {
 		return err
 	}
+	emitIngestForceFormatWarning(stderr, plan, context.JSON)
 	emitIngestFallbackWarning(stderr, plan, context.JSON)
 	identity, err := plan.Identity()
 	if err != nil {
@@ -205,6 +234,10 @@ func runIndexIngest(context Context, args []string, stdout, stderr io.Writer) er
 				return err
 			}
 		}
+		contribution, err = ingest.ApplyContribution(target.Root, contribution)
+		if err != nil {
+			return fmt.Errorf("apply verified contribution %s: %w", contribution.Root, err)
+		}
 		emitIngestExclusionWarning(stderr, assembly, plan)
 		if context.JSON {
 			return writeJSON(stdout, struct {
@@ -227,7 +260,8 @@ func runIndexIngest(context Context, args []string, stdout, stderr io.Writer) er
 		}
 		fmt.Fprintf(stdout, "  tokens       %s (%s)\n", humanCount(tokens), manifest.ConvertedBy.Tokenizer)
 		fmt.Fprintf(stdout, "  objects      %s published to %s\n", humanInteger(int64(len(publication.Objects))), publication.BaseURL)
-		fmt.Fprintf(stdout, "  contribution %s (%s writes, %s removals)\n", contribution.Root, humanInteger(int64(len(contribution.Files))), humanInteger(int64(len(contribution.Removed))))
+		fmt.Fprintf(stdout, "  index        applied %s writes, %s removals to %s\n", humanInteger(int64(len(contribution.Files))), humanInteger(int64(len(contribution.Removed))), contribution.IndexRoot)
+		fmt.Fprintf(stdout, "  contribution %s (retained)\n", contribution.Root)
 		for _, file := range contribution.Files {
 			fmt.Fprintf(stdout, "    %s\n", file)
 		}
@@ -238,15 +272,7 @@ func runIndexIngest(context Context, args []string, stdout, stderr io.Writer) er
 			fmt.Fprintln(stdout, "local publication is for end-to-end testing only; do not commit this overlay to a shared index")
 			return nil
 		}
-		fmt.Fprintln(stdout, "next steps (after reviewing the overlay and confirming the checkout is unchanged):")
-		fmt.Fprintf(stdout, "  cp -R -- %s/. %s/\n", shellQuote(contribution.Root), shellQuote(target.Root))
-		if len(contribution.Removed) > 0 {
-			fmt.Fprintf(stdout, "  rm --")
-			for _, file := range contribution.Removed {
-				fmt.Fprintf(stdout, " %s", shellQuote(filepath.Join(target.Root, filepath.FromSlash(file))))
-			}
-			fmt.Fprintln(stdout)
-		}
+		fmt.Fprintln(stdout, "next steps (after reviewing the applied index changes):")
 		fmt.Fprintf(stdout, "  waldo index verify %s\n", shellQuote(target.Root))
 		fmt.Fprintf(stdout, "  git -C %s add --", shellQuote(target.Root))
 		for _, file := range contribution.Files {
@@ -336,6 +362,31 @@ func emitIngestFallbackWarning(output io.Writer, plan ingest.Plan, jsonOutput bo
 	}
 }
 
+func emitIngestForceFormatWarning(output io.Writer, plan ingest.Plan, jsonOutput bool) {
+	counts := map[string]int64{}
+	for _, input := range plan.Inputs {
+		if input.DetectedFormat != "" {
+			counts[input.DetectedFormat+"->"+input.Artifact.Format]++
+		}
+	}
+	if len(counts) == 0 {
+		return
+	}
+	keys := make([]string, 0, len(counts))
+	for key := range counts {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		message := fmt.Sprintf("WALDO FORCE-FORMAT OVERRIDE %s FOR %s INPUT FILES; AUTOMATIC FORMAT SELECTION WAS OVERRIDDEN, BUT THE SELECTED ADAPTER WILL STILL PARSE AND VALIDATE CONTENT", strings.ToUpper(key), humanInteger(counts[key]))
+		if jsonOutput {
+			_ = json.NewEncoder(output).Encode(ingest.ProgressEvent{Phase: "plan", Status: "warning", Message: message})
+			continue
+		}
+		fmt.Fprintf(output, "WARNING: %s.\n", message)
+	}
+}
+
 type recipeJSONLogWriter struct {
 	mu     sync.Mutex
 	output io.Writer
@@ -389,6 +440,7 @@ func shellQuote(value string) string {
 
 func ingestProgressReporter(output io.Writer, jsonOutput bool) ingest.ProgressSink {
 	last := map[string]int64{}
+	var ingestBytes, ingestTotalBytes, ingestFiles, ingestTotalFiles, ingestDocs, ingestTokens, ingestShards int64
 	return func(event ingest.ProgressEvent) {
 		if jsonOutput {
 			_ = json.NewEncoder(output).Encode(event)
@@ -411,8 +463,45 @@ func ingestProgressReporter(output io.Writer, jsonOutput bool) ingest.ProgressSi
 			fmt.Fprintf(output, "convert  %s using %s\n", event.Input, event.Adapter)
 		case event.Phase == "convert" && event.Status == "completed":
 			fmt.Fprintf(output, "converted %s (%s)\n", event.Input, humanBytes(event.Bytes))
+		case event.Phase == "ingest":
+			if event.TotalBytes > 0 {
+				ingestTotalBytes = event.TotalBytes
+			}
+			if event.TotalFiles > 0 {
+				ingestTotalFiles = event.TotalFiles
+			}
+			if event.Bytes > 0 {
+				ingestBytes = event.Bytes
+			}
+			if event.Files > 0 {
+				ingestFiles = event.Files
+			}
+			if event.Docs > 0 || event.Status == "completed" {
+				ingestDocs = event.Docs
+			}
+			if event.Tokens > 0 || event.Status == "completed" {
+				ingestTokens = event.Tokens
+			}
+			label := "ingest  "
+			if event.Status == "started" {
+				label = "ingest started "
+			} else if event.Status == "completed" {
+				label = "ingest complete"
+			}
+			fmt.Fprintf(output, "%s  %s/%s files  %s/%s  %s docs  %s tokens  %s output shards\n",
+				label, humanInteger(ingestFiles), humanInteger(ingestTotalFiles),
+				humanBytes(ingestBytes), humanBytes(ingestTotalBytes),
+				humanInteger(ingestDocs), humanInteger(ingestTokens), humanInteger(ingestShards))
+		case event.Phase == "audit" && event.Status == "started":
+			fmt.Fprintf(output, "audit %d  %s started on worker %d\n", event.Sequence, short, event.Worker)
+		case event.Phase == "audit" && event.Status == "completed":
+			fmt.Fprintf(output, "audit %d  %s completed\n", event.Sequence, short)
+		case event.Phase == "shard" && event.Status == "creating":
+			fmt.Fprintf(output, "creating OpenWALDO Parquet file %d\n", event.Sequence)
 		case event.Phase == "shard" && event.Status == "ready":
-			fmt.Fprintf(output, "shard %d  %s ready (%s)\n", event.Sequence, short, humanBytes(event.Bytes))
+			ingestShards = max(ingestShards, int64(event.Sequence))
+			fmt.Fprintf(output, "created  OpenWALDO Parquet file %d  %s  %s  %s docs  %s tokens\n",
+				event.Sequence, short, humanBytes(event.Bytes), humanInteger(event.Docs), humanInteger(event.Tokens))
 		case event.Phase == "upload" && event.Status == "started":
 			fmt.Fprintf(output, "upload %d  %s started on worker %d\n", event.Sequence, short, event.Worker)
 		case event.Phase == "upload" && event.Status == "progress" && (event.Bytes == event.TotalBytes || event.Bytes-last[event.Shard] >= 64<<20):
@@ -436,6 +525,16 @@ type indexIngestOptions struct {
 }
 
 func cobraIndexIngestOptions(context Context, args []string) (indexIngestOptions, error) {
+	destination := ""
+	if len(args) > 1 {
+		destination = args[1]
+	}
+	languages := repeatedCommaOptions(context, "language")
+	programmingLanguages := repeatedCommaOptions(context, "programming-language")
+	var content *waldoindex.Content
+	if len(languages) > 0 || len(programmingLanguages) > 0 {
+		content = &waldoindex.Content{Languages: languages, ProgrammingLanguages: programmingLanguages}
+	}
 	options := indexIngestOptions{
 		Inputs:       []string{args[0]},
 		DryRun:       boolOption(context, "dry-run"),
@@ -446,21 +545,38 @@ func cobraIndexIngestOptions(context Context, args []string) (indexIngestOptions
 			Description: stringOption(context, "description"),
 			License:     stringOption(context, "license"),
 			TextColumn:  stringOption(context, "text-column"),
-			Destination: args[1],
+			ForceFormat: stringOption(context, "force-format"),
+			Destination: destination,
 			Source: ingest.PlanSource{
 				URL:      stringOption(context, "source"),
 				Name:     stringOption(context, "source-name"),
 				Category: stringOption(context, "source-category"),
+				Content:  content,
 			},
 		},
 	}
 	if options.Workers < 0 || options.Workers > 32 {
 		return indexIngestOptions{}, fmt.Errorf("--workers must be an integer from 1 to 32, or 0 to use lookaside.workers")
 	}
-	for _, name := range []string{"title", "description", "license", "source", "source-name", "source-category", "text-column", "input-profile"} {
+	for _, name := range []string{"title", "description", "license", "source", "source-name", "source-category", "language", "programming-language", "text-column", "input-profile"} {
 		if optionChanged(context, name) {
 			options.MetadataOptions = append(options.MetadataOptions, "--"+name)
 		}
 	}
 	return options, nil
+}
+
+func repeatedCommaOptions(context Context, name string) []string {
+	seen := map[string]bool{}
+	var values []string
+	for _, raw := range stringArrayOption(context, name) {
+		for _, value := range splitComma(raw) {
+			if !seen[value] {
+				seen[value] = true
+				values = append(values, value)
+			}
+		}
+	}
+	sort.Strings(values)
+	return values
 }

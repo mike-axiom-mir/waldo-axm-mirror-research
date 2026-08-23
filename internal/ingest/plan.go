@@ -55,6 +55,7 @@ type PlanSource struct {
 	Name            string                 `json:"name"`
 	License         string                 `json:"license,omitempty"`
 	Version         string                 `json:"version,omitempty"`
+	InputFormats    []string               `json:"input_formats,omitempty"`
 	URL             string                 `json:"url"`
 	Category        string                 `json:"category"`
 	CollectedFrom   string                 `json:"collected_from,omitempty"`
@@ -66,6 +67,7 @@ type PlanSource struct {
 
 type WriterPlan struct {
 	Format               string `json:"format"`
+	RecordKind           string `json:"record_kind"`
 	RecordSchema         int    `json:"record_schema"`
 	Recipe               string `json:"recipe"`
 	AdapterRecipe        string `json:"adapter_recipe"`
@@ -79,12 +81,13 @@ type WriterPlan struct {
 }
 
 type PlanInput struct {
-	Artifact   Artifact     `json:"artifact"`
-	Adapter    string       `json:"adapter"`
-	TextColumn string       `json:"text_column,omitempty"`
-	SourcePath string       `json:"source_path,omitempty"`
-	SourceID   string       `json:"source_id,omitempty"`
-	Profile    InputProfile `json:"profile,omitempty"`
+	Artifact       Artifact     `json:"artifact"`
+	Adapter        string       `json:"adapter"`
+	DetectedFormat string       `json:"detected_format,omitempty"`
+	TextColumn     string       `json:"text_column,omitempty"`
+	SourcePath     string       `json:"source_path,omitempty"`
+	SourceID       string       `json:"source_id,omitempty"`
+	Profile        InputProfile `json:"profile,omitempty"`
 }
 
 type PlanRequest struct {
@@ -96,6 +99,7 @@ type PlanRequest struct {
 	Mode               string
 	MemoryBytes        int64
 	TextColumn         string
+	ForceFormat        string
 	RecordMaximumBytes int64
 	Profile            InputProfile
 	InputRoot          string
@@ -121,9 +125,15 @@ func NewPlan(probe Probe, request PlanRequest) (Plan, error) {
 	if strings.TrimSpace(request.Destination) == "" || strings.TrimSpace(request.Title) == "" {
 		return Plan{}, fmt.Errorf("destination and title are required")
 	}
+	if request.ForceFormat != "" && !slices.Contains([]string{"text", "markdown", "mbox", "json", "jsonl", "parquet", "xml"}, request.ForceFormat) {
+		return Plan{}, fmt.Errorf("unsupported --force-format %q; use text, markdown, mbox, json, jsonl, parquet, or xml", request.ForceFormat)
+	}
 	if len(request.Sources) == 0 {
 		if strings.TrimSpace(request.License) == "" {
 			return Plan{}, fmt.Errorf("license is required")
+		}
+		if request.Profile.Format != "" {
+			request.Source.InputFormats = []string{request.Profile.Format}
 		}
 		if err := normalizePlanSource(&request.Source); err != nil {
 			return Plan{}, err
@@ -141,6 +151,9 @@ func NewPlan(probe Probe, request PlanRequest) (Plan, error) {
 			seen[source.ID] = true
 			source.Source.ID = source.ID
 			source.Source.License = record.NormalizeLicense(source.License)
+			if source.Profile.Format != "" {
+				source.Source.InputFormats = []string{source.Profile.Format}
+			}
 			if source.Source.License == "" {
 				return Plan{}, fmt.Errorf("source %q license is required", source.ID)
 			}
@@ -173,7 +186,7 @@ func NewPlan(probe Probe, request PlanRequest) (Plan, error) {
 		RecipeEvidence: request.RecipeEvidence,
 		Update:         request.Update,
 		Writer: WriterPlan{
-			Format: "parquet", RecordSchema: shard.TextRecordSchema, Recipe: shard.TextWriterRecipe,
+			Format: "parquet", RecordKind: record.KindPretrain, RecordSchema: shard.TextRecordSchema, Recipe: shard.TextWriterRecipe,
 			AdapterRecipe:    "canonical-adapters-2",
 			CompressedTarget: 256 << 20, CompressedMaximum: 512 << 20,
 			RowGroupLogicalBytes: 64 << 20, PageBytes: 1 << 20,
@@ -214,12 +227,27 @@ func NewPlan(probe Probe, request PlanRequest) (Plan, error) {
 			profile, textColumn, inputRoot, sourceID = source.Profile, source.TextColumn, source.InputRoot, source.ID
 			sourceCode = contentIncludesSourceCode(source.Source.Content)
 		}
-		if sourceCode && artifact.Format == "json" {
-			recordTextFallback(&plan, artifact.Format, "text", artifact.Bytes)
+		if request.ForceFormat == "" && profile.Format != "" {
+			if !declaredFormatMatches(profile.Format, artifact, sourceCode) {
+				return Plan{}, fmt.Errorf("%s: manifest declares input format %q but WALDO detected %q; correct the fetcher INI and refetch, or correct the raw data", artifact.Path, profile.Format, artifact.Format)
+			}
+			if artifact.Format != profile.Format {
+				detected := artifact.Format
+				artifact.Format = profile.Format
+				artifact.Evidence = append(artifact.Evidence, "manifest-format:"+detected+"->"+profile.Format)
+			}
+		} else if request.ForceFormat == "" && sourceCode && sourceCodeTextFormat(artifact) {
 			artifact.Format = "text"
 			artifact.Evidence = append(artifact.Evidence, "source-code-context")
 		}
-		input := PlanInput{Artifact: artifact, Profile: profile, SourceID: sourceID}
+		detectedFormat := ""
+		if request.ForceFormat != "" {
+			detectedFormat = artifact.Format
+			artifact.Format = request.ForceFormat
+			artifact.Evidence = append(artifact.Evidence, "forced-format:"+detectedFormat+"->"+request.ForceFormat)
+		}
+		profile = profile.withDefaults()
+		input := PlanInput{Artifact: artifact, Profile: profile, SourceID: sourceID, DetectedFormat: detectedFormat}
 		if inputRoot != "" {
 			root, err := filepath.Abs(inputRoot)
 			if err != nil {
@@ -260,40 +288,24 @@ func NewPlan(probe Probe, request PlanRequest) (Plan, error) {
 			input.Adapter = ProfileXMLRecord
 		default:
 			switch artifact.Format {
-			case "text", "markdown":
+			case "text", "markdown", "mbox":
 				input.Adapter = artifact.Format
 			case "parquet":
 				if textColumn == "" {
-					recordTextFallback(&plan, artifact.Format, "opaque-base64", artifact.Bytes)
-					input.Adapter = "opaque-base64"
-					input.Artifact.Evidence = append(input.Artifact.Evidence, "opaque-fallback:undeclared-parquet-schema")
-				} else {
-					column, err := chooseTextColumn(artifact, textColumn)
-					if err != nil {
-						return Plan{}, fmt.Errorf("%s: %w", artifact.Path, err)
-					}
-					input.Adapter = "parquet"
-					input.TextColumn = column
+					return Plan{}, fmt.Errorf("%s: Parquet input requires a record input profile or an explicit text column; use a manifest [input] mapping or --input-profile/--text-column", artifact.Path)
 				}
-			case "jsonl":
-				if artifact.Compression == "" {
-					recordTextFallback(&plan, artifact.Format, "text", artifact.Bytes)
-					input.Artifact.Format = "text"
-					input.Artifact.Evidence = append(input.Artifact.Evidence, "raw-text-fallback:jsonl")
-					input.Adapter = "text"
-				} else {
-					recordTextFallback(&plan, artifact.Format, "opaque-base64", artifact.Bytes)
-					input.Adapter = "opaque-base64"
-					input.Artifact.Evidence = append(input.Artifact.Evidence, "opaque-fallback:compressed-jsonl")
+				column, err := chooseTextColumn(artifact, textColumn)
+				if err != nil {
+					return Plan{}, fmt.Errorf("%s: %w", artifact.Path, err)
 				}
-			case "json", "html", "xml", "warc":
-				recordTextFallback(&plan, artifact.Format, "text", artifact.Bytes)
-				input.Artifact.Format = "text"
-				input.Artifact.Evidence = append(input.Artifact.Evidence, "raw-text-fallback:"+artifact.Format)
-				input.Adapter = "text"
+				input.Adapter = "parquet"
+				input.TextColumn = column
+			case "json", "jsonl":
+				return Plan{}, fmt.Errorf("%s: %s input requires a record input profile; use a manifest [input] mapping or --input-profile, or deliberately override it with --force-format text", artifact.Path, strings.ToUpper(artifact.Format))
+			case "xml":
+				return Plan{}, fmt.Errorf("%s: XML input requires an xml-record input profile; use a manifest [input] mapping or --input-profile, or deliberately override it with --force-format text", artifact.Path)
 			default:
-				recordTextFallback(&plan, artifact.Format, "opaque-base64", artifact.Bytes)
-				input.Adapter = "opaque-base64"
+				return Plan{}, fmt.Errorf("%s: unsupported raw format %q; add a general ingestion adapter or deliberately select an existing one with --force-format", artifact.Path, artifact.Format)
 			}
 		}
 		plan.Inputs = append(plan.Inputs, input)
@@ -309,10 +321,51 @@ func NewPlan(probe Probe, request PlanRequest) (Plan, error) {
 			}
 		}
 	}
+	logicalKind := ""
+	for _, input := range plan.Inputs {
+		kind := record.KindPretrain
+		if input.Profile.Type == ProfileDialoguePair || input.Profile.Type == ProfileChatMessages || input.Profile.Type == ProfileRankedConversationTree {
+			kind = record.KindConversation
+		}
+		if logicalKind != "" && logicalKind != kind {
+			return Plan{}, fmt.Errorf("one ingestion plan cannot mix %s and %s logical records", logicalKind, kind)
+		}
+		logicalKind = kind
+		if kind == record.KindConversation {
+			plan.Writer.RecordKind = record.KindConversation
+			plan.Writer.RecordSchema = shard.ConversationRecordSchema
+			plan.Writer.Recipe = shard.ConversationWriterRecipe
+			plan.Writer.AdapterRecipe = "canonical-conversation-adapters-1"
+		}
+	}
 	if err := plan.Validate(); err != nil {
 		return Plan{}, err
 	}
 	return plan, nil
+}
+
+func sourceCodeTextFormat(artifact Artifact) bool {
+	if artifact.Compression != "" {
+		return false
+	}
+	return slices.Contains([]string{"text", "markdown", "json", "jsonl", "html", "xml", "warc", "mbox"}, artifact.Format)
+}
+
+func declaredFormatMatches(expected string, artifact Artifact, sourceCode bool) bool {
+	if expected == artifact.Format {
+		return true
+	}
+	if artifact.Compression != "" {
+		return false
+	}
+	switch expected {
+	case "text":
+		return artifact.Format == "markdown" || sourceCode && sourceCodeTextFormat(artifact)
+	case "markdown":
+		return artifact.Format == "text" || artifact.Format == "markdown"
+	default:
+		return false
+	}
 }
 
 func recordTextFallback(plan *Plan, format, adapter string, bytes int64) {
@@ -349,7 +402,7 @@ func normalizePlanSource(source *PlanSource) error {
 	source.Category = category
 	return index.ValidateSourceProvenance(index.Source{
 		Category: category, CollectedFrom: source.CollectedFrom, CollectedTo: source.CollectedTo,
-		LicenseEvidence: source.LicenseEvidence, Content: source.Content, Acquisition: source.Acquisition,
+		InputFormats: source.InputFormats, LicenseEvidence: source.LicenseEvidence, Content: source.Content, Acquisition: source.Acquisition,
 	})
 }
 
@@ -408,7 +461,9 @@ func chooseTextColumn(artifact Artifact, requested string) (string, error) {
 }
 
 func (plan Plan) Validate() error {
-	if plan.Kind != "waldo-ingest-plan" || plan.Schema != 1 || plan.Writer.Format != "parquet" || plan.Writer.RecordSchema != shard.TextRecordSchema || plan.Writer.Recipe != shard.TextWriterRecipe || plan.Writer.AdapterRecipe != "canonical-adapters-2" {
+	textWriter := plan.Writer.RecordKind == record.KindPretrain && plan.Writer.RecordSchema == shard.TextRecordSchema && plan.Writer.Recipe == shard.TextWriterRecipe && plan.Writer.AdapterRecipe == "canonical-adapters-2"
+	conversationWriter := plan.Writer.RecordKind == record.KindConversation && plan.Writer.RecordSchema == shard.ConversationRecordSchema && plan.Writer.Recipe == shard.ConversationWriterRecipe && plan.Writer.AdapterRecipe == "canonical-conversation-adapters-1"
+	if plan.Kind != "waldo-ingest-plan" || plan.Schema != 1 || plan.Writer.Format != "parquet" || (!textWriter && !conversationWriter) {
 		return fmt.Errorf("unsupported ingestion plan identity or writer")
 	}
 	cleanDestination := filepath.ToSlash(filepath.Clean(plan.Destination))
@@ -442,7 +497,7 @@ func (plan Plan) Validate() error {
 	}
 	if plan.Update != nil {
 		cleanManifest := filepath.ToSlash(filepath.Clean(filepath.FromSlash(plan.Update.Manifest)))
-		if cleanManifest == "." || cleanManifest != plan.Update.Manifest || filepath.IsAbs(filepath.FromSlash(plan.Update.Manifest)) || strings.HasPrefix(cleanManifest, "../") || !validSHA256(plan.Update.ManifestSHA256) || (plan.Update.Mode != "append" && plan.Update.Mode != "rebuild-shards") {
+		if cleanManifest == "." || cleanManifest != plan.Update.Manifest || filepath.IsAbs(filepath.FromSlash(plan.Update.Manifest)) || strings.HasPrefix(cleanManifest, "../") || !validSHA256(plan.Update.ManifestSHA256) || plan.Update.Mode != "rebuild-shards" {
 			return fmt.Errorf("ingestion update has invalid manifest identity or mode")
 		}
 	}
@@ -469,6 +524,9 @@ func (plan Plan) Validate() error {
 		if _, license, err := plan.sourceFor(input); err != nil || license == "" {
 			return fmt.Errorf("input %s has invalid source assignment", artifact.Path)
 		}
+		if input.DetectedFormat != "" && !slices.Contains([]string{"empty", "text", "markdown", "mbox", "json", "jsonl", "parquet", "xml", "html", "warc", "compressed", "unknown"}, input.DetectedFormat) {
+			return fmt.Errorf("input %s has invalid overridden detected format %q", artifact.Path, input.DetectedFormat)
+		}
 		if err := input.Profile.Validate(); err != nil {
 			return fmt.Errorf("input %s: %w", artifact.Path, err)
 		}
@@ -483,6 +541,10 @@ func (plan Plan) Validate() error {
 		case "text", "markdown":
 			if artifact.Format != input.Adapter || input.TextColumn != "" {
 				return fmt.Errorf("input %s has an inconsistent text adapter", artifact.Path)
+			}
+		case "mbox":
+			if artifact.Format != "mbox" || input.TextColumn != "" || (artifact.Compression != "" && artifact.Compression != "gzip" && artifact.Compression != "zstd") {
+				return fmt.Errorf("input %s has an inconsistent mbox adapter", artifact.Path)
 			}
 		case "parquet":
 			if artifact.Format != "parquet" || input.TextColumn == "" {
@@ -522,7 +584,7 @@ func validatePlanSource(source PlanSource) error {
 	}
 	return index.ValidateSourceProvenance(index.Source{
 		Category: category, CollectedFrom: source.CollectedFrom, CollectedTo: source.CollectedTo,
-		LicenseEvidence: source.LicenseEvidence, Content: source.Content, Acquisition: source.Acquisition,
+		InputFormats: source.InputFormats, LicenseEvidence: source.LicenseEvidence, Content: source.Content, Acquisition: source.Acquisition,
 	})
 }
 

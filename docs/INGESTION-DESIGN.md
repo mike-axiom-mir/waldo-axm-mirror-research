@@ -188,6 +188,20 @@ pretraining `text` column:
 - task-specific additions use a new schema or typed optional field, not an
   undocumented shape inside `meta`.
 
+Conversation schema 1 stores a canonical JSON payload containing ordered
+`messages` (`role`, `content`, and optional mapped `context`) and optional `tools`. Its Parquet object is
+identified by `waldo.record_kind=conversation`; its payload is never a rendered
+prompt. Source mappings, role aliases, ranked-branch selection, privacy
+redaction, and validation are pinned ingestion transformations. Chat templates,
+special-token framing, supervised roles, truncation, and packing are pinned
+model-training transformations. ADR 0060 defines this boundary.
+
+For a conversation shard, the manifest `token_count` is the reproducible
+reference-counter measurement of that canonical JSON payload. It is useful for
+storage and corpus accounting, but is not a claim about the size of every
+possible rendered conversation. Model preflight computes the exact target count
+after applying the stage's pinned conversation template and supervised roles.
+
 The common identity, source, license, and evidence vocabulary is shared. The
 payload is schema-specific.
 
@@ -432,23 +446,28 @@ An interrupted `assembling` state removes only WALDO-owned temporary shard
 files, rebuilds scratch deduplication state, and deterministically resumes from
 the immutable inputs and any content-addressed completed objects.
 
-Normal contribution uses a bounded producer/uploader pipeline. Each finalized
-and verified shard enters a small upload queue while assembly continues. A
-configured number of workers upload content-addressed objects in parallel;
-when the queue is full, backpressure stops assembly from consuming unbounded
-disk. After remote size and checksum verification, the coordinator journals
-the remote object, synchronizes the journal, removes the staged shard, and
-synchronizes the staging directory. Ingestion does not populate the read cache
-unless the user explicitly requests local retention. A manifest overlay is not
+Normal contribution has separate assembly and publication phases. The entire
+corpus is converted into local OpenWALDO Parquet shards, and every shard passes
+schema, checksum, token-count, and privacy audits before any upload begins.
+This requires staging space for the complete assembled corpus, but a conversion
+or audit failure cannot publish partial output. After assembly succeeds, a
+configured number of workers upload the content-addressed objects in parallel.
+After remote size and checksum verification, the coordinator journals the
+remote object, synchronizes the journal, removes the staged shard, and
+synchronizes the staging directory. An interrupted publication resumes from
+the verified journal entries. Ingestion does not populate the read cache unless
+the user explicitly requests local retention. A manifest overlay is not
 created until every referenced remote object has been verified.
 
 Progress is a structured event stream shared by the terminal and `--json`
 frontends. Events identify the phase, input path and row group where applicable,
 logical and encoded byte counts, shard sequence and digest, upload worker and
-remote destination, and bytes reclaimed by purge. Human output is rate-limited
-and redraws concise status; machine output is newline-delimited JSON. Neither
-mode requires parsing log prose to recover execution state—the journal remains
-authoritative.
+remote destination, and bytes reclaimed by purge. Human output prints distinct
+messages when each OpenWALDO Parquet file starts and finishes, including its
+digest, size, document count, and token count; regular ingest progress includes
+the completed output-file count. Machine output is newline-delimited JSON.
+Neither mode requires parsing log prose to recover execution state—the journal
+remains authoritative.
 
 For distributed conversion, immutable work units are input artifact ranges or
 canonical hash partitions. Workers return verified objects plus facts;
@@ -456,22 +475,19 @@ publication of the contribution remains a separate atomic coordinator step.
 Remote execution is not required for the first implementation, but local file
 formats and identities must not preclude it.
 
-The local contribution step writes a minimal overlay: the new schema-1
-YAML manifest with additive provenance for record schema 1, its leaf `index.yaml`, and only the
-ancestor directory indexes that change. It validates the overlay against the
-same manifest contract used to read the public index and is idempotent only
-when every staged byte still matches. It never edits Git, uploads to the
-declared public object base, commits, pushes, or opens a pull request.
+The local contribution step writes a minimal overlay: the new schema-1 YAML
+manifest with additive provenance for record schema 1, its leaf `index.yaml`,
+and only the ancestor directory indexes that change. After publication, WALDO
+atomically applies each overlay file to the selected index working tree and
+validates the complete index. A failed application restores the prior files;
+the overlay is retained for recovery and review. WALDO does not commit, push,
+or open a pull request.
 
 Existing-corpus updates pin the current manifest's byte SHA-256 in the
-ingestion plan. Append mode verifies and scans existing canonical shards into
-the same exact disk-backed content-identity set used for within-run
-deduplication, then appends only newly admitted objects and source evidence.
-Complete `--rebuild-shards` mode instead treats the supplied recipe output as
-the authoritative corpus and never reads old shard bodies. It replaces shard
-and source arrays after normal publication verification. Both modes write the
-touched metadata as schema-1 YAML and preserve old lookaside objects by
-default.
+ingestion plan. Every update treats the supplied input as the complete
+authoritative corpus and never reads old shard bodies. It replaces shard and
+source arrays after normal publication verification, writes touched metadata
+as schema-1 YAML, and preserves old lookaside objects by default.
 
 ## Multimodal material
 

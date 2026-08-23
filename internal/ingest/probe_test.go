@@ -139,7 +139,7 @@ func TestNewPlanPinsMappingsAndIdentity(t *testing.T) {
 	}
 }
 
-func TestNewPlanFallsBackForAmbiguousParquetMapping(t *testing.T) {
+func TestNewPlanRejectsParquetWithoutMapping(t *testing.T) {
 	type ambiguousRow struct {
 		Text    string `parquet:"text"`
 		Content string `parquet:"content"`
@@ -156,16 +156,69 @@ func TestNewPlanFallsBackForAmbiguousParquetMapping(t *testing.T) {
 		Destination: "core/example", Title: "Example", License: "CC0-1.0",
 		Source: PlanSource{Name: "example", URL: "https://example.test", Category: "public-dataset"},
 	}
-	plan, err := NewPlan(probe, request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if plan.Inputs[0].Adapter != "opaque-base64" {
-		t.Fatalf("adapter = %q, want opaque-base64", plan.Inputs[0].Adapter)
+	if _, err := NewPlan(probe, request); err == nil || !strings.Contains(err.Error(), "Parquet input requires a record input profile or an explicit text column") {
+		t.Fatalf("error = %v", err)
 	}
 	request.TextColumn = "content"
 	if _, err := NewPlan(probe, request); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestNewPlanForceFormatPinsOverride(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "unknown.bin")
+	if err := os.WriteFile(path, []byte{0, 1, 2}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	probe, err := ProbePaths(context.Background(), []string{path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := NewPlan(probe, PlanRequest{
+		Destination: "core/example", Title: "Example", License: "CC0-1.0", ForceFormat: "text",
+		Source: PlanSource{Name: "example", URL: "https://example.test", Category: "public-dataset"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Inputs) != 1 || plan.Inputs[0].DetectedFormat != "unknown" || plan.Inputs[0].Artifact.Format != "text" || plan.Inputs[0].Adapter != "text" {
+		t.Fatalf("forced plan = %+v", plan)
+	}
+	if err := StreamCanonicalTextBatches(context.Background(), plan, func(TextBatch) error { return nil }); err == nil {
+		t.Fatal("forced text adapter did not validate invalid UTF-8/NUL content")
+	}
+}
+
+func TestNewPlanRejectsUnknownForceFormat(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "input.txt")
+	writeProbeFile(t, path, "text")
+	probe, err := ProbePaths(context.Background(), []string{path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = NewPlan(probe, PlanRequest{
+		Destination: "core/example", Title: "Example", License: "CC0-1.0", ForceFormat: "imaginary",
+		Source: PlanSource{Name: "example", URL: "https://example.test", Category: "public-dataset"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "unsupported --force-format") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestNewPlanRejectsManifestFormatMismatch(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "input.txt")
+	writeProbeFile(t, path, "plain text\n")
+	probe, err := ProbePaths(context.Background(), []string{path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = NewPlan(probe, PlanRequest{
+		Destination: "core/example", Title: "Example", License: "CC0-1.0",
+		Source:  PlanSource{Name: "example", URL: "https://example.test", Category: "public-dataset"},
+		Profile: InputProfile{Format: "jsonl", Type: ProfileRecordMap, Fields: ProfileFields{Text: []string{"text"}}},
+	})
+	if err == nil || !strings.Contains(err.Error(), `manifest declares input format "jsonl" but WALDO detected "text"`) || !strings.Contains(err.Error(), "correct the fetcher INI") {
+		t.Fatalf("error = %v", err)
 	}
 }
 
@@ -200,6 +253,9 @@ func TestProbePathsRejectsSymlinks(t *testing.T) {
 
 func writeProbeFile(t *testing.T, path, contents string) {
 	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
 		t.Fatal(err)
 	}

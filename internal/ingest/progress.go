@@ -24,6 +24,10 @@ type ProgressEvent struct {
 	Worker         int    `json:"worker,omitempty"`
 	Bytes          int64  `json:"bytes,omitempty"`
 	TotalBytes     int64  `json:"total_bytes,omitempty"`
+	Files          int64  `json:"files,omitempty"`
+	TotalFiles     int64  `json:"total_files,omitempty"`
+	Docs           int64  `json:"docs,omitempty"`
+	Tokens         int64  `json:"tokens,omitempty"`
 	ReclaimedBytes int64  `json:"reclaimed_bytes,omitempty"`
 	Message        string `json:"message,omitempty"`
 }
@@ -50,4 +54,14 @@ func emitProgress(ctx context.Context, event ProgressEvent) {
 		defer emitter.mu.Unlock()
 		emitter.sink(event)
 	}
+}
+
+func proportionalProgress(total, current, count int64) int64 {
+	if total <= 0 || current <= 0 || count <= 0 {
+		return 0
+	}
+	if current >= count {
+		return total
+	}
+	return int64(float64(total) * (float64(current) / float64(count)))
 }

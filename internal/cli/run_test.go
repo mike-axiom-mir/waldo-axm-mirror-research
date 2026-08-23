@@ -8,6 +8,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -82,7 +83,7 @@ func TestIndexAddDryRunProducesImmutablePlan(t *testing.T) {
 	code := Run([]string{
 		"index", "ingest", input, filepath.Join(root, "core", "example"),
 		"--title", "Example", "--license", "CC0-1.0",
-		"--source", "https://example.test/data", "--source-category", "public-dataset",
+		"--source", "https://example.test/data", "--source-category", "public-dataset", "--language", "en",
 		"--dry-run", "--json",
 	}, &stdout, &stderr)
 	if code != 0 {
@@ -109,6 +110,57 @@ func TestIndexAddDryRunProducesImmutablePlan(t *testing.T) {
 	}
 }
 
+func TestIndexIngestSourceDirectoryRecursesRawAndUsesManifest(t *testing.T) {
+	handoff := t.TempDir()
+	raw := filepath.Join(handoff, "raw", "nested")
+	if err := os.MkdirAll(raw, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("Training text.\n")
+	if err := os.WriteFile(filepath.Join(raw, "document.txt"), content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fileHash := sha256.Sum256(content)
+	inventory := fmt.Sprintf("%x\t%d\tnested/document.txt\n", fileHash, len(content))
+	treeHash := sha256.Sum256([]byte(inventory))
+	manifest := fmt.Sprintf(`{
+  "kind":"waldo-source-directory","schema":1,
+  "corpus":{"id":"source-example","title":"Source Example","description":"Fetcher handoff."},
+  "sources":[{"id":"source-example","path":"","license":"CC0-1.0","source":{"name":"Example","url":"https://example.test/data","category":"public-dataset","license_evidence":{"declaration":"CC0-1.0"}},"input":{"format":"text"},"artifacts":[{"url":"https://example.test/data/document.txt","path":"nested/document.txt"}]}],
+  "fetcher":{},"raw":{"path":"raw","file_count":1,"byte_count":%d,"tree_sha256":"%x"}
+}`, len(content), treeHash)
+	if err := os.WriteFile(filepath.Join(handoff, "manifest.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	indexRoot := emptyCLIIndex(t)
+	t.Setenv("WALDO_CONFIG", filepath.Join(t.TempDir(), "config.json"))
+	if err := config.Save(config.Config{Index: indexRoot}); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"--json", "index", "ingest", handoff, "core/source-example", "--dry-run"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("Run() code = %d, stderr = %q", code, stderr.String())
+	}
+	var output struct {
+		Plan struct {
+			Destination string `json:"destination"`
+			Inputs      []struct {
+				Artifact struct {
+					Path string `json:"path"`
+				} `json:"artifact"`
+			} `json:"inputs"`
+		} `json:"plan"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
+		t.Fatal(err)
+	}
+	if output.Plan.Destination != "core/source-example" || len(output.Plan.Inputs) != 1 ||
+		output.Plan.Inputs[0].Artifact.Path != filepath.Join(raw, "document.txt") {
+		t.Fatalf("source-directory plan = %+v", output.Plan)
+	}
+}
+
 func TestIndexIngestResolvesRelativeDestinationAgainstConfiguredIndex(t *testing.T) {
 	input := filepath.Join(t.TempDir(), "document.txt")
 	if err := os.WriteFile(input, []byte("Training text.\n"), 0o644); err != nil {
@@ -122,9 +174,9 @@ func TestIndexIngestResolvesRelativeDestinationAgainstConfiguredIndex(t *testing
 	t.Chdir(t.TempDir())
 	var stdout, stderr bytes.Buffer
 	code := Run([]string{
-		"--json", "index", "ingest", input, "./core/example",
+		"--json", "index", "ingest", input, "core/example",
 		"--title", "Example", "--license", "CC0-1.0",
-		"--source", "https://example.test/data", "--source-category", "public-dataset", "--dry-run",
+		"--source", "https://example.test/data", "--source-category", "public-dataset", "--language", "en", "--dry-run",
 	}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("code = %d, stderr = %q", code, stderr.String())
@@ -138,6 +190,39 @@ func TestIndexIngestResolvesRelativeDestinationAgainstConfiguredIndex(t *testing
 		t.Fatal(err)
 	}
 	if output.Plan.Destination != "core/example" {
+		t.Fatalf("destination = %q", output.Plan.Destination)
+	}
+}
+
+func TestIndexIngestExplicitRelativeDestinationOverridesMissingConfiguredIndex(t *testing.T) {
+	input := filepath.Join(t.TempDir(), "document.txt")
+	if err := os.WriteFile(input, []byte("Training text.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	root := fixtureGitIndex(t)
+	t.Setenv("WALDO_CONFIG", filepath.Join(t.TempDir(), "config.json"))
+	if err := config.Save(config.Config{Index: filepath.Join(t.TempDir(), "missing-index")}); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{
+		"--json", "index", "ingest", input, "./post-train/sft/example",
+		"--title", "Example", "--license", "CC0-1.0",
+		"--source", "https://example.test/data", "--source-category", "public-dataset", "--language", "en", "--dry-run",
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("code = %d, stderr = %q", code, stderr.String())
+	}
+	var output struct {
+		Plan struct {
+			Destination string `json:"destination"`
+		} `json:"plan"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
+		t.Fatal(err)
+	}
+	if output.Plan.Destination != "post-train/sft/example" {
 		t.Fatalf("destination = %q", output.Plan.Destination)
 	}
 }
@@ -163,7 +248,7 @@ func TestIndexIngestRejectsFormerToOption(t *testing.T) {
 	code := Run([]string{
 		"index", "ingest", "input", "destination", "--to", "other",
 		"--title", "Example", "--license", "CC0-1.0",
-		"--source", "https://example.test/data", "--source-category", "public-dataset", "--dry-run",
+		"--source", "https://example.test/data", "--source-category", "public-dataset", "--language", "en", "--dry-run",
 	}, &stdout, &stderr)
 	if code != 1 || !strings.Contains(stderr.String(), "unknown flag: --to") {
 		t.Fatalf("Run() code = %d, stderr = %q", code, stderr.String())
@@ -176,7 +261,7 @@ func TestIndexIngestRejectsRemovedModeFlags(t *testing.T) {
 		args := []string{
 			"index", "ingest", "input", "destination",
 			"--title", "Example", "--license", "CC0-1.0",
-			"--source", "https://example.test/data", "--source-category", "public-dataset",
+			"--source", "https://example.test/data", "--source-category", "public-dataset", "--language", "en",
 			"--dry-run", removed,
 		}
 		if removed != "--local-only" {
@@ -196,7 +281,7 @@ func TestIndexIngestExecutionRequiresWritableLookaside(t *testing.T) {
 	code := Run([]string{
 		"index", "ingest", "/does/not/need/to/exist", filepath.Join(root, "core", "example"),
 		"--title", "Example", "--license", "CC0-1.0",
-		"--source", "https://example.test/data", "--source-category", "public-dataset",
+		"--source", "https://example.test/data", "--source-category", "public-dataset", "--language", "en",
 	}, &stdout, &stderr)
 	if code != 1 || !strings.Contains(stderr.String(), "needs a writable lookaside") {
 		t.Fatalf("Run() code = %d, stderr = %q", code, stderr.String())
@@ -237,7 +322,7 @@ func TestIndexIngestPublishesAndBuildsContributionOverlay(t *testing.T) {
 		"--json", "index", "ingest", input, filepath.Join(root, "core", "example"),
 		"--title", "Example", "--description", "Example corpus.",
 		"--license", "CC0-1.0", "--source", "https://example.test/data",
-		"--source-category", "public-dataset",
+		"--source-category", "public-dataset", "--language", "en",
 	}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("Run() code = %d, stderr = %q", code, stderr.String())
@@ -307,7 +392,7 @@ func TestIndexIngestPublishesToConfiguredLocalLookaside(t *testing.T) {
 	code := Run([]string{
 		"--json", "index", "ingest", input, filepath.Join(root, "core", "local-published"),
 		"--title", "Locally Published", "--license", "CC0-1.0",
-		"--source", "https://example.test/local", "--source-category", "public-dataset",
+		"--source", "https://example.test/local", "--source-category", "public-dataset", "--language", "en",
 	}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("Run() code = %d, stderr = %q", code, stderr.String())
@@ -405,15 +490,20 @@ func TestIndexOwnsCorpusWorkflows(t *testing.T) {
 	if code := Run([]string{"index", "--help"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("Run() code = %d, stderr = %q", code, stderr.String())
 	}
-	for _, want := range []string{"pull", "list", "show", "summary", "bom", "verify", "ingest", "update", "export"} {
+	for _, want := range []string{"pull", "list", "show", "summary", "bom", "verify", "ingest", "export"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Errorf("index help does not contain %q:\n%s", want, stdout.String())
 		}
 	}
-	for _, unwanted := range []string{"status", "fetch", "clone", "remove"} {
+	for _, unwanted := range []string{"status", "fetch", "clone", "remove", "update"} {
 		if strings.Contains(stdout.String(), unwanted) {
 			t.Errorf("index help unexpectedly contains %q:\n%s", unwanted, stdout.String())
 		}
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run([]string{"index", "ingest", "--help"}, &stdout, &stderr); code != 0 || !strings.Contains(stdout.String(), "--update") {
+		t.Fatalf("ingest help code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }
 
@@ -824,7 +914,7 @@ func TestConfigSetIndexEnablesLogicalIndexPaths(t *testing.T) {
 	}
 	stdout.Reset()
 	stderr.Reset()
-	if code := Run([]string{"index", "summary", "./books"}, &stdout, &stderr); code != 0 {
+	if code := Run([]string{"index", "summary", "books"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("summary code = %d, stderr = %q", code, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), "tokens   2") {
@@ -840,7 +930,7 @@ func TestConfigSetIndexEnablesLogicalIndexPaths(t *testing.T) {
 	}
 	stdout.Reset()
 	stderr.Reset()
-	if code := Run([]string{"index", "summary", "."}, &stdout, &stderr); code != 0 || strings.Contains(stderr.String(), "warning:") {
+	if code := Run([]string{"index", "summary", root}, &stdout, &stderr); code != 0 || strings.Contains(stderr.String(), "warning:") {
 		t.Fatalf("explicit root code = %d, stderr = %q", code, stderr.String())
 	}
 }

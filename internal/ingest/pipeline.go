@@ -20,36 +20,58 @@ func StreamCanonicalTextBatches(ctx context.Context, plan Plan, consume func(Tex
 	if consume == nil {
 		return fmt.Errorf("text batch consumer is required")
 	}
+	var totalBytes int64
+	for _, input := range plan.Inputs {
+		totalBytes += input.Artifact.Bytes
+	}
+	emitProgress(ctx, ProgressEvent{Phase: "ingest", Status: "started", TotalBytes: totalBytes, TotalFiles: int64(len(plan.Inputs))})
+	var completedBytes, completedFiles int64
 	for _, input := range plan.Inputs {
 		emitProgress(ctx, ProgressEvent{Phase: "convert", Status: "started", Input: input.Artifact.Path, Adapter: input.Adapter, TotalBytes: input.Artifact.Bytes})
 		inputPlan := plan
 		inputPlan.Inputs = []PlanInput{input}
+		consumeWithProgress := func(batch TextBatch) error {
+			inputBytes := min(max(batch.InputBytes, 0), input.Artifact.Bytes)
+			batch.ProgressBytes = completedBytes + inputBytes
+			batch.ProgressTotalBytes = totalBytes
+			batch.ProgressFiles = completedFiles
+			batch.ProgressTotalFiles = int64(len(plan.Inputs))
+			return consume(batch)
+		}
 		var err error
 		if input.Profile.recordProfile() {
-			err = StreamMappedRecordBatches(ctx, inputPlan, consume)
+			err = StreamMappedRecordBatches(ctx, inputPlan, consumeWithProgress)
 			if err != nil {
 				return err
 			}
 			emitProgress(ctx, ProgressEvent{Phase: "convert", Status: "completed", Input: input.Artifact.Path, Adapter: input.Adapter, Bytes: input.Artifact.Bytes, TotalBytes: input.Artifact.Bytes})
+			completedBytes += input.Artifact.Bytes
+			completedFiles++
+			emitProgress(ctx, ProgressEvent{Phase: "ingest", Status: "progress", Bytes: completedBytes, TotalBytes: totalBytes, Files: completedFiles, TotalFiles: int64(len(plan.Inputs))})
 			continue
 		}
 		if input.Adapter == ProfileBoundedText || input.Adapter == ProfileXMLRecord {
-			err = StreamProfiledFileBatches(ctx, inputPlan, consume)
+			err = StreamProfiledFileBatches(ctx, inputPlan, consumeWithProgress)
 			if err != nil {
 				return err
 			}
 			emitProgress(ctx, ProgressEvent{Phase: "convert", Status: "completed", Input: input.Artifact.Path, Adapter: input.Adapter, Bytes: input.Artifact.Bytes, TotalBytes: input.Artifact.Bytes})
+			completedBytes += input.Artifact.Bytes
+			completedFiles++
+			emitProgress(ctx, ProgressEvent{Phase: "ingest", Status: "progress", Bytes: completedBytes, TotalBytes: totalBytes, Files: completedFiles, TotalFiles: int64(len(plan.Inputs))})
 			continue
 		}
 		switch input.Adapter {
 		case "text", "markdown":
-			err = StreamTextBatches(ctx, inputPlan, consume)
+			err = StreamTextBatches(ctx, inputPlan, consumeWithProgress)
 		case "parquet":
-			err = StreamParquetTextBatches(ctx, inputPlan, consume)
+			err = StreamParquetTextBatches(ctx, inputPlan, consumeWithProgress)
 		case "jsonl":
-			err = StreamJSONLTextBatches(ctx, inputPlan, consume)
+			err = StreamJSONLTextBatches(ctx, inputPlan, consumeWithProgress)
+		case "mbox":
+			err = StreamMboxTextBatches(ctx, inputPlan, consumeWithProgress)
 		case "opaque-base64":
-			err = StreamOpaqueTextBatches(ctx, inputPlan, consume)
+			err = StreamOpaqueTextBatches(ctx, inputPlan, consumeWithProgress)
 		default:
 			err = fmt.Errorf("unsupported accepted adapter %q", input.Adapter)
 		}
@@ -57,6 +79,9 @@ func StreamCanonicalTextBatches(ctx context.Context, plan Plan, consume func(Tex
 			return err
 		}
 		emitProgress(ctx, ProgressEvent{Phase: "convert", Status: "completed", Input: input.Artifact.Path, Adapter: input.Adapter, Bytes: input.Artifact.Bytes, TotalBytes: input.Artifact.Bytes})
+		completedBytes += input.Artifact.Bytes
+		completedFiles++
+		emitProgress(ctx, ProgressEvent{Phase: "ingest", Status: "progress", Bytes: completedBytes, TotalBytes: totalBytes, Files: completedFiles, TotalFiles: int64(len(plan.Inputs))})
 	}
 	return nil
 }

@@ -46,6 +46,8 @@ func TestInputProfileValidation(t *testing.T) {
 		"missing text":         {Type: ProfileRecordMap},
 		"bad path":             {Type: ProfileRecordMap, Fields: ProfileFields{Text: []string{"body[0]"}}},
 		"missing reply":        {Type: ProfileDialoguePair, Fields: ProfileFields{Text: []string{"prompt"}}},
+		"missing chat content": {Type: ProfileChatMessages, Messages: ChatMessagesMapping{Role: "messages[].role"}},
+		"bad chat alias":       {Type: ProfileChatMessages, Messages: ChatMessagesMapping{Role: "messages[].role", Content: "messages[].content", RoleAliases: map[string]string{"model": "bot"}}},
 		"incomplete tree":      {Type: ProfileRankedConversationTree, Tree: ConversationTree{Text: "text"}},
 		"bad rank fallback":    {Type: ProfileRankedConversationTree, Tree: ConversationTree{Replies: "replies", Text: "text", Rank: "rank", MissingRank: "random"}},
 		"bad boundary":         {Type: ProfileBoundedText, Bounds: TextBounds{StartPattern: "[", EndPattern: "end"}},
@@ -54,7 +56,6 @@ func TestInputProfileValidation(t *testing.T) {
 		"bad NUL policy":       {Type: ProfileRecordMap, NUL: "drop", Fields: ProfileFields{Text: []string{"body"}}},
 		"NUL policy on file":   {Type: ProfileBoundedText, NUL: "space", Bounds: TextBounds{StartPattern: "start", EndPattern: "end"}},
 		"empty main content":   {Type: ProfileRecordMap, MainContent: map[string]any{}, Fields: ProfileFields{Text: []string{"body"}}},
-		"multiple main fields": {Type: ProfileRecordMap, MainContent: map[string]any{"namespace": 0, "type": "article"}, Fields: ProfileFields{Text: []string{"body"}}},
 		"bad main value":       {Type: ProfileRecordMap, MainContent: map[string]any{"namespace": []string{"0"}}, Fields: ProfileFields{Text: []string{"body"}}},
 		"bad malformed policy": {Type: ProfileXMLRecord, Fields: ProfileFields{Text: []string{"/doc/body"}}, XML: XMLMapping{OnMalformed: "discard"}},
 		"XML policy on text":   {Type: ProfileBoundedText, Bounds: TextBounds{StartPattern: "start", EndPattern: "end"}, XML: XMLMapping{OnMalformed: "skip"}},
@@ -67,6 +68,16 @@ func TestInputProfileValidation(t *testing.T) {
 	}
 	if err := (InputProfile{Type: ProfileBoundedText, OnEmpty: "skip", Bounds: TextBounds{StartPattern: "start", EndPattern: "end"}}).Validate(); err != nil {
 		t.Fatalf("bounded-text on_empty policy was rejected: %v", err)
+	}
+	if err := (InputProfile{
+		Type:        ProfileDialoguePair,
+		MainContent: map[string]any{"helpfulness": 4, "correctness": 4, "coherence": 4},
+		Fields: ProfileFields{
+			Text: []string{"prompt"}, Response: "response",
+			Meta: map[string]string{"helpfulness": "helpfulness"},
+		},
+	}).Validate(); err != nil {
+		t.Fatalf("scored dialogue profile was rejected: %v", err)
 	}
 }
 

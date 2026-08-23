@@ -6,31 +6,36 @@
 package cli
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"path/filepath"
 	"strings"
 
 	"github.com/openwaldo/waldo/internal/config"
-	"github.com/openwaldo/waldo/internal/corpus"
 	waldoindex "github.com/openwaldo/waldo/internal/index"
 	"github.com/openwaldo/waldo/internal/ingest"
-	"github.com/openwaldo/waldo/internal/lookaside"
-	"github.com/openwaldo/waldo/internal/shard"
 )
 
-func runIndexUpdate(commandContext Context, args []string, stdout, stderr io.Writer) error {
-	rebuild := boolOption(commandContext, "rebuild-shards")
+func runIndexIngestUpdate(commandContext Context, args []string, stdout, stderr io.Writer) error {
 	options, err := cobraIndexIngestOptions(commandContext, args)
 	if err != nil {
 		return err
 	}
-	targets, err := resolveIndexArguments(commandContext.Execution, []string{options.Request.Destination}, stderr)
+	pathConfiguration, err := config.Load()
 	if err != nil {
 		return err
 	}
-	target := targets[0]
+	configuredRoot, managedDefault, err := config.EffectiveIndexRoot(pathConfiguration)
+	if err != nil {
+		return err
+	}
+	if managedDefault && !explicitIndexPath(options.Request.Destination) {
+		return managedIndexMutationError("update")
+	}
+	target, err := waldoindex.ResolveConfigured(configuredRoot, options.Request.Destination)
+	if err != nil {
+		return err
+	}
 	managed, err := config.IsManagedIndexPath(target.Root)
 	if err != nil {
 		return err
@@ -47,14 +52,19 @@ func runIndexUpdate(commandContext Context, args []string, stdout, stderr io.Wri
 	if err != nil {
 		return err
 	}
-	mode := "append"
-	if rebuild {
-		mode = "rebuild-shards"
-	}
+	const mode = "rebuild-shards"
 	logicalDestination := strings.TrimSuffix(corpusTarget.Path, filepath.Ext(corpusTarget.Path))
 	options.Request.Destination = logicalDestination
 	options.Request.Update = &ingest.UpdatePlan{Manifest: corpusTarget.Path, ManifestSHA256: manifestHash, Mode: mode}
 	loadedRecipe, isRecipe, err := ingest.LoadRecipe(options.Inputs[0])
+	if err != nil {
+		return err
+	}
+	loadedCorpus, isCorpusDirectory, err := ingest.LoadCorpusDirectory(options.Inputs[0])
+	if err != nil {
+		return err
+	}
+	loadedSource, isSourceDirectory, err := ingest.LoadSourceDirectory(options.Inputs[0])
 	if err != nil {
 		return err
 	}
@@ -71,8 +81,26 @@ func runIndexUpdate(commandContext Context, args []string, stdout, stderr io.Wri
 			options.Request.RecordMaximumBytes = loadedRecipe.Recipe.RecordMaximumBytes
 			options.Request.Profile = loadedRecipe.Recipe.Input
 		}
-	} else if options.Request.Title == "" || options.Request.License == "" || options.Request.Source.URL == "" || options.Request.Source.Category == "" {
-		return fmt.Errorf("direct index update requires --title, --license, --source, and --source-category")
+	} else if isCorpusDirectory {
+		if len(options.MetadataOptions) > 0 {
+			return fmt.Errorf("corpus directory manifest owns corpus metadata; remove %s", strings.Join(options.MetadataOptions, ", "))
+		}
+		loadedCorpus.Apply(&options.Request)
+		options.Inputs = loadedCorpus.InputPaths()
+	} else if isSourceDirectory {
+		if len(options.MetadataOptions) > 0 {
+			return fmt.Errorf("source directory manifest owns corpus metadata; remove %s", strings.Join(options.MetadataOptions, ", "))
+		}
+		loadedSource.Apply(&options.Request)
+		options.Inputs = loadedSource.InputPaths()
+	} else if options.Request.Title == "" || options.Request.License == "" || options.Request.Source.URL == "" || options.Request.Source.Category == "" || options.Request.Source.Content == nil || len(options.Request.Source.Content.Languages) == 0 {
+		return fmt.Errorf("direct index ingest --update requires --title, --license, --source, --source-category, and --language (repeat for each human language; use und if unknown)")
+	}
+	if !isRecipe && options.InputProfile != "" {
+		options.Request.Profile, err = ingest.LoadInputProfile(options.InputProfile)
+		if err != nil {
+			return fmt.Errorf("load input profile: %w", err)
+		}
 	}
 	if options.Request.Source.Name == "" {
 		options.Request.Source.Name = corpusTarget.Manifest.Name
@@ -86,7 +114,7 @@ func runIndexUpdate(commandContext Context, args []string, stdout, stderr io.Wri
 				Recipe         ingest.LoadedRecipe `json:"recipe"`
 			}{mode, corpusTarget.Path, manifestHash, loadedRecipe})
 		}
-		fmt.Fprintf(stdout, "index update preflight\n  mode      %s\n  manifest  %s (%s)\n", mode, corpusTarget.Path, manifestHash[:12])
+		fmt.Fprintf(stdout, "index ingest --update preflight\n  mode      %s\n  manifest  %s (%s)\n", mode, corpusTarget.Path, manifestHash[:12])
 		return writeRecipePreflight(commandContext, stdout, loadedRecipe, logicalDestination)
 	}
 	var configuration config.Config
@@ -96,7 +124,7 @@ func runIndexUpdate(commandContext Context, args []string, stdout, stderr io.Wri
 			return err
 		}
 		if configuration.Lookaside.Publish == nil {
-			return fmt.Errorf("index update needs a writable lookaside; run `waldo config set lookaside <s3-or-file-URL>`")
+			return fmt.Errorf("index ingest --update needs a writable lookaside; run `waldo config set lookaside <s3-or-file-URL>`")
 		}
 	}
 	workers := options.Workers
@@ -141,11 +169,21 @@ func runIndexUpdate(commandContext Context, args []string, stdout, stderr io.Wri
 		if err != nil {
 			return err
 		}
+		if isCorpusDirectory {
+			if err := loadedCorpus.VerifyProbe(probe); err != nil {
+				return err
+			}
+		} else if isSourceDirectory {
+			if err := loadedSource.VerifyProbe(probe); err != nil {
+				return err
+			}
+		}
 	}
 	plan, err := ingest.NewPlan(probe, options.Request)
 	if err != nil {
 		return err
 	}
+	emitIngestForceFormatWarning(stderr, plan, commandContext.JSON)
 	emitIngestFallbackWarning(stderr, plan, commandContext.JSON)
 	identity, err := plan.Identity()
 	if err != nil {
@@ -158,7 +196,7 @@ func runIndexUpdate(commandContext Context, args []string, stdout, stderr io.Wri
 				Plan     ingest.Plan `json:"plan"`
 			}{identity, plan})
 		}
-		fmt.Fprintf(stdout, "index update plan %s\n  mode      %s\n  manifest  %s (%s)\n  input     %s files, %s\n", identity[:12], mode, corpusTarget.Path, manifestHash[:12], humanInteger(int64(len(plan.Inputs))), humanBytes(probe.Totals.Bytes))
+		fmt.Fprintf(stdout, "index ingest --update plan %s\n  mode      %s\n  manifest  %s (%s)\n  input     %s files, %s\n", identity[:12], mode, corpusTarget.Path, manifestHash[:12], humanInteger(int64(len(plan.Inputs))), humanBytes(probe.Totals.Bytes))
 		return nil
 	}
 	staging, err := config.EffectiveStagingRoot(configuration, identity)
@@ -176,14 +214,7 @@ func runIndexUpdate(commandContext Context, args []string, stdout, stderr io.Wri
 	if err != nil {
 		return err
 	}
-	var seed ingest.DedupSeed
-	if !rebuild {
-		seed, err = updateDedupSeed(commandContext.Execution, target)
-		if err != nil {
-			return err
-		}
-	}
-	assembly, publication, err := ingest.ExecutePublicationWithSeed(execution, plan, staging, publisher, workers, seed)
+	assembly, publication, err := ingest.ExecutePublication(execution, plan, staging, publisher, workers)
 	if err != nil {
 		return err
 	}
@@ -200,6 +231,10 @@ func runIndexUpdate(commandContext Context, args []string, stdout, stderr io.Wri
 			return err
 		}
 	}
+	contribution, err = ingest.ApplyContribution(target.Root, contribution)
+	if err != nil {
+		return fmt.Errorf("apply verified contribution %s: %w", contribution.Root, err)
+	}
 	if commandContext.JSON {
 		emitIngestExclusionWarning(stderr, assembly, plan)
 		return writeJSON(stdout, struct {
@@ -211,20 +246,15 @@ func runIndexUpdate(commandContext Context, args []string, stdout, stderr io.Wri
 		}{identity, plan, assembly, publication, contribution})
 	}
 	emitIngestExclusionWarning(stderr, assembly, plan)
-	verb := "appended"
-	if rebuild {
-		verb = "rebuilt"
-	} else if assembly.RetainedDocs == 0 {
-		verb = "unchanged"
-	}
-	fmt.Fprintf(stdout, "updated %s (%s)\n", corpusTarget.Path, verb)
+	fmt.Fprintf(stdout, "updated %s (rebuilt)\n", corpusTarget.Path)
 	fmt.Fprintf(stdout, "  records       %s input, %s retained, %s duplicate", humanInteger(assembly.InputDocs), humanInteger(assembly.RetainedDocs), humanInteger(assembly.DuplicateDocs))
 	if assembly.RejectedDocs > 0 {
 		fmt.Fprintf(stdout, ", %s rejected %s", humanInteger(assembly.RejectedDocs), rejectionLabel(plan))
 	}
 	fmt.Fprintln(stdout)
 	fmt.Fprintf(stdout, "  shards        %s new at %s\n", humanInteger(int64(len(assembly.Objects))), publication.BaseURL)
-	fmt.Fprintf(stdout, "  contribution  %s\n", contribution.Root)
+	fmt.Fprintf(stdout, "  index         applied %s writes, %s removals to %s\n", humanInteger(int64(len(contribution.Files))), humanInteger(int64(len(contribution.Removed))), contribution.IndexRoot)
+	fmt.Fprintf(stdout, "  contribution  %s (retained)\n", contribution.Root)
 	for _, file := range contribution.Files {
 		fmt.Fprintf(stdout, "    write  %s\n", file)
 	}
@@ -247,7 +277,7 @@ func resolveSingleUpdateCorpus(target waldoindex.Target) (waldoindex.Corpus, err
 		for _, value := range corpora {
 			paths = append(paths, value.Path)
 		}
-		return waldoindex.Corpus{}, fmt.Errorf("index update target must resolve exactly one manifest; found %d: %s", len(corpora), strings.Join(paths, ", "))
+		return waldoindex.Corpus{}, fmt.Errorf("index ingest --update target must resolve exactly one manifest; found %d: %s", len(corpora), strings.Join(paths, ", "))
 	}
 	return corpora[0], nil
 }
@@ -265,60 +295,4 @@ func recipeUpdateState(mode, manifest, digest string, existing waldoindex.Manife
 		state.Bytes += object.Bytes
 	}
 	return state
-}
-
-func updateDedupSeed(ctx context.Context, target waldoindex.Target) (ingest.DedupSeed, error) {
-	policy, err := corpus.NewLicensePolicy(nil, nil)
-	if err != nil {
-		return nil, err
-	}
-	cache, err := lookaside.DefaultCache()
-	if err != nil {
-		return nil, err
-	}
-	bom, err := corpus.BuildBOM(ctx, []waldoindex.Target{target}, policy, cache)
-	if err != nil {
-		return nil, err
-	}
-	materialized, err := corpus.Materialize(ctx, bom, cache, nil)
-	if err != nil {
-		return nil, err
-	}
-	paths := make([]string, 0, len(materialized.Objects))
-	seen := map[string]bool{}
-	for _, object := range materialized.Objects {
-		if !seen[object.Path] {
-			seen[object.Path] = true
-			paths = append(paths, object.Path)
-		}
-	}
-	if _, err := shard.Audit(ctx, paths); err != nil {
-		return nil, fmt.Errorf("audit existing update corpus: %w", err)
-	}
-	return func(add func([]ingest.DedupIdentity) error) error {
-		const batchSize = 8192
-		batch := make([]ingest.DedupIdentity, 0, batchSize)
-		flush := func() error {
-			if len(batch) == 0 {
-				return nil
-			}
-			if err := add(batch); err != nil {
-				return err
-			}
-			batch = batch[:0]
-			return nil
-		}
-		for _, path := range paths {
-			if err := shard.WalkRecords(path, func(_ int64, record shard.RecordView) error {
-				batch = append(batch, ingest.DedupIdentity{SHA256: record.ID, License: record.License})
-				if len(batch) == batchSize {
-					return flush()
-				}
-				return nil
-			}); err != nil {
-				return err
-			}
-		}
-		return flush()
-	}, nil
 }

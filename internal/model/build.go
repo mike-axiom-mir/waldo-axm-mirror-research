@@ -83,6 +83,10 @@ func ValidateName(name string) error {
 
 // Initialize creates an untrained model with an immutable architecture.
 func (builder Builder) Initialize(name string, architecture Architecture) (Inspection, error) {
+	return builder.initialize(name, architecture, Interaction{})
+}
+
+func (builder Builder) initialize(name string, architecture Architecture, interaction Interaction) (Inspection, error) {
 	if builder.Root == "" {
 		return Inspection{}, fmt.Errorf("model root is required")
 	}
@@ -92,13 +96,16 @@ func (builder Builder) Initialize(name string, architecture Architecture) (Inspe
 	if err := architecture.Validate(); err != nil {
 		return Inspection{}, err
 	}
+	if err := interaction.Validate(); err != nil {
+		return Inspection{}, err
+	}
 	modelPath := filepath.Join(builder.Root, name)
 	if _, err := os.Stat(modelPath); err == nil {
 		return Inspection{}, fmt.Errorf("model %q already exists", name)
 	} else if !os.IsNotExist(err) {
 		return Inspection{}, err
 	}
-	plan, err := composePlan(name, Compose{Architecture: architecture})
+	plan, err := composePlan(name, Compose{Architecture: architecture, Interaction: interaction})
 	if err != nil {
 		return Inspection{}, err
 	}
@@ -111,7 +118,7 @@ func (builder Builder) Initialize(name string, architecture Architecture) (Inspe
 	record := ModelRecord{
 		Kind: "waldo-model", Schema: ModelSchema, ID: planHash, Name: name,
 		PlanSHA256: planHash, ArchitectureSHA256: plan.ArchitectureSHA256,
-		Architecture: plan.Architecture, Forecast: plan.Forecast,
+		Architecture: plan.Architecture, Interaction: plan.Interaction, Forecast: plan.Forecast,
 		Created: formatTime(created), Updated: formatTime(created),
 	}
 	if err := initializeModel(builder.Root, modelPath, plan, record); err != nil {
@@ -142,7 +149,7 @@ func (builder Builder) Train(ctx context.Context, name string, prepared Prepared
 	if len(prepared.Inputs) == 0 {
 		return Inspection{}, fmt.Errorf("stage %s has no verified shard inputs", stage.Name)
 	}
-	resolvedParameters, err := stage.ResolveParameters()
+	resolvedParameters, err := stage.ResolvePlanningParameters()
 	if err != nil {
 		return Inspection{}, fmt.Errorf("stage %s training profile: %w", stage.Name, err)
 	}
@@ -157,13 +164,39 @@ func (builder Builder) Train(ctx context.Context, name string, prepared Prepared
 		return Inspection{}, fmt.Errorf("stage %s tokenizer: %w", stage.Name, err)
 	}
 	builder.report(Progress{Phase: "preflight", Stage: stage.Name, Message: fmt.Sprintf("selecting deterministic held-out records across %d shards", len(prepared.Inputs))})
-	partition, err := training.NewRecordPartitionContextWithTokenizer(ctx, prepared.Inputs, resolvedParameters, codec, func(event training.PartitionProgress) {
+	conversation := training.ConversationTransform{}
+	if stage.Conversation != nil {
+		conversation = *stage.Conversation
+	}
+	partition, err := training.NewRecordPartitionContextWithTransform(ctx, prepared.Inputs, resolvedParameters, codec, stage.Objective, conversation, func(event training.PartitionProgress) {
 		builder.report(Progress{Phase: "preflight", Stage: stage.Name, Message: fmt.Sprintf("evaluation selection %d/%d shards, %d records indexed", event.CurrentShard, event.TotalShards, event.Records)})
 	})
 	if err != nil {
 		return Inspection{}, fmt.Errorf("stage %s held-out evaluation partition: %w", stage.Name, err)
 	}
 	builder.report(Progress{Phase: "preflight", Stage: stage.Name, Message: fmt.Sprintf("selected %d held-out records (%s text)", partition.Evaluation.Records, byteCount(partition.Evaluation.TextBytes))})
+	if stage.Parameters.Steps == 0 && stage.Parameters.Tokens == 0 {
+		builder.report(Progress{Phase: "preflight", Stage: stage.Name, Message: fmt.Sprintf("deriving optimizer steps from %d epochs", resolvedParameters.Epochs)})
+		derivedSteps, err := partition.TrainingSteps(ctx)
+		if err != nil {
+			return Inspection{}, fmt.Errorf("stage %s derive epoch training steps: %w", stage.Name, err)
+		}
+		resolvedParameters, err = stage.ResolveParametersForSteps(derivedSteps)
+		if err != nil {
+			return Inspection{}, fmt.Errorf("stage %s resolve epoch training parameters: %w", stage.Name, err)
+		}
+		builder.report(Progress{Phase: "preflight", Stage: stage.Name, Message: fmt.Sprintf("planned %d optimizer steps from %d epochs", derivedSteps, resolvedParameters.Epochs)})
+	} else if stage.Parameters.Epochs > 0 {
+		builder.report(Progress{Phase: "preflight", Stage: stage.Name, Message: fmt.Sprintf("validating capacity for %d optimizer steps across %d explicit epochs", resolvedParameters.Steps, resolvedParameters.Epochs)})
+		availableSteps, sufficient, err := partition.TrainingStepCapacity(ctx, resolvedParameters.Steps)
+		if err != nil {
+			return Inspection{}, fmt.Errorf("stage %s training capacity: %w", stage.Name, err)
+		}
+		if !sufficient {
+			return Inspection{}, fmt.Errorf("stage %s requests %d optimizer steps, but its filtered training stream provides only %d across %d epochs; reduce steps, increase epochs, or select more data", stage.Name, resolvedParameters.Steps, availableSteps, resolvedParameters.Epochs)
+		}
+		builder.report(Progress{Phase: "preflight", Stage: stage.Name, Message: fmt.Sprintf("verified capacity for %d optimizer steps", resolvedParameters.Steps)})
+	}
 	records, err := partition.TrainingRecords()
 	if err != nil {
 		return Inspection{}, fmt.Errorf("stage %s training record stream: %w", stage.Name, err)
@@ -221,6 +254,9 @@ func (builder Builder) Train(ctx context.Context, name string, prepared Prepared
 		CorpusBOMSHA256:    bomHash, CorpusBOM: prepared.BOM, Parameters: resolvedParameters,
 		EvaluationSet: &partition.Evaluation, Initialization: initialization,
 	}
+	if stage.Conversation != nil {
+		runBOM.Conversation = *stage.Conversation
+	}
 	runBOMHash, err := hashJSON(runBOM)
 	if err != nil {
 		return Inspection{}, err
@@ -266,7 +302,11 @@ func resumableRun(inspection Inspection, stage Stage, parameters training.Resolv
 	index := len(inspection.Runs) - 1
 	run := inspection.Runs[index]
 	bom := inspection.RunBOMs[index]
-	if !resumableRunState(run, parameters) || bom.Stage != stage.Name || bom.StageType != stage.Type || bom.Objective != stage.Objective || bom.CorpusBOMSHA256 != corpusHash || !equivalentTrainingParameters(bom.Parameters, parameters) || bom.EvaluationSet == nil || !reflect.DeepEqual(*bom.EvaluationSet, evaluation) || !reflect.DeepEqual(bom.Execution, execution) {
+	conversation := training.ConversationTransform{}
+	if stage.Conversation != nil {
+		conversation = *stage.Conversation
+	}
+	if !resumableRunState(run, parameters) || bom.Stage != stage.Name || bom.StageType != stage.Type || bom.Objective != stage.Objective || !reflect.DeepEqual(bom.Conversation, conversation) || bom.CorpusBOMSHA256 != corpusHash || !equivalentTrainingParameters(bom.Parameters, parameters) || bom.EvaluationSet == nil || !reflect.DeepEqual(*bom.EvaluationSet, evaluation) || !reflect.DeepEqual(bom.Execution, execution) {
 		return 0, false
 	}
 	return index, true
@@ -389,6 +429,7 @@ func (builder Builder) executeTrainingAttempt(ctx context.Context, name, modelPa
 	artifactPrefix := "artifacts"
 	observation, backendErr := selection.Backend.Run(ctx, training.Request{
 		RunID: pin.ID, Stage: stage.Name, Objective: stage.Objective,
+		Conversation:       runBOM.Conversation,
 		ArchitectureSHA256: record.ArchitectureSHA256,
 		Architecture:       architectureJSON, Tokenizer: tokenizerSpec, BOM: prepared.BOM, Inputs: prepared.Inputs,
 		Parameters: runBOM.Parameters, Records: records, EvaluationRecords: evaluationRecords, EvaluationSet: EvaluationSetValue(runBOM.EvaluationSet), Initialization: initializationForAttempt(runBOM.Initialization, resume), Resume: resume,
@@ -401,7 +442,9 @@ func (builder Builder) executeTrainingAttempt(ctx context.Context, name, modelPa
 	progressMutex.Unlock()
 	if backendErr == nil {
 		observation = mergeProgress(run.Progress, observation)
-		planned := PlannedStage{Name: stage.Name, Parameters: stage.Parameters, PlannedTokens: runBOM.Parameters.PlannedTokenCapacity}
+		plannedParameters := stage.Parameters
+		plannedParameters.Steps = runBOM.Parameters.Steps
+		planned := PlannedStage{Name: stage.Name, Parameters: plannedParameters, PlannedTokens: runBOM.Parameters.PlannedTokenCapacity}
 		if err := validateBackendObservation(runDirectory, planned, observation); err != nil {
 			backendErr = fmt.Errorf("invalid backend observation: %w", err)
 		} else if set := runBOM.EvaluationSet; set != nil && set.Records > 0 && runBOM.Parameters.EvaluateEvery > 0 {
@@ -517,6 +560,9 @@ func (builder Builder) publishMultiNodePlan(pin RunPin, runBOM RunBOM, prepared 
 		ArchitectureSHA256: runBOM.ArchitectureSHA256, Architecture: architectureJSON,
 		Parameters: runBOM.Parameters, CorpusBOM: prepared.BOM,
 		EvaluationSet: runBOM.EvaluationSet, Initialization: runBOM.Initialization,
+	}
+	if stage.Conversation != nil {
+		plan.Conversation = *stage.Conversation
 	}
 	if runBOM.Initialization != nil {
 		if runBOM.Initialization.Path == "" {
@@ -777,6 +823,9 @@ func validateComposeTarget(target Inspection, compose Compose) error {
 	if target.Model.ArchitectureSHA256 != architectureHash {
 		return fmt.Errorf("compose architecture does not match existing model %q; use a new model name", target.Model.Name)
 	}
+	if !reflect.DeepEqual(target.Model.Interaction, compose.Interaction) {
+		return fmt.Errorf("compose interaction template does not match existing model %q; use a new model name", target.Model.Name)
+	}
 	if compose.Base != nil && compose.Base.OriginSHA256 != "" && target.Model.OriginBOMSHA256 != compose.Base.OriginSHA256 {
 		return fmt.Errorf("compose base does not match existing model %q; use a new model name", target.Model.Name)
 	}
@@ -980,7 +1029,7 @@ func (builder Builder) Compose(ctx context.Context, name string, compose Compose
 	}
 	if _, err := os.Stat(destination); os.IsNotExist(err) {
 		if compose.Base == nil {
-			if _, err := builder.Initialize(name, compose.Architecture); err != nil {
+			if _, err := builder.initialize(name, compose.Architecture, compose.Interaction); err != nil {
 				finishFailedCompose(workspace)
 				return Inspection{}, err
 			}
@@ -1234,9 +1283,15 @@ func validateStagedComposeRun(inspection Inspection, index int, prepared Prepare
 	if err != nil {
 		return err
 	}
-	parameters, err := prepared.Stage.ResolveParameters()
+	parameters, err := prepared.Stage.ResolvePlanningParameters()
 	if err != nil {
 		return err
+	}
+	if prepared.Stage.Parameters.Steps == 0 && prepared.Stage.Parameters.Tokens == 0 {
+		parameters, err = prepared.Stage.ResolveParametersForSteps(bom.Parameters.Steps)
+		if err != nil {
+			return err
+		}
 	}
 	if parameters.Data.Order == "corpus-weighted-shuffle-v1" {
 		parameters.Data.CorpusWeights, err = resolveCorpusWeights(parameters.Data.CorpusWeights, prepared.BOM.Paths)
@@ -1244,7 +1299,11 @@ func validateStagedComposeRun(inspection Inspection, index int, prepared Prepare
 			return err
 		}
 	}
-	if bom.Stage != prepared.Stage.Name || bom.StageType != prepared.Stage.Type || bom.Objective != prepared.Stage.Objective || bom.CorpusBOMSHA256 != corpusHash || !equivalentTrainingParameters(bom.Parameters, parameters) {
+	conversation := training.ConversationTransform{}
+	if prepared.Stage.Conversation != nil {
+		conversation = *prepared.Stage.Conversation
+	}
+	if bom.Stage != prepared.Stage.Name || bom.StageType != prepared.Stage.Type || bom.Objective != prepared.Stage.Objective || !reflect.DeepEqual(bom.Conversation, conversation) || bom.CorpusBOMSHA256 != corpusHash || !equivalentTrainingParameters(bom.Parameters, parameters) {
 		return fmt.Errorf("run %d immutable facts do not match stage %s", index+1, prepared.Stage.Name)
 	}
 	return nil
@@ -1267,7 +1326,7 @@ func (builder Builder) initializeFromOrigin(name string, compose Compose, base I
 	record := ModelRecord{
 		Kind: "waldo-model", Schema: ModelSchema, ID: planHash, Name: name,
 		PlanSHA256: planHash, ArchitectureSHA256: plan.ArchitectureSHA256,
-		Architecture: plan.Architecture, Forecast: plan.Forecast,
+		Architecture: plan.Architecture, Interaction: plan.Interaction, Forecast: plan.Forecast,
 		Created: formatTime(now), Updated: formatTime(now),
 		OriginBOMSHA256: base.Model.OriginBOMSHA256,
 		OriginArtifacts: append([]OriginArtifact(nil), base.Model.OriginArtifacts...),

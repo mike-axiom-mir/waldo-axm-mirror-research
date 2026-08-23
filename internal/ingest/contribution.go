@@ -35,12 +35,12 @@ func BuildManifest(plan Plan, assembly AssemblyResult, objectBase string) (index
 	name := path.Base(plan.Destination)
 	manifest := index.Manifest{
 		Kind: "manifest", Schema: index.ManifestSchema, Name: name, Title: plan.Title,
-		Description:  plan.Description,
-		RecordSchema: shard.TextRecordSchema,
+		Description: plan.Description,
+		RecordKind:  plan.Writer.RecordKind, RecordSchema: plan.Writer.RecordSchema,
 		ConvertedBy: index.Conversion{
 			Tool: "waldo index ingest", Version: "0.1.0-dev",
 			Collector: compactCollector(plan.RecipeEvidence), Profile: conversionProfile(plan),
-			Recipe: shard.TextWriterRecipe, Tokenizer: tokenizer.Default,
+			Recipe: plan.Writer.Recipe, Tokenizer: tokenizer.Default,
 		},
 	}
 	manifest.Assessment = newContentAssessment(0, 0, 0)
@@ -58,12 +58,13 @@ func BuildManifest(plan Plan, assembly AssemblyResult, objectBase string) (index
 		}
 		manifest.Sources = append(manifest.Sources, index.Source{
 			Name: source.Name, Source: source.Name, URL: source.URL, License: source.License,
-			Version: source.Version, Category: source.Category,
+			Version: source.Version, InputFormats: source.InputFormats, Category: source.Category,
 			CollectedFrom: source.CollectedFrom, CollectedTo: source.CollectedTo,
 			LicenseEvidence: source.LicenseEvidence, Content: source.Content, Acquisition: source.Acquisition,
 			SHA256: sourceHash,
 		})
 	}
+	manifest.Content = aggregateDeclaredLanguages(manifest.Sources)
 	licenseSet := map[string]bool{}
 	for _, object := range assembly.Objects {
 		licenses := object.Licenses
@@ -80,10 +81,14 @@ func BuildManifest(plan Plan, assembly AssemblyResult, objectBase string) (index
 		if err != nil {
 			return index.Manifest{}, err
 		}
+		shardLicenseUsage := object.LicenseUsage
+		if len(licenses) == 1 {
+			shardLicenseUsage = nil
+		}
 		manifest.Shards = append(manifest.Shards, index.Shard{
 			URL: objectURL, SHA256: object.SHA256, Sources: object.Sources,
 			Docs: object.Docs, Tokens: object.Tokens, Bytes: object.Bytes,
-			LicenseUsage: object.LicenseUsage,
+			LicenseUsage: shardLicenseUsage,
 			Assessment:   newContentAssessment(object.EmailAddressRecords, object.RepetitiveContentRecords, object.BoilerplateContentRecords),
 			Redaction:    cloneContentRedaction(object.Redaction),
 		})
@@ -112,6 +117,35 @@ func BuildManifest(plan Plan, assembly AssemblyResult, objectBase string) (index
 		return index.Manifest{}, err
 	}
 	return manifest, nil
+}
+
+func aggregateDeclaredLanguages(sources []index.Source) *index.Content {
+	human := map[string]bool{}
+	programming := map[string]bool{}
+	for _, source := range sources {
+		if source.Content == nil {
+			continue
+		}
+		for _, language := range source.Content.Languages {
+			human[language] = true
+		}
+		for _, language := range source.Content.ProgrammingLanguages {
+			programming[language] = true
+		}
+	}
+	if len(human) == 0 && len(programming) == 0 {
+		return nil
+	}
+	content := &index.Content{}
+	for language := range human {
+		content.Languages = append(content.Languages, language)
+	}
+	for language := range programming {
+		content.ProgrammingLanguages = append(content.ProgrammingLanguages, language)
+	}
+	sort.Strings(content.Languages)
+	sort.Strings(content.ProgrammingLanguages)
+	return content
 }
 
 func newContentRedaction() *index.ContentRedaction {
@@ -189,6 +223,7 @@ func sourceAcquisitionIdentity(plan Plan, sourceID string) (string, error) {
 		writeIdentityString(hasher, input.Artifact.Format)
 		writeIdentityString(hasher, input.Artifact.Compression)
 		writeIdentityString(hasher, input.Adapter)
+		writeIdentityString(hasher, input.DetectedFormat)
 		writeIdentityString(hasher, input.TextColumn)
 		writeIdentityString(hasher, input.SourcePath)
 		profile, err := json.Marshal(input.Profile)

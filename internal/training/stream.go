@@ -12,23 +12,29 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math"
 	"math/bits"
+	"slices"
 	"sort"
 
+	"github.com/openwaldo/waldo/internal/record"
 	"github.com/openwaldo/waldo/internal/shard"
 )
 
 type Record struct {
-	SelectionID string `json:"selection_id"`
-	ID          string `json:"id"`
-	Text        string `json:"text"`
-	Source      string `json:"source"`
-	License     string `json:"license"`
-	Language    string `json:"language,omitempty"`
-	Corpus      string `json:"corpus,omitempty"`
-	Tokens      []int  `json:"tokens,omitempty"`
+	SelectionID  string               `json:"selection_id"`
+	ID           string               `json:"id"`
+	Text         string               `json:"text"`
+	Conversation *record.Conversation `json:"conversation,omitempty"`
+	Source       string               `json:"source"`
+	License      string               `json:"license"`
+	Language     string               `json:"language,omitempty"`
+	Corpus       string               `json:"corpus,omitempty"`
+	Tokens       []int                `json:"tokens,omitempty"`
+	LossMask     []bool               `json:"loss_mask,omitempty"`
+	decodeErr    error
 }
 
 type RecordPartition struct {
@@ -38,6 +44,8 @@ type RecordPartition struct {
 	inputs            []Input
 	parameters        ResolvedParameters
 	codec             TokenCodec
+	objective         string
+	conversation      ConversationTransform
 }
 
 type PartitionProgress struct {
@@ -88,6 +96,14 @@ func NewRecordPartitionContext(ctx context.Context, inputs []Input, parameters R
 }
 
 func NewRecordPartitionContextWithTokenizer(ctx context.Context, inputs []Input, parameters ResolvedParameters, codec TokenCodec, progress func(PartitionProgress)) (RecordPartition, error) {
+	return NewRecordPartitionContextWithTokenizerAndObjective(ctx, inputs, parameters, codec, "causal-language-modeling", progress)
+}
+
+func NewRecordPartitionContextWithTokenizerAndObjective(ctx context.Context, inputs []Input, parameters ResolvedParameters, codec TokenCodec, objective string, progress func(PartitionProgress)) (RecordPartition, error) {
+	return NewRecordPartitionContextWithTransform(ctx, inputs, parameters, codec, objective, ConversationTransform{}, progress)
+}
+
+func NewRecordPartitionContextWithTransform(ctx context.Context, inputs []Input, parameters ResolvedParameters, codec TokenCodec, objective string, conversation ConversationTransform, progress func(PartitionProgress)) (RecordPartition, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -95,7 +111,7 @@ func NewRecordPartitionContextWithTokenizer(ctx context.Context, inputs []Input,
 		return RecordPartition{}, fmt.Errorf("record partition requires a tokenizer")
 	}
 	ordered := orderedInputs(inputs)
-	partition := RecordPartition{selected: make(map[string]bool), inputs: ordered, parameters: parameters, codec: codec}
+	partition := RecordPartition{selected: make(map[string]bool), inputs: ordered, parameters: parameters, codec: codec, objective: objective, conversation: conversation}
 	policy := parameters.Evaluation
 	if policy == nil {
 		policy = &EvaluationPolicy{Selection: "none-v1"}
@@ -248,7 +264,7 @@ func NewRecordPartitionContextWithTokenizer(ctx context.Context, inputs []Input,
 	if desired > 0 && len(selected) == 0 {
 		return RecordPartition{}, fmt.Errorf("no held-out record fits evaluation_max_bytes=%d; increase the limit or explicitly disable evaluation", policy.MaxBytes)
 	}
-	evaluationRecords, tokenTargets, err := readEvaluationRecords(ctx, ordered, selected, codec)
+	evaluationRecords, tokenTargets, err := readEvaluationRecords(ctx, ordered, selected, codec, objective, conversation)
 	if err != nil {
 		return RecordPartition{}, err
 	}
@@ -304,7 +320,7 @@ func evaluationCandidateSizes(ctx context.Context, inputs []Input, candidates []
 	return sizes, nil
 }
 
-func readEvaluationRecords(ctx context.Context, inputs []Input, selected []evaluationCandidate, codec TokenCodec) ([]Record, int64, error) {
+func readEvaluationRecords(ctx context.Context, inputs []Input, selected []evaluationCandidate, codec TokenCodec, objective string, conversation ConversationTransform) ([]Record, int64, error) {
 	grouped := make(map[int][]evaluationCandidate)
 	for _, candidate := range selected {
 		grouped[candidate.input] = append(grouped[candidate.input], candidate)
@@ -328,8 +344,22 @@ func readEvaluationRecords(ctx context.Context, inputs []Input, selected []evalu
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			records = append(records, recordFromView(input, row, view))
-			tokenTargets += int64(codec.Count(view.Text))
+			record := recordFromView(input, row, view)
+			if record.Conversation == nil && objective == "causal-language-modeling" {
+				tokenTargets += int64(codec.Count(view.Text))
+				records = append(records, record)
+				return nil
+			}
+			_, mask, err := tokenizeRecord(record, codec, objective, conversation)
+			if err != nil {
+				return err
+			}
+			for _, supervised := range mask[1:] {
+				if supervised {
+					tokenTargets++
+				}
+			}
+			records = append(records, record)
 			return nil
 		})
 		if err != nil {
@@ -354,7 +384,16 @@ func (partition RecordPartition) EvaluationRecords() RecordSource {
 func (partition RecordPartition) TrainingByteTargets(ctx context.Context) (int64, error) {
 	var perEpoch int64
 	err := rawRecordSource{inputs: partition.inputs, include: func(record Record) bool { return !partition.selected[record.SelectionID] }}.Stream(ctx, func(record Record) error {
-		value := int64(partition.codec.Count(record.Text)) + 1
+		_, mask, err := tokenizeRecord(record, partition.codec, partition.objective, partition.conversation)
+		if err != nil {
+			return err
+		}
+		value := int64(0)
+		for _, supervised := range mask[1:] {
+			if supervised {
+				value++
+			}
+		}
 		if perEpoch > math.MaxInt64-value {
 			return fmt.Errorf("training byte-token target count overflows int64")
 		}
@@ -367,7 +406,103 @@ func (partition RecordPartition) TrainingByteTargets(ctx context.Context) (int64
 	if perEpoch < 2 || perEpoch > math.MaxInt64/partition.parameters.Epochs {
 		return 0, fmt.Errorf("held-out partition leaves no usable training targets")
 	}
-	return perEpoch*partition.parameters.Epochs - 1, nil
+	total := perEpoch * partition.parameters.Epochs
+	if partition.objective != "assistant-response-modeling" {
+		total--
+	}
+	return total, nil
+}
+
+// TrainingStepCapacity verifies that the finite epoch stream can supply the
+// requested optimizer steps. It stops as soon as the request is satisfiable;
+// an exhausted stream returns its exact smaller capacity.
+func (partition RecordPartition) TrainingStepCapacity(ctx context.Context, requested int64) (int64, bool, error) {
+	if requested <= 0 || partition.parameters.BatchSize <= 0 || partition.parameters.SequenceLength <= 0 {
+		return 0, false, fmt.Errorf("requested steps, batch size, and sequence length must be positive")
+	}
+	requiredSequences, overflow := multiplyInt64(requested, partition.parameters.BatchSize)
+	if overflow {
+		return 0, false, fmt.Errorf("requested training sequence count overflows int64")
+	}
+	sequences, sufficient, err := partition.trainingSequenceCapacity(ctx, requiredSequences)
+	if err != nil {
+		return 0, false, err
+	}
+	if sufficient {
+		return requested, true, nil
+	}
+	steps := sequences / partition.parameters.BatchSize
+	if sequences%partition.parameters.BatchSize != 0 {
+		steps++
+	}
+	return steps, steps >= requested, nil
+}
+
+// TrainingSteps scans the finite epoch stream and returns its exact optimizer
+// step count after continuous packing and partial-batch flushing.
+func (partition RecordPartition) TrainingSteps(ctx context.Context) (int64, error) {
+	sequences, _, err := partition.trainingSequenceCapacity(ctx, 0)
+	if err != nil {
+		return 0, err
+	}
+	steps := sequences / partition.parameters.BatchSize
+	if sequences%partition.parameters.BatchSize != 0 {
+		steps++
+	}
+	if steps <= 0 {
+		return 0, fmt.Errorf("held-out partition leaves no usable training steps")
+	}
+	return steps, nil
+}
+
+func (partition RecordPartition) trainingSequenceCapacity(ctx context.Context, requiredSequences int64) (int64, bool, error) {
+	source, err := partition.TrainingRecords()
+	if err != nil {
+		return 0, false, err
+	}
+	var buffered int
+	var masks []bool
+	var sequences int64
+	reached := errors.New("requested training step capacity reached")
+	addSequence := func(targets []bool) error {
+		if slices.Contains(targets, true) {
+			sequences++
+			if requiredSequences > 0 && sequences >= requiredSequences {
+				return reached
+			}
+		}
+		return nil
+	}
+	err = source.Stream(ctx, func(record Record) error {
+		tokens, recordMask, err := tokenizeRecord(record, partition.codec, partition.objective, partition.conversation)
+		if err != nil {
+			return err
+		}
+		recordTokens := len(tokens) + 1 // Worker framing appends EOS.
+		buffered += recordTokens
+		masks = append(masks, recordMask...)
+		window := int(partition.parameters.SequenceLength) + 1
+		for buffered >= window {
+			if err := addSequence(masks[1:window]); err != nil {
+				return err
+			}
+			buffered -= int(partition.parameters.SequenceLength)
+			masks = masks[int(partition.parameters.SequenceLength):]
+		}
+		return nil
+	})
+	if errors.Is(err, reached) {
+		return sequences, true, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	if buffered > 1 {
+		if err := addSequence(masks[1:]); errors.Is(err, reached) {
+			return sequences, true, nil
+		}
+	}
+	return sequences, false, nil
 }
 
 type filteredRecordSource struct {
@@ -721,7 +856,16 @@ func weightedBefore(leftTokens int64, leftWeight uint64, rightTokens int64, righ
 }
 
 func recordFromView(input Input, row int64, view shard.RecordView) Record {
-	return Record{SelectionID: selectionID(input.SHA256, row), ID: view.ID, Text: view.Text, Source: view.Source, License: view.License, Language: view.Language, Corpus: input.Corpus}
+	result := Record{SelectionID: selectionID(input.SHA256, row), ID: view.ID, Text: view.Text, Source: view.Source, License: view.License, Language: view.Language, Corpus: input.Corpus}
+	if view.Kind == record.KindConversation {
+		conversation, err := record.DecodeConversation(view.Text)
+		if err != nil {
+			result.decodeErr = fmt.Errorf("decode canonical conversation: %w", err)
+		} else {
+			result.Conversation = &conversation
+		}
+	}
+	return result
 }
 
 func inputsHaveRecordFilters(inputs []Input) bool {

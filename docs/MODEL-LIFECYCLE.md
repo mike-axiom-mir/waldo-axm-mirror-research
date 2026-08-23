@@ -19,7 +19,11 @@ waldo config set lookaside.cache /fast-disk/waldo-cache
 ```
 
 Defaults are `~/.waldo/models` and a user-scoped lookaside cache beneath the
-operating system's temporary directory.
+operating system's temporary directory. Verified objects remain available
+while an operation is active and across a failure or interruption. After a
+successful operation commits, WALDO removes every cache object that operation
+used. `lookaside.cache.max-size` bounds recovery objects left by incomplete
+operations; it is not a post-success retention target.
 `model.backend` defaults to `auto`. On macOS it selects MLX and requires Apple
 Silicon. On Linux it probes Python environments in deterministic order,
 preferring an installed TorchTitan and then an installed PyTorch. It never
@@ -208,10 +212,12 @@ waldo --json model chat small "Once" --max-tokens 64 --temperature 0 --seed 7
 No generation option is required. Defaults are 256 maximum tokens,
 temperature 0.8, and top-p 0.95. A zero temperature is deterministic; `seed`
 makes sampling reproducible. Interactive sessions support `/clear`, `/help`,
-and `/exit`. Generated terminal bytes stream incrementally, but control and
+and `/exit`. On a terminal, WALDO periodically re-renders the accumulated
+response so Markdown appears while generation is still running. Control and
 invalid UTF-8 bytes are escaped so model output cannot emit terminal control
-sequences. JSON is one-shot and includes model and run identity, prompt, text,
-token count, finish reason, and generation duration.
+sequences. Redirected output is rendered once without cursor controls. JSON is
+one-shot and includes model and run identity, prompt, text, token count, finish
+reason, and generation duration.
 
 The built-in byte-tokenizer models are causal pretraining models and carry no
 chat template. Interactive mode therefore performs raw continuation;
@@ -269,7 +275,7 @@ stages:
       - core/common-pile/foodista
     parameters:
       profile: causal-pretrain-shuffled
-      steps: 10000
+      tokens: 20480000
       batch_size: 2
       sequence_length: 1024
       learning_rate: 0.0003
@@ -338,8 +344,11 @@ compose never mutates a named base model.
 WALDO resolves and hash-verifies every stage and creates the active model at
 `<model.root>/<name>` when absent. When the name already exists, its normalized
 architecture and tokenizer hash must exactly match the compose; a mismatch is
-refused with guidance to use a new model name. Matching composes append their
-stages without replacing the model. Durable transaction metadata beneath
+refused with guidance to use a new model name. WALDO removes corpus paths
+already present in that model's completed run BOMs, then appends stages for
+the remaining paths without replacing the model. If no paths remain, the
+model is unchanged. This is path-level reuse, not record- or shard-level delta
+detection. Durable transaction metadata beneath
 `<model.root>/.waldo-compose` pins the compose, every corpus BOM, the model ID,
 and the starting run ordinal.
 Passing `--audit` audits every materialized stage before the transaction starts.
@@ -353,8 +362,9 @@ the standard model path.
 After Ctrl-C or process loss, repeating the exact command discovers the active
 model, marks an abandoned running attempt interrupted, and resumes the same
 stage and run from its newest verified checkpoint. Different inputs are refused
-while that transaction is unfinished. A failed stage is cleared; interrupted
-work is retained.
+while that transaction is unfinished. Completed-path skipping is disabled for
+an unfinished transaction so its checkpoint selection remains exact. A failed
+stage is cleared; interrupted work is retained.
 
 ## Durable layout
 

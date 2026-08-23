@@ -22,24 +22,47 @@ const inputProfileMaximum = 1 << 20
 const (
 	ProfileRecordMap              = "record-map"
 	ProfileDialoguePair           = "dialogue-pair"
+	ProfileChatMessages           = "chat-messages"
 	ProfileRankedConversationTree = "ranked-conversation-tree"
 	ProfileBoundedText            = "bounded-text"
 	ProfileXMLRecord              = "xml-record"
 )
 
-// InputProfile describes how one physical input record becomes canonical
-// text. The container remains a separately detected fact: JSON is one object,
-// JSONL is one object per line, and Parquet is one row per record.
+// InputProfile pins the expected physical format and describes how one input
+// record becomes canonical text. WALDO still probes the bytes and rejects a
+// source-directory manifest whose declared format does not match them.
 type InputProfile struct {
+	Format        string               `json:"format,omitempty" yaml:"format,omitempty"`
 	Type          string               `json:"type" yaml:"type"`
 	OnEmpty       string               `json:"on_empty,omitempty" yaml:"on_empty,omitempty"`
 	NUL           string               `json:"nul,omitempty" yaml:"nul,omitempty"`
 	MainContent   map[string]any       `json:"main_content,omitempty" yaml:"main_content,omitempty"`
 	Fields        ProfileFields        `json:"fields,omitempty" yaml:"fields,omitempty"`
 	Tree          ConversationTree     `json:"tree,omitempty" yaml:"tree,omitempty"`
+	Messages      ChatMessagesMapping  `json:"messages,omitempty" yaml:"messages,omitempty"`
 	Bounds        TextBounds           `json:"bounds,omitempty" yaml:"bounds,omitempty"`
 	XML           XMLMapping           `json:"xml,omitempty" yaml:"xml,omitempty"`
 	LicensePolicy corpus.LicensePolicy `json:"license_policy,omitempty" yaml:"license_policy,omitempty"`
+}
+
+// withDefaults makes corpus-visible conversion choices explicit in the plan.
+// Structured records commonly contain stray NUL bytes from upstream exports;
+// replacing them with spaces is loss-minimizing and keeps one bad byte from
+// aborting an otherwise valid corpus. Callers may request strict rejection with
+// nul: error.
+func (profile InputProfile) withDefaults() InputProfile {
+	if profile.recordProfile() && profile.NUL == "" {
+		profile.NUL = "space"
+	}
+	return profile
+}
+
+type ChatMessagesMapping struct {
+	Role        string            `json:"role,omitempty" yaml:"role,omitempty"`
+	Content     string            `json:"content,omitempty" yaml:"content,omitempty"`
+	System      string            `json:"system,omitempty" yaml:"system,omitempty"`
+	Tools       string            `json:"tools,omitempty" yaml:"tools,omitempty"`
+	RoleAliases map[string]string `json:"role_aliases,omitempty" yaml:"role_aliases,omitempty"`
 }
 
 type ProfileFields struct {
@@ -52,6 +75,7 @@ type ProfileFields struct {
 	Source       string            `json:"source,omitempty" yaml:"source,omitempty"`
 	Context      string            `json:"context,omitempty" yaml:"context,omitempty"`
 	Response     string            `json:"response,omitempty" yaml:"response,omitempty"`
+	Tools        string            `json:"tools,omitempty" yaml:"tools,omitempty"`
 	Meta         map[string]string `json:"meta,omitempty" yaml:"meta,omitempty"`
 }
 
@@ -113,6 +137,13 @@ type ConversationTree struct {
 }
 
 func (profile InputProfile) Validate() error {
+	if profile.Format != "" {
+		switch profile.Format {
+		case "text", "markdown", "mbox", "json", "jsonl", "parquet", "xml":
+		default:
+			return fmt.Errorf("unsupported input format %q", profile.Format)
+		}
+	}
 	policy, err := corpus.NewLicensePolicy(profile.LicensePolicy.Include, profile.LicensePolicy.Exclude)
 	if err != nil {
 		return err
@@ -123,8 +154,8 @@ func (profile InputProfile) Validate() error {
 	if profile.OnEmpty != "" && profile.OnEmpty != "error" && profile.OnEmpty != "skip" {
 		return fmt.Errorf("on_empty must be error or skip")
 	}
-	if profile.OnEmpty != "" && profile.Type != ProfileRecordMap && profile.Type != ProfileDialoguePair && profile.Type != ProfileBoundedText {
-		return fmt.Errorf("on_empty is supported only for record-map, dialogue-pair, and bounded-text")
+	if profile.OnEmpty != "" && profile.Type != ProfileRecordMap && profile.Type != ProfileDialoguePair && profile.Type != ProfileChatMessages && profile.Type != ProfileBoundedText {
+		return fmt.Errorf("on_empty is supported only for record-map, dialogue-pair, chat-messages, and bounded-text")
 	}
 	if profile.NUL != "" && profile.NUL != "error" && profile.NUL != "space" {
 		return fmt.Errorf("nul must be error or space")
@@ -136,8 +167,8 @@ func (profile InputProfile) Validate() error {
 		if !profile.recordProfile() {
 			return fmt.Errorf("main_content is supported only for record profiles")
 		}
-		if len(profile.MainContent) != 1 {
-			return fmt.Errorf("main_content requires exactly one field and value")
+		if len(profile.MainContent) == 0 {
+			return fmt.Errorf("main_content requires at least one field and value")
 		}
 		for path, value := range profile.MainContent {
 			if err := validateFieldPath(path); err != nil {
@@ -150,15 +181,18 @@ func (profile InputProfile) Validate() error {
 	}
 	switch profile.Type {
 	case "":
-		if profile.OnEmpty != "" || profile.NUL != "" || profile.MainContent != nil || !profile.Fields.empty() || profile.Tree != (ConversationTree{}) || profile.Bounds != (TextBounds{}) || !profile.XML.empty() || len(profile.LicensePolicy.Include) > 0 || len(profile.LicensePolicy.Exclude) > 0 {
+		if profile.OnEmpty != "" || profile.NUL != "" || profile.MainContent != nil || !profile.Fields.empty() || profile.Tree != (ConversationTree{}) || !profile.Messages.empty() || profile.Bounds != (TextBounds{}) || !profile.XML.empty() || len(profile.LicensePolicy.Include) > 0 || len(profile.LicensePolicy.Exclude) > 0 {
 			return fmt.Errorf("input profile fields require a type")
 		}
 		return nil
 	case ProfileRecordMap:
+		if profile.Format != "" && profile.Format != "json" && profile.Format != "jsonl" && profile.Format != "parquet" {
+			return fmt.Errorf("record-map requires format json, jsonl, or parquet")
+		}
 		if len(profile.Fields.Text) == 0 {
 			return fmt.Errorf("record-map requires fields.text")
 		}
-		if profile.Fields.Context != "" || profile.Fields.Response != "" || profile.Tree != (ConversationTree{}) || profile.Bounds != (TextBounds{}) || !profile.XML.empty() {
+		if profile.Fields.Context != "" || profile.Fields.Response != "" || profile.Fields.Tools != "" || profile.Tree != (ConversationTree{}) || !profile.Messages.empty() || profile.Bounds != (TextBounds{}) || !profile.XML.empty() {
 			return fmt.Errorf("record-map accepts text, id, date, language, license, source, and meta fields only")
 		}
 		for name, path := range profile.Fields.Meta {
@@ -167,23 +201,57 @@ func (profile InputProfile) Validate() error {
 			}
 		}
 	case ProfileDialoguePair:
+		if profile.Format != "" && profile.Format != "json" && profile.Format != "jsonl" && profile.Format != "parquet" {
+			return fmt.Errorf("dialogue-pair requires format json, jsonl, or parquet")
+		}
 		if len(profile.Fields.Text) == 0 || profile.Fields.Response == "" {
 			return fmt.Errorf("dialogue-pair requires fields.text and fields.response")
 		}
-		if len(profile.Fields.TextFallback) > 0 || profile.Fields.Source != "" || len(profile.Fields.Meta) > 0 || profile.Tree != (ConversationTree{}) || profile.Bounds != (TextBounds{}) || !profile.XML.empty() {
+		if len(profile.Fields.TextFallback) > 0 || profile.Fields.Source != "" || profile.Tree != (ConversationTree{}) || !profile.Messages.empty() || profile.Bounds != (TextBounds{}) || !profile.XML.empty() {
 			return fmt.Errorf("dialogue-pair does not accept tree fields")
 		}
+		for name, path := range profile.Fields.Meta {
+			if strings.TrimSpace(name) == "" || strings.TrimSpace(path) == "" {
+				return fmt.Errorf("dialogue-pair meta names and paths must be non-empty")
+			}
+		}
+	case ProfileChatMessages:
+		if profile.Format != "" && profile.Format != "json" && profile.Format != "jsonl" && profile.Format != "parquet" {
+			return fmt.Errorf("chat-messages requires format json, jsonl, or parquet")
+		}
+		if profile.Messages.Role == "" || profile.Messages.Content == "" {
+			return fmt.Errorf("chat-messages requires messages.role and messages.content")
+		}
+		if len(profile.Fields.Text) > 0 || len(profile.Fields.TextFallback) > 0 || profile.Fields.Context != "" || profile.Fields.Response != "" || profile.Fields.Tools != "" || profile.Tree != (ConversationTree{}) || profile.Bounds != (TextBounds{}) || !profile.XML.empty() {
+			return fmt.Errorf("chat-messages accepts identity, source, and meta fields plus messages only")
+		}
+		for source, target := range profile.Messages.RoleAliases {
+			if strings.TrimSpace(source) == "" || !validChatRole(target) {
+				return fmt.Errorf("chat-messages role_aliases must map non-empty names to system, user, assistant, or tool")
+			}
+		}
+		for name, path := range profile.Fields.Meta {
+			if strings.TrimSpace(name) == "" || strings.TrimSpace(path) == "" {
+				return fmt.Errorf("chat-messages meta names and paths must be non-empty")
+			}
+		}
 	case ProfileRankedConversationTree:
+		if profile.Format != "" && profile.Format != "json" && profile.Format != "jsonl" {
+			return fmt.Errorf("ranked-conversation-tree requires format json or jsonl")
+		}
 		if profile.Tree.Replies == "" || profile.Tree.Text == "" || profile.Tree.Rank == "" {
 			return fmt.Errorf("ranked-conversation-tree requires tree.replies, tree.text, and tree.rank")
 		}
-		if len(profile.Fields.Text) > 0 || len(profile.Fields.TextFallback) > 0 || profile.Fields.Context != "" || profile.Fields.Response != "" || profile.Fields.Source != "" || len(profile.Fields.Meta) > 0 || profile.Bounds != (TextBounds{}) || !profile.XML.empty() {
+		if len(profile.Fields.Text) > 0 || len(profile.Fields.TextFallback) > 0 || profile.Fields.Context != "" || profile.Fields.Response != "" || profile.Fields.Source != "" || len(profile.Fields.Meta) > 0 || !profile.Messages.empty() || profile.Bounds != (TextBounds{}) || !profile.XML.empty() {
 			return fmt.Errorf("ranked-conversation-tree text comes from the tree mapping")
 		}
 		if profile.Tree.MissingRank != "" && profile.Tree.MissingRank != "source-order" {
 			return fmt.Errorf("ranked-conversation-tree tree.missing_rank must be source-order")
 		}
 	case ProfileBoundedText:
+		if profile.Format != "" && profile.Format != "text" && profile.Format != "markdown" {
+			return fmt.Errorf("bounded-text requires format text or markdown")
+		}
 		if profile.Bounds.StartPattern == "" || profile.Bounds.EndPattern == "" {
 			return fmt.Errorf("bounded-text requires bounds.start_pattern and bounds.end_pattern")
 		}
@@ -193,14 +261,17 @@ func (profile InputProfile) Validate() error {
 		if _, err := regexp.Compile(profile.Bounds.EndPattern); err != nil {
 			return fmt.Errorf("invalid bounds.end_pattern: %w", err)
 		}
-		if !profile.Fields.empty() || profile.Tree != (ConversationTree{}) || !profile.XML.empty() {
+		if !profile.Fields.empty() || profile.Tree != (ConversationTree{}) || !profile.Messages.empty() || !profile.XML.empty() {
 			return fmt.Errorf("bounded-text accepts bounds and on_empty only")
 		}
 	case ProfileXMLRecord:
+		if profile.Format != "" && profile.Format != "xml" {
+			return fmt.Errorf("xml-record requires format xml")
+		}
 		if len(profile.Fields.Text) == 0 {
 			return fmt.Errorf("xml-record requires fields.text")
 		}
-		if len(profile.Fields.TextFallback) > 0 || profile.Fields.Context != "" || profile.Fields.Response != "" || profile.Tree != (ConversationTree{}) || profile.Bounds != (TextBounds{}) {
+		if len(profile.Fields.TextFallback) > 0 || profile.Fields.Context != "" || profile.Fields.Response != "" || profile.Tree != (ConversationTree{}) || !profile.Messages.empty() || profile.Bounds != (TextBounds{}) {
 			return fmt.Errorf("xml-record accepts text, id, date, language, license, source, and meta fields only")
 		}
 		if profile.XML.OnMalformed != "" && profile.XML.OnMalformed != "error" && profile.XML.OnMalformed != "skip" {
@@ -226,20 +297,24 @@ func (profile InputProfile) Validate() error {
 
 func (fields ProfileFields) empty() bool {
 	return len(fields.Text) == 0 && len(fields.TextFallback) == 0 && fields.ID == "" && fields.Date == "" && fields.Language == "" &&
-		fields.License == "" && fields.Source == "" && fields.Context == "" && fields.Response == "" && len(fields.Meta) == 0
+		fields.License == "" && fields.Source == "" && fields.Context == "" && fields.Response == "" && fields.Tools == "" && len(fields.Meta) == 0
 }
 
 func (mapping XMLMapping) empty() bool {
 	return len(mapping.Exclude) == 0 && mapping.SourcePrefix == "" && mapping.OnMalformed == ""
 }
 
+func (mapping ChatMessagesMapping) empty() bool {
+	return mapping.Role == "" && mapping.Content == "" && mapping.System == "" && mapping.Tools == "" && len(mapping.RoleAliases) == 0
+}
+
 func (profile InputProfile) paths() []string {
 	paths := append([]string(nil), profile.Fields.Text...)
 	paths = append(paths, profile.Fields.TextFallback...)
 	paths = append(paths, profile.Fields.ID, profile.Fields.Date, profile.Fields.Language,
-		profile.Fields.License, profile.Fields.Context, profile.Fields.Response,
+		profile.Fields.License, profile.Fields.Source, profile.Fields.Context, profile.Fields.Response, profile.Fields.Tools,
 		profile.Tree.Root, profile.Tree.Replies, profile.Tree.Text, profile.Tree.Rank,
-		profile.Tree.Role)
+		profile.Tree.Role, profile.Messages.Role, profile.Messages.Content, profile.Messages.System, profile.Messages.Tools)
 	for _, path := range profile.Fields.Meta {
 		paths = append(paths, path)
 	}
@@ -344,5 +419,14 @@ func validateFieldPath(path string) error {
 }
 
 func (profile InputProfile) recordProfile() bool {
-	return profile.Type == ProfileRecordMap || profile.Type == ProfileDialoguePair || profile.Type == ProfileRankedConversationTree
+	return profile.Type == ProfileRecordMap || profile.Type == ProfileDialoguePair || profile.Type == ProfileChatMessages || profile.Type == ProfileRankedConversationTree
+}
+
+func validChatRole(role string) bool {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case "system", "user", "assistant", "tool":
+		return true
+	default:
+		return false
+	}
 }

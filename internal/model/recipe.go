@@ -33,7 +33,77 @@ type Compose struct {
 	Schema       int          `json:"schema" yaml:"schema"`
 	Base         *ComposeBase `json:"base,omitempty" yaml:"base,omitempty"`
 	Architecture Architecture `json:"architecture" yaml:"architecture"`
+	Interaction  Interaction  `json:"interaction,omitzero" yaml:"interaction,omitempty"`
 	Stages       []Stage      `json:"stages" yaml:"stages"`
+}
+
+const InteractionUserAssistantV1 = "user-assistant-v1"
+const InteractionChatMLV1 = "chatml-v1"
+
+// Interaction is the portable inference-time prompt contract learned by a
+// model. The zero value deliberately means raw causal continuation.
+type Interaction struct {
+	Template string `json:"template,omitempty" yaml:"template,omitempty"`
+}
+
+func (interaction Interaction) IsZero() bool { return interaction.Template == "" }
+
+func (interaction Interaction) Validate() error {
+	if interaction.Template == "" || interaction.Template == InteractionUserAssistantV1 || interaction.Template == InteractionChatMLV1 {
+		return nil
+	}
+	return fmt.Errorf("unsupported interaction template %q", interaction.Template)
+}
+
+func (interaction Interaction) Conversational() bool {
+	return interaction.Template == InteractionUserAssistantV1 || interaction.Template == InteractionChatMLV1
+}
+
+func (interaction Interaction) Prompt(history, user string) string {
+	if !interaction.Conversational() {
+		if history == "" {
+			return user
+		}
+		return history + "\n" + user
+	}
+	if interaction.Template == InteractionChatMLV1 {
+		prefix := history
+		if prefix != "" && !strings.HasSuffix(prefix, "\n") {
+			prefix += "\n"
+		}
+		return prefix + "<|im_start|>user\n" + user + "<|im_end|>\n<|im_start|>assistant\n"
+	}
+	prefix := ""
+	if history != "" {
+		prefix = strings.TrimRight(history, "\n") + "\n\n"
+	}
+	return prefix + "User: " + user + "\n\nAssistant:"
+}
+
+func (interaction Interaction) Stops() []string {
+	if interaction.Template == InteractionChatMLV1 {
+		return []string{"<|im_end|>"}
+	}
+	if interaction.Conversational() {
+		return []string{"\n\nUser:"}
+	}
+	return nil
+}
+
+func (interaction Interaction) TrimResponse(value string) string {
+	for _, stop := range interaction.Stops() {
+		if index := strings.Index(value, stop); index >= 0 {
+			value = value[:index]
+		}
+	}
+	return strings.TrimRight(value, "\r\n")
+}
+
+func (interaction Interaction) CompleteTurn(prompt, response string) string {
+	if interaction.Template == InteractionChatMLV1 {
+		return prompt + response + "<|im_end|>\n"
+	}
+	return prompt + response
 }
 
 type ComposeBase struct {
@@ -63,12 +133,13 @@ type Tokenizer struct {
 }
 
 type Stage struct {
-	Name       string               `json:"name" yaml:"name"`
-	Type       string               `json:"type" yaml:"type"`
-	Objective  string               `json:"objective" yaml:"objective"`
-	Filter     *corpus.RecordFilter `json:"filter,omitempty" yaml:"filter,omitempty"`
-	Corpora    []CorpusSelection    `json:"corpora" yaml:"corpora"`
-	Parameters training.Parameters  `json:"parameters" yaml:"parameters"`
+	Name         string                          `json:"name" yaml:"name"`
+	Type         string                          `json:"type" yaml:"type"`
+	Objective    string                          `json:"objective" yaml:"objective"`
+	Conversation *training.ConversationTransform `json:"conversation,omitempty" yaml:"conversation,omitempty"`
+	Filter       *corpus.RecordFilter            `json:"filter,omitempty" yaml:"filter,omitempty"`
+	Corpora      []CorpusSelection               `json:"corpora" yaml:"corpora"`
+	Parameters   training.Parameters             `json:"parameters" yaml:"parameters"`
 }
 
 // CorpusSelection preserves the compact scalar form while allowing a corpus
@@ -204,13 +275,37 @@ func NewCorpusSelections(paths []string) []CorpusSelection {
 }
 
 func (stage Stage) ResolveParameters() (training.ResolvedParameters, error) {
+	parameters, err := stage.trainingParameters()
+	if err != nil {
+		return training.ResolvedParameters{}, err
+	}
+	return training.ResolveParameters(parameters)
+}
+
+func (stage Stage) ResolvePlanningParameters() (training.ResolvedParameters, error) {
+	parameters, err := stage.trainingParameters()
+	if err != nil {
+		return training.ResolvedParameters{}, err
+	}
+	return training.ResolvePlanningParameters(parameters)
+}
+
+func (stage Stage) ResolveParametersForSteps(steps int64) (training.ResolvedParameters, error) {
+	parameters, err := stage.trainingParameters()
+	if err != nil {
+		return training.ResolvedParameters{}, err
+	}
+	return training.ResolveParametersForSteps(parameters, steps)
+}
+
+func (stage Stage) trainingParameters() (training.Parameters, error) {
 	parameters := stage.Parameters
 	inline := false
 	for _, selection := range stage.Corpora {
 		inline = inline || selection.Weight != nil
 	}
 	if inline && len(parameters.CorpusWeights) != 0 {
-		return training.ResolvedParameters{}, fmt.Errorf("inline corpus weights cannot be combined with parameters.corpus_weights")
+		return training.Parameters{}, fmt.Errorf("inline corpus weights cannot be combined with parameters.corpus_weights")
 	}
 	if inline {
 		parameters.CorpusWeights = make(map[string]uint64, len(stage.Corpora))
@@ -220,7 +315,7 @@ func (stage Stage) ResolveParameters() (training.ResolvedParameters, error) {
 			}
 		}
 	}
-	return training.ResolveParameters(parameters)
+	return parameters, nil
 }
 
 func (stage Stage) RecordFilterPolicy(paths []string) (*corpus.RecordFilterPolicy, error) {
@@ -329,6 +424,9 @@ func (compose Compose) Validate() error {
 	if compose.Kind != "waldo-model-compose" || compose.Schema != ComposeSchema {
 		return fmt.Errorf("unsupported model compose identity %q schema %d", compose.Kind, compose.Schema)
 	}
+	if err := compose.Interaction.Validate(); err != nil {
+		return err
+	}
 	inheritedArchitecture := compose.Base != nil && compose.Base.Source != "" && compose.Architecture == (Architecture{})
 	if !inheritedArchitecture {
 		if err := compose.Architecture.Validate(); err != nil {
@@ -365,8 +463,18 @@ func (compose Compose) Validate() error {
 		if stage.Type != "pre-training" && stage.Type != "fine-tuning" && stage.Type != "alignment" && stage.Type != "other" {
 			return fmt.Errorf("stage %s has unsupported type %q; use pre-training, fine-tuning, alignment, or other", stage.Name, stage.Type)
 		}
-		if stage.Objective != "causal-language-modeling" {
+		if stage.Objective != "causal-language-modeling" && stage.Objective != "assistant-response-modeling" {
 			return fmt.Errorf("stage %s has unsupported objective %q", stage.Name, stage.Objective)
+		}
+		if stage.Conversation != nil {
+			if err := stage.Conversation.Validate(); err != nil {
+				return fmt.Errorf("stage %s conversation: %w", stage.Name, err)
+			}
+			if compose.Interaction.Template != stage.Conversation.Template {
+				return fmt.Errorf("stage %s conversation template %q does not match interaction template %q", stage.Name, stage.Conversation.Template, compose.Interaction.Template)
+			}
+		} else if stage.Objective == "assistant-response-modeling" {
+			return fmt.Errorf("stage %s assistant-response-modeling requires conversation transformation", stage.Name)
 		}
 		if len(stage.Corpora) == 0 {
 			return fmt.Errorf("stage %s requires at least one index path in corpora", stage.Name)
@@ -392,7 +500,7 @@ func (compose Compose) Validate() error {
 				return fmt.Errorf("stage %s filter: %w", stage.Name, err)
 			}
 		}
-		resolved, err := stage.ResolveParameters()
+		resolved, err := stage.ResolvePlanningParameters()
 		if err != nil {
 			return fmt.Errorf("stage %s training parameters: %w", stage.Name, err)
 		}

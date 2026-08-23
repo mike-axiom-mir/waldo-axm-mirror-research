@@ -23,12 +23,19 @@ import (
 
 // TextBatch is the typed boundary between text-family adapters and the
 // partitioning/writer stage. LogicalBytes counts payload bytes, not Go object
-// overhead or encoded Parquet bytes.
+// overhead or encoded Parquet bytes. InputBytes is the adapter's cumulative
+// encoded-input progress for the current artifact; the Progress fields are
+// populated by the multi-input pipeline before the writer receives the batch.
 type TextBatch struct {
-	Rows         []shard.TextRow
-	LogicalBytes int64
-	RejectedDocs int64
-	Rejections   map[string]int64
+	Rows               []shard.TextRow
+	LogicalBytes       int64
+	InputBytes         int64
+	ProgressBytes      int64
+	ProgressTotalBytes int64
+	ProgressFiles      int64
+	ProgressTotalFiles int64
+	RejectedDocs       int64
+	Rejections         map[string]int64
 }
 
 const (
@@ -91,11 +98,7 @@ func streamTextBatches(ctx context.Context, plan Plan, batchMaximum, recordMaxim
 				return fmt.Errorf("adapt %s: %w", input.Artifact.Path, err)
 			}
 			if !valid {
-				emitOpaqueTextFallback(ctx, input)
-				if err := streamOpaqueInput(ctx, plan, input, batchMaximum, consume); err != nil {
-					return fmt.Errorf("adapt %s: %w", input.Artifact.Path, err)
-				}
-				continue
+				return fmt.Errorf("adapt %s: selected text adapter requires NUL-free UTF-8", input.Artifact.Path)
 			}
 			if err := streamLargeTextInput(ctx, plan, input, min(batchMaximum, recordMaximum), consume); err != nil {
 				return fmt.Errorf("adapt %s: %w", input.Artifact.Path, err)
@@ -105,14 +108,7 @@ func streamTextBatches(ctx context.Context, plan Plan, batchMaximum, recordMaxim
 		row, size, err := readTextRow(ctx, plan, input, recordMaximum)
 		if err != nil {
 			if errors.Is(err, errTextRequiresOpaqueFallback) {
-				if err := flush(); err != nil {
-					return err
-				}
-				emitOpaqueTextFallback(ctx, input)
-				if err := streamOpaqueInput(ctx, plan, input, batchMaximum, consume); err != nil {
-					return fmt.Errorf("adapt %s: %w", input.Artifact.Path, err)
-				}
-				continue
+				return fmt.Errorf("adapt %s: selected text adapter requires NUL-free UTF-8", input.Artifact.Path)
 			}
 			return fmt.Errorf("adapt %s: %w", input.Artifact.Path, err)
 		}
@@ -130,13 +126,6 @@ func streamTextBatches(ctx context.Context, plan Plan, batchMaximum, recordMaxim
 		}
 	}
 	return flush()
-}
-
-func emitOpaqueTextFallback(ctx context.Context, input PlanInput) {
-	emitProgress(ctx, ProgressEvent{
-		Phase: "convert", Status: "warning", Input: input.Artifact.Path, Adapter: "opaque-base64",
-		TotalBytes: input.Artifact.Bytes, Message: "text probe did not cover non-UTF-8 or NUL bytes; retaining the complete artifact losslessly",
-	})
 }
 
 func isNULFreeUTF8File(ctx context.Context, path string) (bool, error) {

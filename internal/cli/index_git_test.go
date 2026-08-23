@@ -98,7 +98,7 @@ func TestManagedIndexRejectsAuthoring(t *testing.T) {
 	managed := filepath.Join(home, ".waldo", "index")
 
 	var stdout, stderr bytes.Buffer
-	args := []string{"index", "ingest", "input.txt", "core/new", "--title", "New", "--license", "CC0-1.0", "--source", "https://example.invalid", "--source-category", "public-dataset", "--dry-run"}
+	args := []string{"index", "ingest", "input.txt", "core/new", "--title", "New", "--license", "CC0-1.0", "--source", "https://example.invalid", "--source-category", "public-dataset", "--language", "en", "--dry-run"}
 	if code := Run(args, &stdout, &stderr); code != 1 || !strings.Contains(stderr.String(), "managed read-only index") {
 		t.Fatalf("ingest code=%d stderr=%q", code, stderr.String())
 	}
@@ -118,7 +118,7 @@ func TestManagedIndexRejectsCorpusUpdateAndConfigurationOverride(t *testing.T) {
 	managed := filepath.Join(home, ".waldo", "index")
 
 	var stdout, stderr bytes.Buffer
-	args := []string{"index", "update", "input.txt", "books/books.json", "--title", "Books", "--license", "CC0-1.0", "--source", "https://example.invalid", "--source-category", "public-dataset", "--dry-run"}
+	args := []string{"index", "ingest", "input.txt", "books/books.json", "--update", "--title", "Books", "--license", "CC0-1.0", "--source", "https://example.invalid", "--source-category", "public-dataset", "--language", "en", "--dry-run"}
 	if code := Run(args, &stdout, &stderr); code != 1 || !strings.Contains(stderr.String(), "cannot update the managed read-only index") {
 		t.Fatalf("update code=%d stderr=%q", code, stderr.String())
 	}
@@ -174,6 +174,24 @@ func TestConfiguredContributorCheckoutRefusesDirtyPull(t *testing.T) {
 	stderr.Reset()
 	if code := Run([]string{"index", "pull"}, &stdout, &stderr); code != 1 || !strings.Contains(stderr.String(), "is dirty") {
 		t.Fatalf("dirty explicit pull code=%d stderr=%q", code, stderr.String())
+	}
+}
+
+func TestExplicitIndexPathNeverRefreshesGit(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "waldo-index")
+	fixture := fixtureGitIndex(t)
+	if err := os.Rename(fixture, root); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("WALDO_CONFIG", filepath.Join(t.TempDir(), "config.json"))
+	t.Chdir(parent)
+	selection, err := resolveIndexSelection(t.Context(), []string{"./waldo-index"}, nil, true)
+	if err != nil {
+		t.Fatalf("explicit local checkout attempted refresh: %v", err)
+	}
+	if len(selection.Targets) != 1 || selection.Targets[0].Root != root {
+		t.Fatalf("selection = %+v, want root %s", selection, root)
 	}
 }
 

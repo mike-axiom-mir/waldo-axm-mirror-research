@@ -73,10 +73,11 @@ Set `config.index` to use a writable contributor checkout:
 waldo config set index /path/to/waldo-index
 ```
 
-Relative index paths resolve beneath the selected checkout. Absolute and `~/`
-paths explicitly select another checkout. Omitting a path selects the whole
-resolved index. `waldo index verify --offline` performs local structural
-validation without synchronizing or accessing object storage.
+Logical index paths resolve beneath the selected checkout. Existing filesystem
+paths and paths beginning with `./`, `../`, `/`, or `~/` explicitly select the
+exact local checkout and never trigger Git network access. Omitting a path
+selects the whole resolved index. `waldo index verify --offline` additionally
+disables object-storage verification and performs local structural validation.
 
 ## Inspect and verify data
 
@@ -87,12 +88,13 @@ waldo index summary
 waldo index verify --offline
 waldo index verify core/example
 waldo index verify core/example --objects
-waldo index audit core/example
+waldo index audit core/example --workers 8
 ```
 
 Default verification checks metadata and canonical object availability without
 downloading object bodies. `--objects` downloads and hashes every selected
-object. `audit` additionally validates canonical shard contents.
+object. `audit` additionally validates canonical shard contents. Its worker
+count controls concurrent fetch-and-audit operations.
 
 Local Parquet files can be inspected without an index:
 
@@ -118,12 +120,12 @@ Inspect the complete ingest interface before use:
 
 ```bash
 waldo index ingest --help
-waldo index update --help
 ```
 
-Ingestion accepts supported local files or a reviewed ingest recipe. It writes
-a contribution overlay for normal Git review; WALDO does not commit or open a
-pull request.
+Ingestion accepts supported local files or a reviewed ingest recipe. After all
+objects are audited and published, it retains a contribution overlay and
+atomically applies those metadata changes to the selected index working tree
+for normal Git review. WALDO does not commit, push, or open a pull request.
 
 ## Export data and inspect its BOM
 
@@ -174,6 +176,9 @@ waldo model export --help
 
 Run `forecast` before allocating substantial compute. Training and generation
 fail when the selected host lacks a compatible runtime or artifacts.
+Models with a declared `interaction.template` automatically receive the
+matching prompt format and multi-turn history in `model chat`; models without
+one remain raw causal-continuation models.
 
 Reference composes under `composes/` are test and experiment inputs, not model
 quality guarantees. See the [model compose guide](MODEL-COMPOSE.md) for the

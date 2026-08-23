@@ -36,6 +36,7 @@ type Plan struct {
 	Name               string               `json:"name"`
 	ArchitectureSHA256 string               `json:"architecture_sha256"`
 	Architecture       Architecture         `json:"architecture"`
+	Interaction        Interaction          `json:"interaction,omitzero"`
 	Forecast           ArchitectureForecast `json:"forecast"`
 	Stages             []PlannedStage       `json:"stages,omitempty"`
 	OriginBOMSHA256    string               `json:"origin_bom_sha256,omitempty"`
@@ -88,6 +89,7 @@ type ModelRecord struct {
 	PlanSHA256         string               `json:"plan_sha256"`
 	ArchitectureSHA256 string               `json:"architecture_sha256"`
 	Architecture       Architecture         `json:"architecture"`
+	Interaction        Interaction          `json:"interaction,omitzero"`
 	Forecast           ArchitectureForecast `json:"forecast"`
 	Created            string               `json:"created"`
 	Updated            string               `json:"updated"`
@@ -120,22 +122,23 @@ type RunPin struct {
 }
 
 type RunBOM struct {
-	Kind               string                      `json:"kind"`
-	Schema             int                         `json:"schema"`
-	Subject            string                      `json:"subject"`
-	ID                 string                      `json:"id"`
-	ModelID            string                      `json:"model_id"`
-	Stage              string                      `json:"stage"`
-	StageType          string                      `json:"stage_type"`
-	Ordinal            int                         `json:"ordinal"`
-	Objective          string                      `json:"objective"`
-	Execution          training.Execution          `json:"execution"`
-	ArchitectureSHA256 string                      `json:"architecture_sha256"`
-	CorpusBOMSHA256    string                      `json:"corpus_bom_sha256"`
-	CorpusBOM          corpus.BOM                  `json:"corpus_bom"`
-	Parameters         training.ResolvedParameters `json:"parameters"`
-	EvaluationSet      *training.EvaluationSet     `json:"evaluation_set,omitempty"`
-	Initialization     *training.Initialization    `json:"initialization,omitempty"`
+	Kind               string                         `json:"kind"`
+	Schema             int                            `json:"schema"`
+	Subject            string                         `json:"subject"`
+	ID                 string                         `json:"id"`
+	ModelID            string                         `json:"model_id"`
+	Stage              string                         `json:"stage"`
+	StageType          string                         `json:"stage_type"`
+	Ordinal            int                            `json:"ordinal"`
+	Objective          string                         `json:"objective"`
+	Conversation       training.ConversationTransform `json:"conversation,omitzero"`
+	Execution          training.Execution             `json:"execution"`
+	ArchitectureSHA256 string                         `json:"architecture_sha256"`
+	CorpusBOMSHA256    string                         `json:"corpus_bom_sha256"`
+	CorpusBOM          corpus.BOM                     `json:"corpus_bom"`
+	Parameters         training.ResolvedParameters    `json:"parameters"`
+	EvaluationSet      *training.EvaluationSet        `json:"evaluation_set,omitempty"`
+	Initialization     *training.Initialization       `json:"initialization,omitempty"`
 }
 
 const MultiNodePlanSchema = 1
@@ -143,21 +146,22 @@ const MultiNodePlanSchema = 1
 const MultiNodePlanKind = "openwaldo-multinode-plan"
 
 type MultiNodePlan struct {
-	Kind               string                      `json:"kind"`
-	Schema             int                         `json:"schema"`
-	RunID              string                      `json:"run_id"`
-	Stage              string                      `json:"stage"`
-	StageOrdinal       int                         `json:"stage_ordinal"`
-	StageCount         int                         `json:"stage_count"`
-	Nodes              int                         `json:"nodes"`
-	Objective          string                      `json:"objective"`
-	ArchitectureSHA256 string                      `json:"architecture_sha256"`
-	Architecture       json.RawMessage             `json:"architecture"`
-	Parameters         training.ResolvedParameters `json:"parameters"`
-	CorpusBOM          corpus.BOM                  `json:"corpus_bom"`
-	EvaluationSet      *training.EvaluationSet     `json:"evaluation_set,omitempty"`
-	Initialization     *training.Initialization    `json:"initialization,omitempty"`
-	InitializationPath string                      `json:"initialization_path,omitempty"`
+	Kind               string                         `json:"kind"`
+	Schema             int                            `json:"schema"`
+	RunID              string                         `json:"run_id"`
+	Stage              string                         `json:"stage"`
+	StageOrdinal       int                            `json:"stage_ordinal"`
+	StageCount         int                            `json:"stage_count"`
+	Nodes              int                            `json:"nodes"`
+	Objective          string                         `json:"objective"`
+	Conversation       training.ConversationTransform `json:"conversation,omitzero"`
+	ArchitectureSHA256 string                         `json:"architecture_sha256"`
+	Architecture       json.RawMessage                `json:"architecture"`
+	Parameters         training.ResolvedParameters    `json:"parameters"`
+	CorpusBOM          corpus.BOM                     `json:"corpus_bom"`
+	EvaluationSet      *training.EvaluationSet        `json:"evaluation_set,omitempty"`
+	Initialization     *training.Initialization       `json:"initialization,omitempty"`
+	InitializationPath string                         `json:"initialization_path,omitempty"`
 }
 
 func MultiNodePlanPath(root, rendezvousID string) string {
@@ -196,6 +200,7 @@ type ModelBOM struct {
 	Name                string          `json:"name"`
 	PlanSHA256          string          `json:"plan_sha256"`
 	ArchitectureSHA256  string          `json:"architecture_sha256"`
+	Interaction         Interaction     `json:"interaction,omitzero"`
 	PathBase            string          `json:"path_base"`
 	CurrentRunID        string          `json:"current_run_id,omitempty"`
 	CurrentOriginSHA256 string          `json:"current_origin_sha256,omitempty"`
@@ -268,7 +273,7 @@ func Inspect(root, nameOrPath string) (Inspection, error) {
 	if err != nil {
 		return Inspection{}, err
 	}
-	if plan.Kind != "waldo-model-plan" || plan.Schema != PlanSchema || planHash != record.PlanSHA256 || record.ID != planHash || plan.Name != record.Name || plan.ArchitectureSHA256 != record.ArchitectureSHA256 || plan.OriginBOMSHA256 != record.OriginBOMSHA256 || !reflect.DeepEqual(plan.Architecture, record.Architecture) || !reflect.DeepEqual(plan.Forecast, record.Forecast) {
+	if plan.Kind != "waldo-model-plan" || plan.Schema != PlanSchema || planHash != record.PlanSHA256 || record.ID != planHash || plan.Name != record.Name || plan.ArchitectureSHA256 != record.ArchitectureSHA256 || plan.OriginBOMSHA256 != record.OriginBOMSHA256 || !reflect.DeepEqual(plan.Architecture, record.Architecture) || !reflect.DeepEqual(plan.Interaction, record.Interaction) || !reflect.DeepEqual(plan.Forecast, record.Forecast) {
 		return Inspection{}, fmt.Errorf("%s has an invalid immutable model plan", directory)
 	}
 	var origin *OriginBOM
@@ -299,7 +304,7 @@ func Inspect(root, nameOrPath string) (Inspection, error) {
 	if err := readJSON(bomPath, &bom); err != nil {
 		return Inspection{}, err
 	}
-	if bom.Kind != "openwaldo-bom" || bom.Schema != ModelBOMSchema || bom.Subject != "model" || bom.ModelID != record.ID || bom.Name != record.Name || bom.PlanSHA256 != record.PlanSHA256 || bom.ArchitectureSHA256 != record.ArchitectureSHA256 || bom.Generated != record.Updated {
+	if bom.Kind != "openwaldo-bom" || bom.Schema != ModelBOMSchema || bom.Subject != "model" || bom.ModelID != record.ID || bom.Name != record.Name || bom.PlanSHA256 != record.PlanSHA256 || bom.ArchitectureSHA256 != record.ArchitectureSHA256 || !reflect.DeepEqual(bom.Interaction, record.Interaction) || bom.Generated != record.Updated {
 		return Inspection{}, fmt.Errorf("%s has an invalid model OpenWALDO BOM", directory)
 	}
 	originalPins := append([]RunPin(nil), record.Runs...)
@@ -537,7 +542,7 @@ func modelBOM(record ModelRecord) ModelBOM {
 	bom := ModelBOM{
 		Kind: "openwaldo-bom", Schema: ModelBOMSchema, Subject: "model",
 		ModelID: record.ID, Name: record.Name, PlanSHA256: record.PlanSHA256,
-		ArchitectureSHA256: record.ArchitectureSHA256, PathBase: "model-root", Generated: record.Updated,
+		ArchitectureSHA256: record.ArchitectureSHA256, Interaction: record.Interaction, PathBase: "model-root", Generated: record.Updated,
 	}
 	if record.OriginBOMSHA256 != "" {
 		bom.Origin = &ModelBOMOrigin{BOM: "ORIGIN-BOM.json", SHA256: record.OriginBOMSHA256}
