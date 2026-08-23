@@ -49,7 +49,7 @@ type CapabilityFabricCapability struct {
 }
 
 type CapabilityFabricProbeBoundary struct {
-	LocalCapabilityFabricImplementationIncluded      bool `json:"localCapabilityFabricImplementationIncluded"`
+	LocalCapabilityFabricImplementationIncluded       bool `json:"localCapabilityFabricImplementationIncluded"`
 	ActualCapabilityFabricExecutionObserved           bool `json:"actualCapabilityFabricExecutionObserved"`
 	OutputIsContractProbe                             bool `json:"outputIsContractProbe"`
 	RouteNamesAreContractLabelsNotCanonicalModuleNames bool `json:"routeNamesAreContractLabelsNotCanonicalModuleNames"`
@@ -102,13 +102,13 @@ type CapabilityFabricRefusal struct {
 }
 
 type CapabilityFabricDecision struct {
-	SelectionPerformed bool    `json:"selectionPerformed"`
+	SelectionPerformed  bool    `json:"selectionPerformed"`
 	PreferredEmbodiment *string `json:"preferredEmbodiment"`
-	BuildStarted       bool    `json:"buildStarted"`
-	Installed          bool    `json:"installed"`
-	Registered         bool    `json:"registered"`
-	Promoted           bool    `json:"promoted"`
-	CanonChanged       bool    `json:"canonChanged"`
+	BuildStarted        bool    `json:"buildStarted"`
+	Installed           bool    `json:"installed"`
+	Registered          bool    `json:"registered"`
+	Promoted            bool    `json:"promoted"`
+	CanonChanged        bool    `json:"canonChanged"`
 }
 
 type CapabilityFabricTruth struct {
