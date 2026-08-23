@@ -83,3 +83,4 @@ logs.
 - [9015: Preserve generated peer-audit dissent and require an external witness](9015-axm-generated-peer-audit-ring.md)
 - [9016: Preserve independent witness disagreement as append-only evidence](9016-axm-independent-witness-dissent-ledger.md)
 - [9017: Put a Capability Fabric contract above WALDO gap evidence without importing the local implementation](9017-axm-capability-fabric-contract-probe.md)
+- [9018: Hold multi-capability composition when a declared link is missing](9018-axm-capability-composition-contract.md)
