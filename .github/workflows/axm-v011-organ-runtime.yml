@@ -10,61 +10,14 @@ on:
       - 'docs/adr/9013-axm-waldo-organ-fabric-runtime-bridge.md'
       - '.github/workflows/axm-v011-organ-runtime.yml'
 
-permissions:
-  contents: write
-
 jobs:
   organ-runtime-witness:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.ref }}
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: One-time advisor checkpoint race repair
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          path = Path('internal/cli/advisor.go')
-          text = path.read_text()
-          old = '''\t\treport, err := currentAdvisorEvidence(monitor.root, monitor.name)
-          \t\tif err != nil {
-          \t\t\tfmt.Fprintf(monitor.warnings, "warning: advisor checkpoint monitor: %v\\n", err)
-          \t\t\tcontinue
-          \t\t}
-          '''
-          new = '''\t\tvar report model.Advice
-          \t\tvar err error
-          \t\tfor attempt := 0; attempt < 100; attempt++ {
-          \t\t\treport, err = currentAdvisorEvidence(monitor.root, monitor.name)
-          \t\t\tif err == nil {
-          \t\t\t\tbreak
-          \t\t\t}
-          \t\t\tselect {
-          \t\t\tcase <-monitor.ctx.Done():
-          \t\t\t\treturn
-          \t\t\tcase <-time.After(10 * time.Millisecond):
-          \t\t\t}
-          \t\t}
-          \t\tif err != nil {
-          \t\t\tfmt.Fprintf(monitor.warnings, "warning: advisor checkpoint monitor: %v\\n", err)
-          \t\t\tcontinue
-          \t\t}
-          '''
-          if text.count(old) != 1:
-              raise SystemExit(f'expected one advisor monitor evidence block, found {text.count(old)}')
-          path.write_text(text.replace(old, new))
-          PY
-          gofmt -w internal/cli/advisor.go
-          if ! git diff --quiet -- internal/cli/advisor.go; then
-            git config user.name 'github-actions[bot]'
-            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-            git add internal/cli/advisor.go
-            git commit -m 'fix: wait briefly for durable advisor checkpoint evidence' -m 'Signed-off-by: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>'
-            git push origin HEAD:${{ github.event.pull_request.head.ref }}
-          fi
       - name: Repository format check
         run: test -z "$(gofmt -l .)"
       - name: Focused witness tests
