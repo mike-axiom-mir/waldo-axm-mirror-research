@@ -21,14 +21,17 @@ partnership, endorsement, or ownership of OpenWALDO.
 
 The upstream Apache-2.0 `LICENSE` and `NOTICE` remain intact.
 
-The inherited v0.6 stack merges the exact OpenWALDO head
-`451e029abd1f74fd77625984526a1980c48fb477`. The merge and its downstream
-compatibility work are recorded in ADR 9009 and
-`research/openwaldo-upstream-alignment-2026-08-16.json`; neither upstream
-`main` nor this fork's `main` is changed. The stacked v0.7 layer in ADR 9010
-adds mutually checked verifier candidates, fail-safe rollback, Repair Buddy,
-and identity-scoped tool wisdom. Its organ-map overlay keeps the remaining
-continuity and specialist-growth surfaces explicit.
+On 2026-08-23 this fork's `main` was fast-forwarded to the then-current
+OpenWALDO `main` head `b3784d3210de2ebd8df69b1f902b16eeed48b0a4`. The
+`axm/mirror-waldo-experiment-v0.8` checkpoint records a two-parent downstream
+integration at `a8c94d0d24c0eaa64167fd9c1501fd0aed77c09c`: current OpenWALDO body
+plus the preserved AXM-only overlay. The previous v0.7 branch remains unchanged
+as a rollback/history checkpoint.
+
+The stacked v0.9 layer in ADR 9011 uses OpenWALDO's new structured-conversation
+and versioned interaction-contract surfaces to add a digest-only conversation
+witness and portable continuity capsule. It does not change OpenWALDO upstream
+or copy upstream conversation rendering into AXM.
 
 ## Implemented witness slices
 
@@ -60,6 +63,11 @@ flowchart TD
     X --> Y["Candidate-only Repair Buddy"]
     Z["Verified identity + tool experience"] --> AA["Per-tool memory shard"]
     AA --> AB["Fresh task-specific wisdom view"]
+    AC["WALDO structured conversation + interaction contract"] --> AD["Digest-only ordered conversation witness"]
+    AD --> AE["Portable continuity capsule"]
+    V --> AE
+    AA --> AE
+    J --> AE
 ```
 
 Build after installing the Go version required by WALDO:
@@ -281,6 +289,38 @@ secrets. Stale entries are omitted. The model sees the bounded wisdom view, not
 the entire shard or a cross-tool blob. This is selective evidence context, not
 hidden weight training or proof of general competence.
 
+### Structured conversation continuity spine
+
+The v0.9 path uses current OpenWALDO structured conversations without copying
+raw dialogue into the retained AXM checkpoint:
+
+```text
+canonical WALDO conversation + explicit interaction/training contract
+  -> ordered role-aware turn digests + optional tool-definition digest
+  -> conversation witness
+  + answering identity + task state + active verifier generation
+  + memory-shard catalog + evidence set + open dissent set
+  -> digest-only portable continuity capsule
+```
+
+The witness verifies the canonical WALDO conversation record identity, keeps
+turn order and roles visible, and replaces message content, message context, and
+tool definitions with SHA-256 references. A model/training template mismatch is
+a typed HOLD rather than a silent rewrite. Assistant-response modeling without
+an assistant target is also held for this downstream Mirror answering-identity
+use case.
+
+The continuity capsule carries the interaction template, conversation digest,
+last-turn digest, task-state digest, verifier-registry digest, memory catalog,
+evidence catalog, open-dissent catalog, and an explicit freshness interval. It
+contains no restoration path and no raw memory, task, dissent, evidence, or
+conversation payload. ADR 9011 defines the contract and
+`research/axm-waldo-witness-organ-map.v0.9.json` records the organ boundary.
+
+The v0.9 Go tests are checked in, but this branch does **not** claim a CI pass
+until a runner actually reports one. The current fork has not emitted a PR
+workflow result for this checkpoint.
+
 Receipt writes are atomic and refuse to replace an existing output path. Use a
 new output name, or remove an old disposable example deliberately before
 rerunning a command.
@@ -288,16 +328,17 @@ rerunning a command.
 ## Truth boundary
 
 These slices do **not** train a Mirror clone yet. They complete deterministic
-provenance, evaluation, and situated-evidence boundaries needed before local
-model experiments can be recorded honestly.
+provenance, evaluation, situated-evidence, tool-wisdom, and digest-only
+continuity boundaries needed before model experiments can be recorded honestly.
 
 They do not grant capture or tool access, install or restore skills, run a
-model, verify artifact bytes merely by reading BOM entries, certify safety or
-legal usability, convert discovery or dissent into a score, expose hidden
-reasoning, invoke or select an external capability provider, infer schema
-semantics or permissions, approve or install an asset, execute peer-verifier
-digests, activate a verifier generation, repair code, convert tool memory into
-model weights, or make any AXM result CANON.
+model, restore a conversation from hashes, synchronize private memory, verify
+artifact bytes merely by reading BOM entries, certify safety or legal usability,
+convert discovery or dissent into a score, expose hidden reasoning, invoke or
+select an external capability provider, infer schema semantics or permissions,
+approve or install an asset, execute peer-verifier digests, activate a verifier
+generation, repair code, convert tool memory into model weights, or make any
+AXM result CANON.
 
 ## Next experimental rungs
 
@@ -308,21 +349,23 @@ model weights, or make any AXM result CANON.
 3. Run a local model through bounded scenarios and preserve outputs by digest.
 4. Compare exact releases without flattening behavior, verification, discovery,
    and dissent into one score.
-5. Add append-only dissent continuity and a Reproducibility Twin.
+5. Add append-only dissent continuity and a Reproducibility Twin that can resolve
+   v0.9 capsule references read-only as PRESENT / MISSING / MISMATCH.
 6. Let a bounded specialist propose pixel recipes against the inner foundry and
    evaluate the resulting candidates under explicit human visual review.
 7. Add resource leases and real provider transport only as separately
    permissioned contracts; keep provider selection and execution outside the
    learned clone.
-8. Add a portable continuity capsule spanning active verifier generation,
-   task state, memory-shard catalog, evidence freshness, and open dissent.
-9. Add specialist-need classification, reviewed memory compaction, and
+8. Add specialist-need classification, reviewed memory compaction, and
    authenticated external generation activation without giving those gates to
    the learned clone.
-10. Add artifact-byte or visual verification as
-   separate evidence, not upgrades to handoff metadata.
+9. Add artifact-byte or visual verification as separate evidence, not upgrades
+   to handoff or continuity metadata.
+10. Experiment with a reviewed public-safe tool-episode/evidence bridge into a
+    **candidate** structured WALDO training conversation, with an explicit
+    quarantine boundary so evidence never becomes training data automatically.
 11. Only then evaluate whether a small WALDO-trained Mirror research clone is
-   technically and legally appropriate for the selected corpus.
+    technically and legally appropriate for the selected corpus.
 
 Large or upstream-facing changes stay out until this fork has something tested
 and useful to show.
