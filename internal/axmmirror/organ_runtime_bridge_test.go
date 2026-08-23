@@ -1,8 +1,8 @@
 package axmmirror
 
 import (
+	"encoding/json"
 	"os"
-	"strings"
 	"testing"
 )
 
@@ -35,7 +35,18 @@ func TestOrganRuntimeBridgeRejectsTamper(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tampered := []byte(strings.Replace(string(data), `"candidateCount": 12`, `"candidateCount": 11`, 1))
+	var receipt OrganRuntimeReceipt
+	if err := json.Unmarshal(data, &receipt); err != nil {
+		t.Fatal(err)
+	}
+	if receipt.Totals.CandidateCount != 12 {
+		t.Fatalf("unexpected fixture candidate count %d", receipt.Totals.CandidateCount)
+	}
+	receipt.Totals.CandidateCount = 11
+	tampered, err := json.Marshal(receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := VerifyOrganRuntimeReceipt(tampered); err == nil {
 		t.Fatal("tampered Organ runtime receipt passed")
 	}
