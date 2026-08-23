@@ -81,3 +81,4 @@ logs.
 - [9013: Witness the deterministic Organ Fabric as a separate observed evidence plane](9013-axm-waldo-organ-fabric-runtime-bridge.md)
 - [9014: Require emitted Organ candidates to preserve trusted runtime port semantics](9014-axm-generated-organ-execution-parity.md)
 - [9015: Preserve generated peer-audit dissent and require an external witness](9015-axm-generated-peer-audit-ring.md)
+- [9016: Preserve independent witness disagreement as append-only evidence](9016-axm-independent-witness-dissent-ledger.md)
