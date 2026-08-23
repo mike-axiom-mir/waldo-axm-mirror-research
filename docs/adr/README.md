@@ -77,3 +77,4 @@ logs.
 - [9009: Align the witness clone with the current OpenWALDO body](9009-axm-waldo-current-upstream-body-alignment.md)
 - [9010: Grow verifiers and tool wisdom without self-authority](9010-axm-waldo-mutual-verifier-evolution-and-tool-wisdom.md)
 - [9011: Bind structured conversation lineage to a digest-only continuity spine](9011-axm-waldo-structured-conversation-continuity.md)
+- [9012: Bridge the public AXM Code Fabric to the WALDO Mirror experiment by receipts](9012-axm-platform-code-fabric-receipt-bridge.md)
