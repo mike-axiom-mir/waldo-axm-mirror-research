@@ -71,7 +71,7 @@ logs.
 - [9003: Add bounded Wave 1 provenance organs](9003-axm-waldo-wave-one-provenance-organs.md)
 - [9004: Complete Wave 1 with corpus and training-run witnesses](9004-axm-waldo-corpus-and-run-witnesses.md)
 - [9005: Put deterministic gates around the WALDO witness clone](9005-axm-waldo-gated-clone-foundation.md)
-- [9006: Give the WALDO witness clone a situated evidence boundary](9006-axm-waldo-situated-clone-boundary.md)
+- [9006: Give the WALDO specialist a situated evidence boundary](9006-axm-waldo-situated-clone-boundary.md)
 - [9007: Give the WALDO specialist a bounded inner asset foundry](9007-axm-waldo-inner-asset-foundry.md)
 - [9008: Add a portable capability spine without importing the Workshop](9008-axm-waldo-portable-capability-spine.md)
 - [9009: Align the witness clone with the current OpenWALDO body](9009-axm-waldo-current-upstream-body-alignment.md)
@@ -82,3 +82,4 @@ logs.
 - [9014: Require emitted Organ candidates to preserve trusted runtime port semantics](9014-axm-generated-organ-execution-parity.md)
 - [9015: Preserve generated peer-audit dissent and require an external witness](9015-axm-generated-peer-audit-ring.md)
 - [9016: Preserve independent witness disagreement as append-only evidence](9016-axm-independent-witness-dissent-ledger.md)
+- [9017: Put a Capability Fabric contract above WALDO gap evidence without importing the local implementation](9017-axm-capability-fabric-contract-probe.md)
