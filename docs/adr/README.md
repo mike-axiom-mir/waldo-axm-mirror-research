@@ -87,3 +87,4 @@ logs.
 - [9019: Separate capability feasibility from selection authority](9019-axm-capability-feasibility-selection-authority.md)
 - [9020: Keep selection authority separate from execution authority](9020-axm-selection-does-not-grant-execution.md)
 - [9021: Keep execution permission separate from action and capability presence](9021-axm-permission-is-not-action-or-capability.md)
+- [9022: Make execution revocation append-only and non-retroactive](9022-axm-revocation-without-history-rewrite.md)
