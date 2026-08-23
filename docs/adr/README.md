@@ -89,3 +89,4 @@ logs.
 - [9021: Keep execution permission separate from action and capability presence](9021-axm-permission-is-not-action-or-capability.md)
 - [9022: Make execution revocation append-only and non-retroactive](9022-axm-revocation-without-history-rewrite.md)
 - [9023: Keep capability exposure separate from authority and context budget](9023-axm-surface-exposure-is-not-authority.md)
+- [9024: Treat run-capsule evidence as candidate evidence, not promotion authority](9024-axm-run-capsule-evidence-is-not-promotion.md)
