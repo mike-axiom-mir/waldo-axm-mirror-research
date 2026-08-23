@@ -278,17 +278,17 @@ func WitnessCapabilityChoiceV017(data []byte) (CapabilityChoiceV017Witness, erro
 	if err != nil {
 		return CapabilityChoiceV017Witness{}, err
 	}
-	w := CapabilityChoiceV017Witnesss{Schema: "axm.waldo-witness.capability-choice-contract/v0.17", SourceReceipt: c.SourceReceipt, SourceHead: c.SourceHead, CandidateIDs: ids, CandidateSetDigest: setDigest, Decision: c.Decision, Reason: c.Reason, SelectionAuthority: c.SelectionAuthority}
+	w := CapabilityChoiceV017Witness{Schema: "axm.waldo-witness.capability-choice-contract/v0.17", SourceReceipt: c.SourceReceipt, SourceHead: c.SourceHead, CandidateIDs: ids, CandidateSetDigest: setDigest, Decision: c.Decision, Reason: c.Reason, SelectionAuthority: c.SelectionAuthority}
 	raw, err := json.Marshal(w)
 	if err != nil {
-		return CapabilityChoiceV017Witnesss{}, err
+		return CapabilityChoiceV017Witness{}, err
 	}
 	sum := sha256.Sum256(raw)
 	w.WitnessDigest = hex.EncodeToString(sum[:])
 	return w, nil
 }
 
-func SealCapabilityChoiceV017@c CapabilityChoiceV017Contract) ([]byte, error) {
+func SealCapabilityChoiceV017(c CapabilityChoiceV017Contract) ([]byte, error) {
 	d, e := capChoiceV017ExternalDigest(c)
 	if e != nil {
 		return nil, e
