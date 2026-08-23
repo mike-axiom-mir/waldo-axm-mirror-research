@@ -49,14 +49,14 @@ type CapabilityFabricCapability struct {
 }
 
 type CapabilityFabricProbeBoundary struct {
-	LocalCapabilityFabricImplementationIncluded       bool `json:"localCapabilityFabricImplementationIncluded"`
-	ActualCapabilityFabricExecutionObserved           bool `json:"actualCapabilityFabricExecutionObserved"`
-	OutputIsContractProbe                             bool `json:"outputIsContractProbe"`
+	LocalCapabilityFabricImplementationIncluded        bool `json:"localCapabilityFabricImplementationIncluded"`
+	ActualCapabilityFabricExecutionObserved            bool `json:"actualCapabilityFabricExecutionObserved"`
+	OutputIsContractProbe                              bool `json:"outputIsContractProbe"`
 	RouteNamesAreContractLabelsNotCanonicalModuleNames bool `json:"routeNamesAreContractLabelsNotCanonicalModuleNames"`
-	CandidateCodeGenerated                            bool `json:"candidateCodeGenerated"`
-	CandidateCodeExecuted                             bool `json:"candidateCodeExecuted"`
-	NetworkRequestedByProbe                           bool `json:"networkRequestedByProbe"`
-	LiveAIProviderCalled                              bool `json:"liveAiProviderCalled"`
+	CandidateCodeGenerated                             bool `json:"candidateCodeGenerated"`
+	CandidateCodeExecuted                              bool `json:"candidateCodeExecuted"`
+	NetworkRequestedByProbe                            bool `json:"networkRequestedByProbe"`
+	LiveAIProviderCalled                               bool `json:"liveAiProviderCalled"`
 }
 
 type CapabilityFabricLineage struct {
