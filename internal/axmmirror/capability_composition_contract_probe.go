@@ -234,7 +234,7 @@ func (c CapabilityCompositionContract) Validate() error {
 		return errors.New("capability composition authority refusal drifted")
 	}
 	for _, must := range []string{"WRITE_WORKSPACE", "INSTALL_CAPABILITY", "PROMOTE", "CANON"} {
-		if !containsString(r.RequestedAuthority, must) {
+		if !capCompositionContainsString(r.RequestedAuthority, must) {
 			return fmt.Errorf("authority refusal missing forbidden authority %s", must)
 		}
 	}
@@ -384,7 +384,7 @@ func stringSliceExact(got, want []string) bool {
 	return true
 }
 
-func containsString(items []string, want string) bool {
+func capCompositionContainsString(items []string, want string) bool {
 	for _, s := range items {
 		if s == want {
 			return true
