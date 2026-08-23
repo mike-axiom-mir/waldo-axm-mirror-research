@@ -107,11 +107,11 @@ The test suite also reseals semantic tampering so failures cannot be explained o
 
 Contract-probe receipt:
 
-`sha256:040cd12c79a57c3b48bd3fd05097223bdf52ff81aad584ef4f95f10f5533ffc9`
+`sha256:75e6466701520c7aeab56e76c719ab275519e8ed2fffa5fceaf3310cce4ec0bf`
 
 Expected compact witness digest from the deterministic witness representation:
 
-`62883e32613491c47735db616c48bec36595d7530c84357a07320049357c8a74`
+`c2ec52373ef24773ea59631ccd3a3ce7be1a7b1d958f98e05fdf09dce0e4d6f6`
 
 The witness digest is only meaningful if the Go verifier passes against the exact fixture. Full repository CI is not claimed until GitHub reports it.
 

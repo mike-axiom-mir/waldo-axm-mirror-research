@@ -4,7 +4,7 @@
   "sourceReturnPacketDigest": "sha256:b82cf3a8d5d02e8a979c044b4bcd98c1516390950647949172e34651616b90d2",
   "ancestorGapId": "v014-material-evidence-view-incomplete",
   "capabilityId": "material-evidence-view-completion",
-  "contractProbeReceipt": "sha256:040cd12c79a57c3b48bd3fd05097223bdf52ff81aad584ef4f95f10f5533ffc9",
+  "contractProbeReceipt": "sha256:75e6466701520c7aeab56e76c719ab275519e8ed2fffa5fceaf3310cce4ec0bf",
   "proposalCount": 4,
   "proposalKinds": ["ORGAN", "HAND", "SKILL", "CREATION_COMPOSITION"],
   "authorityCeiling": ["READ_ONLY_PUBLIC_ARTIFACT_ACCESS"],
