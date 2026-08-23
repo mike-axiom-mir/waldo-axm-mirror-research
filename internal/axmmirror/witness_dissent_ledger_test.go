@@ -1,16 +1,22 @@
 package axmmirror
 
 import (
-	"bytes"
+	"encoding/json"
 	"os"
 	"testing"
 )
 
-func TestWitnessDissentLedgerObservedReceipt(t *testing.T) {
+func loadWitnessDissentFixture(t *testing.T) []byte {
+	t.Helper()
 	data, err := os.ReadFile("testdata/witness-dissent-ledger-v0.14.json")
 	if err != nil {
 		t.Fatal(err)
 	}
+	return data
+}
+
+func TestWitnessDissentLedgerObservedReceipt(t *testing.T) {
+	data := loadWitnessDissentFixture(t)
 	r, err := VerifyWitnessDissentLedger(data)
 	if err != nil {
 		t.Fatal(err)
@@ -28,13 +34,15 @@ func TestWitnessDissentLedgerObservedReceipt(t *testing.T) {
 }
 
 func TestWitnessDissentLedgerRejectsHistoricalRewrite(t *testing.T) {
-	data, err := os.ReadFile("testdata/witness-dissent-ledger-v0.14.json")
-	if err != nil {
+	data := loadWitnessDissentFixture(t)
+	var r WitnessDissentLedgerReceipt
+	if err := json.Unmarshal(data, &r); err != nil {
 		t.Fatal(err)
 	}
-	tampered := bytes.Replace(data, []byte(`"witnessBHistoricalHoldPreserved": true`), []byte(`"witnessBHistoricalHoldPreserved": false`), 1)
-	if bytes.Equal(data, tampered) {
-		t.Fatal("tamper did not change fixture")
+	r.Resolution.WitnessBHistoricalHoldPreserved = false
+	tampered, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
 	}
 	if _, err := VerifyWitnessDissentLedger(tampered); err == nil {
 		t.Fatal("expected historical rewrite rejection")
@@ -42,13 +50,15 @@ func TestWitnessDissentLedgerRejectsHistoricalRewrite(t *testing.T) {
 }
 
 func TestWitnessDissentLedgerRejectsFinalJudge(t *testing.T) {
-	data, err := os.ReadFile("testdata/witness-dissent-ledger-v0.14.json")
-	if err != nil {
+	data := loadWitnessDissentFixture(t)
+	var r WitnessDissentLedgerReceipt
+	if err := json.Unmarshal(data, &r); err != nil {
 		t.Fatal(err)
 	}
-	tampered := bytes.Replace(data, []byte(`"finalJudgeAssigned": false`), []byte(`"finalJudgeAssigned": true`), 1)
-	if bytes.Equal(data, tampered) {
-		t.Fatal("tamper did not change fixture")
+	r.Resolution.FinalJudgeAssigned = true
+	tampered, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
 	}
 	if _, err := VerifyWitnessDissentLedger(tampered); err == nil {
 		t.Fatal("expected final judge rejection")
