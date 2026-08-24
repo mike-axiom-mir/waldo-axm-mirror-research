@@ -77,7 +77,7 @@ contract. Export conversion is split across `internal/modelexport`,
 
 - `internal/config`: machine-local transport and execution preferences.
 - `internal/canon`: deterministic serialization helpers.
-- `internal/axmmirror`: experimental deterministic evidence, reasoning, identity-context, neural-escalation, and hash-chained experience contracts. Completed sense/reaction/outcome/reflection episodes can project visible context, WALDO training input, and portable Hermes memory without importing model, inference, or Hermes runtime implementations.
+- `internal/axmmirror`: experimental deterministic evidence, reasoning, identity-context, neural-escalation, hash-chained experience, and positive-ground contracts. Completed sense/reaction/outcome/reflection episodes can project visible context, WALDO training input, and portable Hermes memory without importing model, inference, or Hermes runtime implementations. Ground records keep generated seeds separate from source-receipted chat and execution observations; only positive dispositions project structured training input.
 - `internal/calibration`: forecast and quantization calibration evidence.
 - `internal/disclosure`: EU GPAI disclosure projection.
 - `internal/signing`: release BOM signing.

@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -437,6 +438,97 @@ func runMirrorExperienceObserve(commandContext Context, args []string, stdout, _
 	return nil
 }
 
+type mirrorGroundVerifyReceipt struct {
+	Schema                     string              `json:"schema"`
+	DatasetSHA256              string              `json:"datasetSha256"`
+	Records                    int                 `json:"records"`
+	TrainingTargets            int                 `json:"trainingTargets"`
+	MemoryOnly                 int                 `json:"memoryOnly"`
+	ReviewRequired             int                 `json:"reviewRequired"`
+	SyntheticRecords           int                 `json:"syntheticRecords"`
+	ObservedRecords            int                 `json:"observedRecords"`
+	DataClasses                map[string]int      `json:"dataClasses"`
+	RootCoverage               map[string]int      `json:"rootCoverage"`
+	ChallengeCoverage          map[string]int      `json:"challengeCoverage"`
+	PositiveSeedValidated      bool                `json:"positiveSeedValidated"`
+	TrainingProjectionMutation bool                `json:"trainingProjectionMutation"`
+	TrainingProjectionRecords  int                 `json:"trainingProjectionRecords"`
+	TrainingProjectionSHA256   string              `json:"trainingProjectionSha256,omitempty"`
+	ModelWeightMutation        bool                `json:"modelWeightMutation"`
+	IdentityMutation           bool                `json:"identityMutation"`
+	Authority                  axmmirror.Authority `json:"authority"`
+	Timestamp                  time.Time           `json:"timestamp"`
+}
+
+func runMirrorGroundVerify(commandContext Context, args []string, stdout, _ io.Writer) error {
+	path := args[0]
+	file, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("open Mirror ground dataset %s: %w", path, err)
+	}
+	dataset, loadErr := axmmirror.LoadMirrorGroundDataset(file)
+	closeErr := file.Close()
+	if loadErr != nil {
+		return fmt.Errorf("load Mirror ground dataset %s: %w", path, loadErr)
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	positiveSeed := boolOption(commandContext, "positive-seed")
+	if positiveSeed {
+		if err := axmmirror.ValidateMirrorPositiveSeed(dataset, axmmirror.DefaultMirrorPositiveSeedRequirements()); err != nil {
+			return fmt.Errorf("validate positive starting seed %s: %w", path, err)
+		}
+	}
+	receipt := mirrorGroundVerifyReceipt{
+		Schema:                "axm.waldo.mirror-ground-verify-receipt/v0.39",
+		DatasetSHA256:         dataset.DatasetSHA256,
+		Records:               len(dataset.Records),
+		TrainingTargets:       dataset.TrainingTargets,
+		MemoryOnly:            dataset.MemoryOnly,
+		ReviewRequired:        dataset.ReviewRequired,
+		SyntheticRecords:      dataset.Synthetic,
+		ObservedRecords:       dataset.Observed,
+		DataClasses:           dataset.DataClasses,
+		RootCoverage:          dataset.RootCoverage,
+		ChallengeCoverage:     dataset.ChallengeCoverage,
+		PositiveSeedValidated: positiveSeed,
+		Authority:             axmmirror.Authority{},
+		Timestamp:             time.Now().UTC(),
+	}
+	projectionPath := strings.TrimSpace(stringOption(commandContext, "training-to"))
+	if projectionPath != "" {
+		if err := requireDistinctMirrorPaths(path, projectionPath); err != nil {
+			return err
+		}
+		projection, err := dataset.TrainingProjectionJSONL()
+		if err != nil {
+			return err
+		}
+		if err := writePrivateFileExclusive(projectionPath, projection); err != nil {
+			return fmt.Errorf("write Mirror ground training projection %s: %w", projectionPath, err)
+		}
+		digest := sha256.Sum256(projection)
+		receipt.TrainingProjectionMutation = true
+		receipt.TrainingProjectionRecords = dataset.TrainingTargets
+		receipt.TrainingProjectionSHA256 = fmt.Sprintf("%x", digest[:])
+	}
+	if commandContext.JSON {
+		return writeJSON(stdout, receipt)
+	}
+	fmt.Fprintf(stdout, "Ground dataset: %s\n", receipt.DatasetSHA256)
+	fmt.Fprintf(stdout, "Records: %d (%d synthetic, %d observed)\n", receipt.Records, receipt.SyntheticRecords, receipt.ObservedRecords)
+	fmt.Fprintf(stdout, "Dispositions: %d positive targets, %d memory-only, %d review-required\n", receipt.TrainingTargets, receipt.MemoryOnly, receipt.ReviewRequired)
+	fmt.Fprintf(stdout, "Coverage: %d roots, %d challenge kinds\n", len(receipt.RootCoverage), len(receipt.ChallengeCoverage))
+	if receipt.PositiveSeedValidated {
+		fmt.Fprintln(stdout, "Positive starting seed: VALIDATED")
+	}
+	if receipt.TrainingProjectionMutation {
+		fmt.Fprintf(stdout, "Structured WALDO training projection: %d records, %s\n", receipt.TrainingProjectionRecords, receipt.TrainingProjectionSHA256)
+	}
+	return nil
+}
+
 func loadMirrorExperienceOutcomeRequest(path string) (axmmirror.MirrorExperienceOutcomeRequest, error) {
 	if path == "-" {
 		return axmmirror.LoadMirrorExperienceOutcomeRequest(mirrorExperienceOutcomeInput)
@@ -514,4 +606,29 @@ func appendPrivateLine(path string, line []byte) error {
 		return err
 	}
 	return file.Close()
+}
+
+func writePrivateFileExclusive(path string, data []byte) (returnErr error) {
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	complete := false
+	defer func() {
+		if !complete {
+			_ = file.Close()
+			_ = os.Remove(path)
+		}
+	}()
+	if err := file.Chmod(0o600); err != nil {
+		return err
+	}
+	if _, err := file.Write(data); err != nil {
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	complete = true
+	return nil
 }

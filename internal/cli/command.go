@@ -103,6 +103,12 @@ func newRootCommand() *cobra.Command {
 
 func newMirrorCommand(state *cobraState) *cobra.Command {
 	command := group("mirror", "Run experimental deterministic-primary AXM Mirror reasoning", "Mirror reasoning remains deterministic-primary. A local WALDO model can provide a non-authoritative candidate only through --neural. Optional traces are hash-only; visible private ledgers preserve chat learning and complete sense/reaction/outcome/reflection episodes.")
+	ground := group("ground", "Verify visible positive-ground and observed learning records", "Ground records keep synthetic curriculum, observed chats, and observed execution traces visibly distinct. Helpful, corrected, or explicitly curated examples can project structured WALDO training input. Harmful, inconclusive, and unreviewed records remain evidence or memory instead of silently becoming positive targets.")
+	ground.AddCommand(
+		leaf(state, "verify <records.jsonl>", "Verify provenance, dispositions, coverage, and record hashes", "The verifier rejects synthetic records presented as observations, observed records without source receipts, harmful or inconclusive records presented as positive targets, record tampering, and unknown fields. --positive-seed additionally requires a broad all-synthetic seed curriculum. --training-to explicitly writes only positive targets as structured user/assistant JSONL for normal WALDO ingestion; the source ground file is unchanged.", cobra.ExactArgs(1), runMirrorGroundVerify,
+			booleanFlag("positive-seed", "require the strong positive-seed coverage floor"),
+			textFlag("training-to", "", "write a new private structured training projection containing positive targets only")),
+	)
 	experience := group("experience", "Close visible Mirror experience episodes", "A Mirror experience records what was sensed, how the stack reacted, what outcome was observed, and what lesson remains. Completed episodes become future Mirror context. Helpful or corrected outcomes can project training input to WALDO; every outcome can project portable memory to the separate Hermes runtime lane.")
 	experience.AddCommand(
 		leaf(state, "observe <outcome.json>", "Record an outcome and reflect on a prior Mirror reaction", "The strict outcome names an open episode and declares HELPFUL, CORRECTED, HARMFUL, or INCONCLUSIVE feedback. The command appends outcome and reflection events to --ledger. --learn-to writes only helpful/corrected training projections. --hermes-to writes a portable episodic-memory capsule; it does not claim the separate Hermes runtime was executed.", cobra.ExactArgs(1), runMirrorExperienceObserve,
@@ -125,6 +131,7 @@ func newMirrorCommand(state *cobraState) *cobra.Command {
 			textFlag("experience-ledger", "", "read prior lessons and append the current private experience episode"),
 			textFlag("episode-id", "", "optional visible identifier for the new experience episode"),
 			integerFlag("experience-limit", 8, "maximum completed episodes exposed to unresolved neural reasoning (1..32)")),
+		ground,
 		experience,
 	)
 	return command

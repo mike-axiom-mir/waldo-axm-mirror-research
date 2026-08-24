@@ -28,6 +28,30 @@ SFT and preference objectives are deliberately not inferred from ordinary
 text corpora. They require their own record contract, objective, evaluation,
 and pinned chat-template behavior before WALDO can describe them honestly.
 
+Structured conversation corpora can declare an explicit conversation
+transformation and `assistant-response-modeling` objective. WALDO then renders
+the pinned template immediately before tokenization and masks loss to declared
+assistant roles. It does not infer SFT from flattened text.
+
+## Positive-ground and experience projections
+
+The experimental Mirror lane can verify generated seed demonstrations and
+source-receipted observed chat or execution projections with
+`waldo mirror ground verify`. Source class is not the training objective:
+
+- `SYNTHETIC_SEED` is generated and must remain visibly synthetic;
+- `OBSERVED_CHAT` and `OBSERVED_EXECUTION_TRACE` require an observation time
+  and a receipt binding them to retained source evidence;
+- curated synthetic examples and observed helpful or corrected outcomes may
+  become positive targets; and
+- harmful, inconclusive, or unreviewed outcomes remain memory/evidence without
+  positive target text.
+
+`--training-to` writes eligible examples as structured user/assistant JSONL.
+Normal WALDO ingestion, compose selection, and an explicit model training run
+are still required before any weight mutation occurs. Retrieval memory and
+training remain separate operations.
+
 ## What calibration does
 
 Calibration is an optional part of a quantized GGUF or Ollama export:

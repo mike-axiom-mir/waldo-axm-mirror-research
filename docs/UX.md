@@ -10,6 +10,8 @@ waldo
 ├── advisor
 ├── mirror
 │   ├── reason
+│   ├── ground
+│   │   └── verify
 │   └── experience
 │       └── observe
 ├── config
@@ -201,6 +203,23 @@ Stable requests resolve without opening a model. Uncertain or conflicting reques
 `--experience-ledger` adds an inspectable learning-by-experience loop. Every reasoning call appends what was sensed and how the stack reacted. `mirror experience observe` later appends the observed outcome and a retained lesson. Completed episodes are exposed as visible context on later unresolved neural calls. Helpful reactions and explicit corrections can be projected to normal WALDO training intake. Harmful and inconclusive outcomes remain memory but do not become positive training targets.
 
 `--hermes-to` writes the same completed episode as a portable Hermes memory capsule. This is a handoff to AXM's separate Hermes runtime lane, not a claim that WALDO installed, launched, or silently mutated Hermes. All three private ledgers are forced to mode `0600`.
+
+Verify a visible positive-ground or observed-learning dataset before it reaches
+training intake:
+
+```bash
+waldo mirror ground verify ground.jsonl
+waldo mirror ground verify positive-ground.jsonl --positive-seed \
+  --training-to private-structured-training.jsonl
+```
+
+`SYNTHETIC_SEED`, `OBSERVED_CHAT`, and `OBSERVED_EXECUTION_TRACE` remain
+distinct source classes. Synthetic records name their generator and cannot
+claim observation evidence. Observed records require a timestamp and source
+receipt. Only curated, helpful, or corrected records can project positive
+structured training targets; harmful, inconclusive, and unreviewed records are
+retained without becoming positive targets. `--training-to` writes a new mode
+`0600` file and never mutates weights by itself.
 
 Reference composes under `composes/` are test and experiment inputs, not model
 quality guarantees. See the [model compose guide](MODEL-COMPOSE.md) for the

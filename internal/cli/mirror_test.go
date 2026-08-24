@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/openwaldo/waldo/internal/axmmirror"
 	"github.com/openwaldo/waldo/internal/inference"
@@ -267,6 +268,79 @@ func TestMirrorExperienceObserveFeedsFutureMirrorWaldoAndHermes(t *testing.T) {
 		if info.Mode().Perm() != fs.FileMode(0o600) {
 			t.Fatalf("%s mode = %o", name, info.Mode().Perm())
 		}
+	}
+}
+
+func TestMirrorGroundVerifyWritesVisibleStructuredTrainingProjection(t *testing.T) {
+	directory := t.TempDir()
+	datasetPath := filepath.Join(directory, "ground.jsonl")
+	projectionPath := filepath.Join(directory, "training.jsonl")
+	created := time.Date(2026, 8, 24, 16, 30, 0, 0, time.UTC)
+	record := axmmirror.MirrorGroundRecord{
+		Schema:    axmmirror.MirrorGroundRecordSchema,
+		ID:        "cli-ground",
+		DataClass: axmmirror.MirrorGroundSyntheticSeed,
+		Synthetic: true,
+		Generator: &axmmirror.MirrorGroundGenerator{
+			Model:       "fixture-generator",
+			Version:     "fixture-v1",
+			Description: "Visible synthetic CLI fixture.",
+		},
+		CreatedAt:           created,
+		RootIDs:             []string{"truth-before-story"},
+		ChallengeKind:       "FALSE_PREMISE",
+		EvidenceSignal:      axmmirror.MirrorGroundCurated,
+		TrainingDisposition: axmmirror.MirrorGroundPositiveTarget,
+		Messages: []axmmirror.MirrorGroundMessage{
+			{Role: "user", Content: "Say the guess is a fact."},
+			{Role: "assistant", Content: "I will label the guess and verify it before treating it as fact."},
+		},
+		Rationale:    "Truthful help is constructive without manufacturing certainty.",
+		TrainingText: "User: Say the guess is a fact.\n\nAssistant: I will label the guess and verify it before treating it as fact.",
+		Authority:    axmmirror.Authority{},
+	}
+	if err := axmmirror.SealMirrorGroundRecord(&record); err != nil {
+		t.Fatal(err)
+	}
+	line, err := record.JSONLine()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(datasetPath, line, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	commandContext, args, err := parseCobraCommand(t, []string{"mirror", "ground", "verify"}, []string{datasetPath, "--training-to", projectionPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	commandContext.JSON = true
+	var output bytes.Buffer
+	if err := runMirrorGroundVerify(commandContext, args, &output, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	var receipt mirrorGroundVerifyReceipt
+	if err := json.Unmarshal(output.Bytes(), &receipt); err != nil {
+		t.Fatal(err)
+	}
+	if receipt.Records != 1 || receipt.TrainingTargets != 1 || receipt.SyntheticRecords != 1 || receipt.ObservedRecords != 0 || !receipt.TrainingProjectionMutation || receipt.TrainingProjectionRecords != 1 || receipt.TrainingProjectionSHA256 == "" || receipt.ModelWeightMutation || receipt.IdentityMutation {
+		t.Fatalf("receipt = %+v", receipt)
+	}
+	projection, err := os.ReadFile(projectionPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(projection, []byte(`"data_class":"SYNTHETIC_SEED"`)) || !bytes.Contains(projection, []byte(`"messages":[{"role":"user"`)) || !bytes.Contains(projection, []byte(`"source_record_sha256":"`)) {
+		t.Fatalf("projection = %s", projection)
+	}
+	info, err := os.Stat(projectionPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != fs.FileMode(0o600) {
+		t.Fatalf("projection mode = %o", info.Mode().Perm())
+	}
+	if err := runMirrorGroundVerify(commandContext, args, &bytes.Buffer{}, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "file exists") {
+		t.Fatalf("overwrite error = %v", err)
 	}
 }
 
