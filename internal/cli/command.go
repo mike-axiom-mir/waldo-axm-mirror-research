@@ -102,9 +102,16 @@ func newRootCommand() *cobra.Command {
 }
 
 func newMirrorCommand(state *cobraState) *cobra.Command {
-	command := group("mirror", "Run experimental deterministic-primary AXM Mirror reasoning", "Mirror reasoning remains deterministic-primary. A local WALDO model can provide a non-authoritative candidate only through --neural. Optional traces are hash-only; --learn-to writes visible private chat-learning records.")
+	command := group("mirror", "Run experimental deterministic-primary AXM Mirror reasoning", "Mirror reasoning remains deterministic-primary. A local WALDO model can provide a non-authoritative candidate only through --neural. Optional traces are hash-only; visible private ledgers preserve chat learning and complete sense/reaction/outcome/reflection episodes.")
+	experience := group("experience", "Close visible Mirror experience episodes", "A Mirror experience records what was sensed, how the stack reacted, what outcome was observed, and what lesson remains. Completed episodes become future Mirror context. Helpful or corrected outcomes can project training input to WALDO; every outcome can project portable memory to the separate Hermes runtime lane.")
+	experience.AddCommand(
+		leaf(state, "observe <outcome.json>", "Record an outcome and reflect on a prior Mirror reaction", "The strict outcome names an open episode and declares HELPFUL, CORRECTED, HARMFUL, or INCONCLUSIVE feedback. The command appends outcome and reflection events to --ledger. --learn-to writes only helpful/corrected training projections. --hermes-to writes a portable episodic-memory capsule; it does not claim the separate Hermes runtime was executed.", cobra.ExactArgs(1), runMirrorExperienceObserve,
+			textFlag("ledger", "", "private append-only Mirror experience JSONL ledger"),
+			textFlag("learn-to", "", "append training-ready experience projection for WALDO ingestion"),
+			textFlag("hermes-to", "", "append portable Hermes episodic-memory JSONL capsule")),
+	)
 	command.AddCommand(
-		leaf(state, "reason <request.json>", "Resolve through Mirror with optional local neural escalation", "The strict request declares grounding state, consequence, escalation reason, prompt, and optional visible identity roots. STABLE requests return the deterministic response without opening a model. UNCERTAIN or CONFLICT requests HOLD unless --neural and --model are supplied. --learn-to records the full exchange as a visible candidate or as explicitly approved-for-training input; it does not silently train during inference.", cobra.ExactArgs(1), runMirrorReason,
+		leaf(state, "reason <request.json>", "Resolve through Mirror with optional local neural escalation", "The strict request declares grounding state, consequence, escalation reason, prompt, and optional visible identity roots. STABLE requests return the deterministic response without opening a model. UNCERTAIN or CONFLICT requests HOLD unless --neural and --model are supplied. --experience-ledger retrieves completed lessons for unresolved neural reasoning and appends the current sensed/reaction pair as a new episode. --learn-to remains the direct chat-capture path.", cobra.ExactArgs(1), runMirrorReason,
 			booleanFlag("neural", "opt into local WALDO neural escalation for unresolved reasoning"),
 			textFlag("model", "", "local WALDO model name used only with --neural"),
 			integerFlag("max-tokens", 256, "maximum generated candidate tokens"),
@@ -114,7 +121,11 @@ func newMirrorCommand(state *cobraState) *cobra.Command {
 			integerFlag("timeout-seconds", 120, "bounded local neural call timeout (1..900)"),
 			textFlag("trace", "", "append hash-only private JSONL trace"),
 			textFlag("learn-to", "", "append full visible chat-learning JSONL record"),
-			textFlag("learning-mode", mirrorLearningModeCandidate, "learning record state: candidate or approved")),
+			textFlag("learning-mode", mirrorLearningModeCandidate, "learning record state: candidate or approved"),
+			textFlag("experience-ledger", "", "read prior lessons and append the current private experience episode"),
+			textFlag("episode-id", "", "optional visible identifier for the new experience episode"),
+			integerFlag("experience-limit", 8, "maximum completed episodes exposed to unresolved neural reasoning (1..32)")),
+		experience,
 	)
 	return command
 }

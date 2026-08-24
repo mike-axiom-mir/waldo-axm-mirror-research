@@ -16,7 +16,7 @@ import (
 
 const (
 	MirrorNeuralEscalationRequestSchema = "axm.waldo.mirror-neural-escalation-request/v0.37"
-	MirrorNeuralEscalationReceiptSchema = "axm.waldo.mirror-neural-escalation-receipt/v0.37"
+	MirrorNeuralEscalationReceiptSchema = "axm.waldo.mirror-neural-escalation-receipt/v0.38"
 	MirrorChatLearningRecordSchema      = "axm.waldo.mirror-chat-learning-candidate/v0.37"
 
 	MirrorEscalationNone      = "NONE"
@@ -108,6 +108,12 @@ type MirrorNeuralEscalationReceipt struct {
 	LearningCandidateRecorded bool                   `json:"learningCandidateRecorded"`
 	LearningRecordSHA256      string                 `json:"learningRecordSha256,omitempty"`
 	LearningLedgerMutation    bool                   `json:"learningLedgerMutation"`
+	ExperienceContextApplied  bool                   `json:"experienceContextApplied"`
+	ExperienceContextSHA256   string                 `json:"experienceContextSha256,omitempty"`
+	ExperienceEpisodeIDs      []string               `json:"experienceEpisodeIds,omitempty"`
+	ExperienceEpisodeID       string                 `json:"experienceEpisodeId,omitempty"`
+	ExperienceEventsRecorded  int                    `json:"experienceEventsRecorded"`
+	ExperienceLedgerMutation  bool                   `json:"experienceLedgerMutation"`
 	ModelMemoryMutation       bool                   `json:"modelMemoryMutation"`
 	TrainingMutation          bool                   `json:"trainingMutation"`
 	IdentityMutation          bool                   `json:"identityMutation"`
@@ -244,8 +250,17 @@ func (request MirrorNeuralEscalationRequest) NeedsNeuralEscalation() bool {
 }
 
 func (request MirrorNeuralEscalationRequest) NeuralPrompt() (string, string, string, error) {
+	return request.neuralPrompt(nil)
+}
+
+func (request MirrorNeuralEscalationRequest) neuralPrompt(experience *MirrorExperiencePromptContext) (string, string, string, error) {
 	if err := request.Validate(); err != nil {
 		return "", "", "", err
+	}
+	if experience != nil {
+		if err := experience.Validate(); err != nil {
+			return "", "", "", fmt.Errorf("experience context: %w", err)
+		}
 	}
 	groundingCapsule, groundingDigest, err := request.Grounding.Capsule()
 	if err != nil {
@@ -275,6 +290,9 @@ func (request MirrorNeuralEscalationRequest) NeuralPrompt() (string, string, str
 		}
 	}
 	buffer.WriteString(groundingCapsule)
+	if experience != nil {
+		buffer.WriteString(experience.Capsule)
+	}
 	fmt.Fprintln(&buffer, "task:")
 	fmt.Fprintln(&buffer, request.Prompt)
 	fmt.Fprintln(&buffer, "[/AXM_MIRROR_NEURAL_ESCALATION]")
@@ -282,7 +300,11 @@ func (request MirrorNeuralEscalationRequest) NeuralPrompt() (string, string, str
 }
 
 func RunMirrorNeuralEscalation(ctx context.Context, request MirrorNeuralEscalationRequest, neuralOptIn bool, escalator MirrorNeuralEscalator) (MirrorNeuralEscalationReceipt, error) {
-	prompt, requestDigest, groundingDigest, err := request.NeuralPrompt()
+	return RunMirrorNeuralEscalationWithExperience(ctx, request, neuralOptIn, escalator, nil)
+}
+
+func RunMirrorNeuralEscalationWithExperience(ctx context.Context, request MirrorNeuralEscalationRequest, neuralOptIn bool, escalator MirrorNeuralEscalator, experience *MirrorExperiencePromptContext) (MirrorNeuralEscalationReceipt, error) {
+	prompt, requestDigest, groundingDigest, err := request.neuralPrompt(experience)
 	if err != nil {
 		return MirrorNeuralEscalationReceipt{}, err
 	}
@@ -300,6 +322,11 @@ func RunMirrorNeuralEscalation(ctx context.Context, request MirrorNeuralEscalati
 	}
 	if request.Identity != nil {
 		receipt.IdentitySHA256 = request.Identity.RootSHA256
+	}
+	if experience != nil && request.NeedsNeuralEscalation() {
+		receipt.ExperienceContextApplied = true
+		receipt.ExperienceContextSHA256 = experience.SHA256
+		receipt.ExperienceEpisodeIDs = append([]string(nil), experience.EpisodeIDs...)
 	}
 	if !request.NeedsNeuralEscalation() {
 		receipt.Status = MirrorStatusDeterministicResolved

@@ -9,7 +9,9 @@ for flags and detailed behavior.
 waldo
 ├── advisor
 ├── mirror
-│   └── reason
+│   ├── reason
+│   └── experience
+│       └── observe
 ├── config
 │   ├── show
 │   ├── get
@@ -189,9 +191,16 @@ The experimental branch exposes deterministic-primary Mirror reasoning through a
 ```bash
 waldo mirror reason request.json
 waldo mirror reason request.json --neural --model local-model
+waldo mirror reason request.json --experience-ledger private-experience.jsonl
+waldo mirror experience observe outcome.json --ledger private-experience.jsonl \
+  --learn-to private-training.jsonl --hermes-to private-hermes-memory.jsonl
 ```
 
 Stable requests resolve without opening a model. Uncertain or conflicting requests HOLD unless local neural escalation is explicitly opted into. Neural responses remain candidates with authority `NONE`. `--trace` writes hash-only receipts; `--learn-to` can visibly capture chat-derived learning input as either review-required or explicitly approved for later training.
+
+`--experience-ledger` adds an inspectable learning-by-experience loop. Every reasoning call appends what was sensed and how the stack reacted. `mirror experience observe` later appends the observed outcome and a retained lesson. Completed episodes are exposed as visible context on later unresolved neural calls. Helpful reactions and explicit corrections can be projected to normal WALDO training intake. Harmful and inconclusive outcomes remain memory but do not become positive training targets.
+
+`--hermes-to` writes the same completed episode as a portable Hermes memory capsule. This is a handoff to AXM's separate Hermes runtime lane, not a claim that WALDO installed, launched, or silently mutated Hermes. All three private ledgers are forced to mode `0600`.
 
 Reference composes under `composes/` are test and experiment inputs, not model
 quality guarantees. See the [model compose guide](MODEL-COMPOSE.md) for the

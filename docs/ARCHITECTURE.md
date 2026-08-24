@@ -77,7 +77,7 @@ contract. Export conversion is split across `internal/modelexport`,
 
 - `internal/config`: machine-local transport and execution preferences.
 - `internal/canon`: deterministic serialization helpers.
-- `internal/axmmirror`: experimental deterministic evidence, reasoning, identity-context, and neural-escalation contracts. CLI wiring may adapt its consumer-owned interfaces to local inference; the package does not import model or inference implementations.
+- `internal/axmmirror`: experimental deterministic evidence, reasoning, identity-context, neural-escalation, and hash-chained experience contracts. Completed sense/reaction/outcome/reflection episodes can project visible context, WALDO training input, and portable Hermes memory without importing model, inference, or Hermes runtime implementations.
 - `internal/calibration`: forecast and quantization calibration evidence.
 - `internal/disclosure`: EU GPAI disclosure projection.
 - `internal/signing`: release BOM signing.

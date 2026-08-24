@@ -1,12 +1,14 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -19,6 +21,7 @@ const mirrorLearningModeCandidate = "candidate"
 const mirrorLearningModeApproved = "approved"
 
 var mirrorReasonInput io.Reader = os.Stdin
+var mirrorExperienceOutcomeInput io.Reader = os.Stdin
 
 var openMirrorNeuralEscalator = func(ctx context.Context, name string, options inference.Options) (axmmirror.MirrorNeuralEscalator, func() error, error) {
 	root, err := configuredModelRoot()
@@ -99,6 +102,48 @@ func runMirrorReason(commandContext Context, args []string, stdout, _ io.Writer)
 	}
 	neuralOptIn := boolOption(commandContext, "neural")
 	modelName := strings.TrimSpace(stringOption(commandContext, "model"))
+	learnPath := strings.TrimSpace(stringOption(commandContext, "learn-to"))
+	learningMode := strings.ToLower(strings.TrimSpace(stringOption(commandContext, "learning-mode")))
+	if learningMode == "" {
+		learningMode = mirrorLearningModeCandidate
+	}
+	if learnPath == "" && optionChanged(commandContext, "learning-mode") {
+		return errors.New("--learning-mode requires --learn-to")
+	}
+	var learningDisposition string
+	if learnPath != "" {
+		learningDisposition, err = mirrorLearningDisposition(learningMode)
+		if err != nil {
+			return err
+		}
+	}
+	tracePath := strings.TrimSpace(stringOption(commandContext, "trace"))
+	experiencePath := strings.TrimSpace(stringOption(commandContext, "experience-ledger"))
+	episodeID := strings.TrimSpace(stringOption(commandContext, "episode-id"))
+	experienceLimit := intOption(commandContext, "experience-limit")
+	if experiencePath == "" && (optionChanged(commandContext, "episode-id") || optionChanged(commandContext, "experience-limit")) {
+		return errors.New("--episode-id and --experience-limit require --experience-ledger")
+	}
+	if experienceLimit < 1 || experienceLimit > 32 {
+		return errors.New("--experience-limit must be in 1..32")
+	}
+	if err := requireDistinctMirrorPaths(experiencePath, learnPath, tracePath); err != nil {
+		return err
+	}
+	var experienceContext *axmmirror.MirrorExperiencePromptContext
+	if experiencePath != "" {
+		ledger, ledgerErr := loadMirrorExperienceLedgerFile(experiencePath, true)
+		if ledgerErr != nil {
+			return ledgerErr
+		}
+		experienceContext, ledgerErr = axmmirror.SelectMirrorExperienceContext(ledger, experienceLimit)
+		if ledgerErr != nil {
+			return fmt.Errorf("select visible Mirror experience context: %w", ledgerErr)
+		}
+		if episodeID != "" && len(ledger.Episodes[episodeID]) != 0 {
+			return fmt.Errorf("experience episode %q already exists; choose a new --episode-id", episodeID)
+		}
+	}
 	var escalator axmmirror.MirrorNeuralEscalator
 	closeEscalator := func() error { return nil }
 	if request.NeedsNeuralEscalation() && neuralOptIn {
@@ -112,23 +157,23 @@ func runMirrorReason(commandContext Context, args []string, stdout, _ io.Writer)
 	}
 	ctx, cancel := context.WithTimeout(commandContext.Execution, time.Duration(timeoutSeconds)*time.Second)
 	defer cancel()
-	receipt, runErr := axmmirror.RunMirrorNeuralEscalation(ctx, request, neuralOptIn, escalator)
+	receipt, runErr := axmmirror.RunMirrorNeuralEscalationWithExperience(ctx, request, neuralOptIn, escalator, experienceContext)
 	closeErr := closeEscalator()
-
-	learnPath := strings.TrimSpace(stringOption(commandContext, "learn-to"))
-	learningMode := strings.ToLower(strings.TrimSpace(stringOption(commandContext, "learning-mode")))
-	if learningMode == "" {
-		learningMode = mirrorLearningModeCandidate
-	}
-	if learnPath == "" && optionChanged(commandContext, "learning-mode") {
-		return errors.New("--learning-mode requires --learn-to")
-	}
-	if learnPath != "" && runErr == nil {
-		disposition, dispositionErr := mirrorLearningDisposition(learningMode)
-		if dispositionErr != nil {
-			return dispositionErr
+	if experiencePath != "" && receipt.Schema != "" {
+		events, experienceErr := axmmirror.BuildMirrorExperienceEpisode(receipt, request.Prompt, episodeID, time.Now().UTC())
+		if experienceErr != nil {
+			return experienceErr
 		}
-		record, recordErr := axmmirror.BuildMirrorChatLearningRecord(receipt, request.Prompt, disposition)
+		if experienceErr := appendMirrorExperienceEvents(experiencePath, events); experienceErr != nil {
+			return fmt.Errorf("append visible Mirror experience episode: %w", experienceErr)
+		}
+		receipt.ExperienceEpisodeID = events[0].EpisodeID
+		receipt.ExperienceEventsRecorded = len(events)
+		receipt.ExperienceLedgerMutation = true
+	}
+
+	if learnPath != "" && runErr == nil {
+		record, recordErr := axmmirror.BuildMirrorChatLearningRecord(receipt, request.Prompt, learningDisposition)
 		if recordErr != nil {
 			return recordErr
 		}
@@ -144,7 +189,6 @@ func runMirrorReason(commandContext Context, args []string, stdout, _ io.Writer)
 		receipt.LearningLedgerMutation = true
 	}
 
-	tracePath := strings.TrimSpace(stringOption(commandContext, "trace"))
 	if tracePath != "" && receipt.Schema != "" {
 		line, traceErr := mirrorTraceLine(receipt)
 		if traceErr != nil {
@@ -213,6 +257,12 @@ func writeMirrorReceipt(commandContext Context, output io.Writer, receipt axmmir
 	if receipt.LearningCandidateRecorded {
 		fmt.Fprintf(output, "Learning record: %s\n", receipt.LearningRecordSHA256)
 	}
+	if receipt.ExperienceContextApplied {
+		fmt.Fprintf(output, "Experience context: %s (%d episodes)\n", receipt.ExperienceContextSHA256, len(receipt.ExperienceEpisodeIDs))
+	}
+	if receipt.ExperienceLedgerMutation {
+		fmt.Fprintf(output, "Experience episode: %s (%d events)\n", receipt.ExperienceEpisodeID, receipt.ExperienceEventsRecorded)
+	}
 	return nil
 }
 
@@ -234,6 +284,12 @@ type mirrorEscalationTrace struct {
 	LearningCandidateRecorded bool      `json:"learningCandidateRecorded"`
 	LearningRecordSHA256      string    `json:"learningRecordSha256,omitempty"`
 	LearningLedgerMutation    bool      `json:"learningLedgerMutation"`
+	ExperienceContextApplied  bool      `json:"experienceContextApplied"`
+	ExperienceContextSHA256   string    `json:"experienceContextSha256,omitempty"`
+	ExperienceEpisodeIDs      []string  `json:"experienceEpisodeIds,omitempty"`
+	ExperienceEpisodeID       string    `json:"experienceEpisodeId,omitempty"`
+	ExperienceEventsRecorded  int       `json:"experienceEventsRecorded"`
+	ExperienceLedgerMutation  bool      `json:"experienceLedgerMutation"`
 	ModelMemoryMutation       bool      `json:"modelMemoryMutation"`
 	TrainingMutation          bool      `json:"trainingMutation"`
 	IdentityMutation          bool      `json:"identityMutation"`
@@ -244,7 +300,7 @@ type mirrorEscalationTrace struct {
 
 func mirrorTraceLine(receipt axmmirror.MirrorNeuralEscalationReceipt) ([]byte, error) {
 	trace := mirrorEscalationTrace{
-		Schema:                    "axm.waldo.mirror-neural-escalation-trace/v0.37",
+		Schema:                    "axm.waldo.mirror-neural-escalation-trace/v0.38",
 		Status:                    receipt.Status,
 		DeterministicPrimary:      receipt.DeterministicPrimary,
 		NeuralOptIn:               receipt.NeuralOptIn,
@@ -261,6 +317,12 @@ func mirrorTraceLine(receipt axmmirror.MirrorNeuralEscalationReceipt) ([]byte, e
 		LearningCandidateRecorded: receipt.LearningCandidateRecorded,
 		LearningRecordSHA256:      receipt.LearningRecordSHA256,
 		LearningLedgerMutation:    receipt.LearningLedgerMutation,
+		ExperienceContextApplied:  receipt.ExperienceContextApplied,
+		ExperienceContextSHA256:   receipt.ExperienceContextSHA256,
+		ExperienceEpisodeIDs:      append([]string(nil), receipt.ExperienceEpisodeIDs...),
+		ExperienceEpisodeID:       receipt.ExperienceEpisodeID,
+		ExperienceEventsRecorded:  receipt.ExperienceEventsRecorded,
+		ExperienceLedgerMutation:  receipt.ExperienceLedgerMutation,
 		ModelMemoryMutation:       receipt.ModelMemoryMutation,
 		TrainingMutation:          receipt.TrainingMutation,
 		IdentityMutation:          receipt.IdentityMutation,
@@ -273,6 +335,169 @@ func mirrorTraceLine(receipt axmmirror.MirrorNeuralEscalationReceipt) ([]byte, e
 		return nil, err
 	}
 	return append(payload, '\n'), nil
+}
+
+type mirrorExperienceObserveReceipt struct {
+	Schema                         string              `json:"schema"`
+	EpisodeID                      string              `json:"episodeId"`
+	OutcomeSignal                  string              `json:"outcomeSignal"`
+	OutcomeEventSHA256             string              `json:"outcomeEventSha256"`
+	ReflectionEventSHA256          string              `json:"reflectionEventSha256"`
+	ExperienceLedgerMutation       bool                `json:"experienceLedgerMutation"`
+	FutureContextMutation          bool                `json:"futureContextMutation"`
+	TrainingReady                  bool                `json:"trainingReady"`
+	TrainingProjectionMutation     bool                `json:"trainingProjectionMutation"`
+	LearningRecordSHA256           string              `json:"learningRecordSha256,omitempty"`
+	HermesMemoryProjectionMutation bool                `json:"hermesMemoryProjectionMutation"`
+	HermesMemoryRecordSHA256       string              `json:"hermesMemoryRecordSha256,omitempty"`
+	HermesRuntimeMemoryMutation    bool                `json:"hermesRuntimeMemoryMutation"`
+	ModelWeightMutation            bool                `json:"modelWeightMutation"`
+	IdentityMutation               bool                `json:"identityMutation"`
+	Authority                      axmmirror.Authority `json:"authority"`
+	Timestamp                      time.Time           `json:"timestamp"`
+}
+
+func runMirrorExperienceObserve(commandContext Context, args []string, stdout, _ io.Writer) error {
+	request, err := loadMirrorExperienceOutcomeRequest(args[0])
+	if err != nil {
+		return err
+	}
+	ledgerPath := strings.TrimSpace(stringOption(commandContext, "ledger"))
+	if ledgerPath == "" {
+		return errors.New("--ledger is required")
+	}
+	ledger, err := loadMirrorExperienceLedgerFile(ledgerPath, false)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	closure, err := axmmirror.CloseMirrorExperienceEpisode(ledger, request, now)
+	if err != nil {
+		return err
+	}
+	if err := appendMirrorExperienceEvents(ledgerPath, []axmmirror.MirrorExperienceEvent{closure.OutcomeEvent, closure.ReflectionEvent}); err != nil {
+		return fmt.Errorf("append visible Mirror experience outcome: %w", err)
+	}
+	receipt := mirrorExperienceObserveReceipt{
+		Schema:                   "axm.waldo.mirror-experience-observe-receipt/v0.38",
+		EpisodeID:                request.EpisodeID,
+		OutcomeSignal:            request.Signal,
+		OutcomeEventSHA256:       closure.OutcomeEvent.EventSHA256,
+		ReflectionEventSHA256:    closure.ReflectionEvent.EventSHA256,
+		ExperienceLedgerMutation: true,
+		FutureContextMutation:    true,
+		TrainingReady:            closure.LearningRecord != nil,
+		Authority:                axmmirror.Authority{},
+		Timestamp:                now,
+	}
+	learnPath := strings.TrimSpace(stringOption(commandContext, "learn-to"))
+	hermesPath := strings.TrimSpace(stringOption(commandContext, "hermes-to"))
+	if err := requireDistinctMirrorPaths(ledgerPath, learnPath, hermesPath); err != nil {
+		return err
+	}
+	if learnPath != "" && closure.LearningRecord != nil {
+		line, lineErr := closure.LearningRecord.JSONLine()
+		if lineErr != nil {
+			return lineErr
+		}
+		if lineErr := appendPrivateLine(learnPath, line); lineErr != nil {
+			return fmt.Errorf("append experience-derived WALDO learning projection: %w", lineErr)
+		}
+		receipt.TrainingProjectionMutation = true
+		receipt.LearningRecordSHA256 = closure.LearningRecord.LearningRecordSHA256
+	}
+	if hermesPath != "" {
+		line, lineErr := closure.HermesMemory.JSONLine()
+		if lineErr != nil {
+			return lineErr
+		}
+		if lineErr := appendPrivateLine(hermesPath, line); lineErr != nil {
+			return fmt.Errorf("append Hermes memory projection: %w", lineErr)
+		}
+		receipt.HermesMemoryProjectionMutation = true
+		receipt.HermesMemoryRecordSHA256 = closure.HermesMemory.MemoryRecordSHA256
+	}
+	if commandContext.JSON {
+		return writeJSON(stdout, receipt)
+	}
+	fmt.Fprintf(stdout, "Experience: %s\n", receipt.EpisodeID)
+	fmt.Fprintf(stdout, "Outcome: %s\n", receipt.OutcomeSignal)
+	fmt.Fprintf(stdout, "Reflection: %s\n", receipt.ReflectionEventSHA256)
+	fmt.Fprintln(stdout, "Future Mirror context: UPDATED")
+	if receipt.TrainingProjectionMutation {
+		fmt.Fprintf(stdout, "WALDO learning projection: %s\n", receipt.LearningRecordSHA256)
+	} else if receipt.TrainingReady {
+		fmt.Fprintln(stdout, "WALDO learning projection: READY (no --learn-to path supplied)")
+	} else {
+		fmt.Fprintln(stdout, "WALDO learning projection: NOT TRAINING-READY")
+	}
+	if receipt.HermesMemoryProjectionMutation {
+		fmt.Fprintf(stdout, "Hermes memory projection: %s\n", receipt.HermesMemoryRecordSHA256)
+	}
+	return nil
+}
+
+func loadMirrorExperienceOutcomeRequest(path string) (axmmirror.MirrorExperienceOutcomeRequest, error) {
+	if path == "-" {
+		return axmmirror.LoadMirrorExperienceOutcomeRequest(mirrorExperienceOutcomeInput)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return axmmirror.MirrorExperienceOutcomeRequest{}, fmt.Errorf("open Mirror experience outcome %s: %w", path, err)
+	}
+	defer file.Close()
+	request, err := axmmirror.LoadMirrorExperienceOutcomeRequest(file)
+	if err != nil {
+		return request, fmt.Errorf("load Mirror experience outcome %s: %w", path, err)
+	}
+	return request, nil
+}
+
+func loadMirrorExperienceLedgerFile(path string, allowMissing bool) (axmmirror.MirrorExperienceLedger, error) {
+	file, err := os.Open(path)
+	if errors.Is(err, os.ErrNotExist) && allowMissing {
+		return axmmirror.MirrorExperienceLedger{Episodes: map[string][]axmmirror.MirrorExperienceEvent{}}, nil
+	}
+	if err != nil {
+		return axmmirror.MirrorExperienceLedger{}, fmt.Errorf("open Mirror experience ledger %s: %w", path, err)
+	}
+	defer file.Close()
+	ledger, err := axmmirror.LoadMirrorExperienceLedger(file)
+	if err != nil {
+		return axmmirror.MirrorExperienceLedger{}, fmt.Errorf("load Mirror experience ledger %s: %w", path, err)
+	}
+	return ledger, nil
+}
+
+func appendMirrorExperienceEvents(path string, events []axmmirror.MirrorExperienceEvent) error {
+	var buffer bytes.Buffer
+	for _, event := range events {
+		line, err := event.JSONLine()
+		if err != nil {
+			return err
+		}
+		buffer.Write(line)
+	}
+	return appendPrivateLine(path, buffer.Bytes())
+}
+
+func requireDistinctMirrorPaths(paths ...string) error {
+	seen := map[string]string{}
+	for _, path := range paths {
+		if path == "" {
+			continue
+		}
+		absolute, err := filepath.Abs(path)
+		if err != nil {
+			return fmt.Errorf("resolve private Mirror path %s: %w", path, err)
+		}
+		absolute = filepath.Clean(absolute)
+		if previous, exists := seen[absolute]; exists {
+			return fmt.Errorf("private Mirror ledgers must use distinct paths; %s aliases %s", path, previous)
+		}
+		seen[absolute] = path
+	}
+	return nil
 }
 
 func appendPrivateLine(path string, line []byte) error {

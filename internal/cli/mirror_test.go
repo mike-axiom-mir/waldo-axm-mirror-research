@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -150,6 +151,125 @@ func TestMirrorReasonLearningModeRequiresVisibleLedger(t *testing.T) {
 	}
 }
 
+func TestMirrorReasonRejectsAliasedPrivateLedgersBeforeMutation(t *testing.T) {
+	request := cliMirrorRequest(axmmirror.GroundingStable, axmmirror.MirrorEscalationNone)
+	request.DeterministicResponse = "resolved"
+	requestPath := writeMirrorRequest(t, request)
+	ledgerPath := filepath.Join(t.TempDir(), "shared.jsonl")
+	commandContext, args, err := parseCobraCommand(t, []string{"mirror", "reason"}, []string{
+		requestPath, "--experience-ledger", ledgerPath, "--learn-to", ledgerPath,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runMirrorReason(commandContext, args, &bytes.Buffer{}, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "distinct paths") {
+		t.Fatalf("err = %v", err)
+	}
+	if _, err := os.Stat(ledgerPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("aliased ledger was mutated: %v", err)
+	}
+}
+
+func TestMirrorExperienceObserveFeedsFutureMirrorWaldoAndHermes(t *testing.T) {
+	directory := t.TempDir()
+	experiencePath := filepath.Join(directory, "experience.jsonl")
+	learningPath := filepath.Join(directory, "learning.jsonl")
+	hermesPath := filepath.Join(directory, "hermes-memory.jsonl")
+	stable := cliMirrorRequest(axmmirror.GroundingStable, axmmirror.MirrorEscalationNone)
+	stable.DeterministicResponse = "Use the visible result."
+	stablePath := writeMirrorRequest(t, stable)
+	commandContext, args, err := parseCobraCommand(t, []string{"mirror", "reason"}, []string{
+		stablePath, "--experience-ledger", experiencePath, "--episode-id", "episode-cli",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	commandContext.JSON = true
+	var output bytes.Buffer
+	if err := runMirrorReason(commandContext, args, &output, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	var reasonReceipt axmmirror.MirrorNeuralEscalationReceipt
+	if err := json.Unmarshal(output.Bytes(), &reasonReceipt); err != nil {
+		t.Fatal(err)
+	}
+	if reasonReceipt.ExperienceEpisodeID != "episode-cli" || reasonReceipt.ExperienceEventsRecorded != 2 || !reasonReceipt.ExperienceLedgerMutation {
+		t.Fatalf("reason receipt = %+v", reasonReceipt)
+	}
+	outcomePath := writeMirrorOutcome(t, axmmirror.MirrorExperienceOutcomeRequest{
+		Schema:    axmmirror.MirrorExperienceOutcomeRequestSchema,
+		EpisodeID: "episode-cli",
+		Signal:    axmmirror.MirrorExperienceHelpful,
+		Feedback:  "The visible result solved the task.",
+	})
+	commandContext, args, err = parseCobraCommand(t, []string{"mirror", "experience", "observe"}, []string{
+		outcomePath, "--ledger", experiencePath, "--learn-to", learningPath, "--hermes-to", hermesPath,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	commandContext.JSON = true
+	output.Reset()
+	if err := runMirrorExperienceObserve(commandContext, args, &output, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	var observeReceipt mirrorExperienceObserveReceipt
+	if err := json.Unmarshal(output.Bytes(), &observeReceipt); err != nil {
+		t.Fatal(err)
+	}
+	if !observeReceipt.ExperienceLedgerMutation || !observeReceipt.FutureContextMutation || !observeReceipt.TrainingReady || !observeReceipt.TrainingProjectionMutation || !observeReceipt.HermesMemoryProjectionMutation || observeReceipt.HermesRuntimeMemoryMutation || observeReceipt.ModelWeightMutation || observeReceipt.IdentityMutation {
+		t.Fatalf("observe receipt = %+v", observeReceipt)
+	}
+	learning, err := os.ReadFile(learningPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(learning, []byte(`"outcomeSignal":"HELPFUL"`)) || !bytes.Contains(learning, []byte(`"text":"User: What changed?\n\nAssistant: Use the visible result."`)) {
+		t.Fatalf("learning projection = %s", learning)
+	}
+	hermes, err := os.ReadFile(hermesPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(hermes, []byte(`"memoryKind":"SUCCESSFUL_PATTERN"`)) || !bytes.Contains(hermes, []byte(`"episodeId":"episode-cli"`)) {
+		t.Fatalf("Hermes projection = %s", hermes)
+	}
+
+	stub := &cliMirrorEscalator{candidate: axmmirror.MirrorNeuralCandidate{Text: "experience-aware candidate", Model: "fixture", Backend: "pytorch"}}
+	previous := openMirrorNeuralEscalator
+	openMirrorNeuralEscalator = func(context.Context, string, inference.Options) (axmmirror.MirrorNeuralEscalator, func() error, error) {
+		return stub, func() error { return nil }, nil
+	}
+	t.Cleanup(func() { openMirrorNeuralEscalator = previous })
+	uncertainPath := writeMirrorRequest(t, cliMirrorRequest(axmmirror.GroundingUncertain, axmmirror.MirrorEscalationNovelty))
+	commandContext, args, err = parseCobraCommand(t, []string{"mirror", "reason"}, []string{
+		uncertainPath, "--neural", "--model", "fixture", "--experience-ledger", experiencePath, "--episode-id", "episode-next",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	commandContext.JSON = true
+	output.Reset()
+	if err := runMirrorReason(commandContext, args, &output, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(output.Bytes(), &reasonReceipt); err != nil {
+		t.Fatal(err)
+	}
+	if !reasonReceipt.ExperienceContextApplied || len(reasonReceipt.ExperienceEpisodeIDs) != 1 || reasonReceipt.ExperienceEpisodeIDs[0] != "episode-cli" || !strings.Contains(stub.prompt, "The visible result solved the task.") {
+		t.Fatalf("experience-aware receipt = %+v; prompt = %q", reasonReceipt, stub.prompt)
+	}
+	for _, name := range []string{experiencePath, learningPath, hermesPath} {
+		info, err := os.Stat(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != fs.FileMode(0o600) {
+			t.Fatalf("%s mode = %o", name, info.Mode().Perm())
+		}
+	}
+}
+
 func writeMirrorRequest(t *testing.T, request axmmirror.MirrorNeuralEscalationRequest) string {
 	t.Helper()
 	payload, err := json.Marshal(request)
@@ -157,6 +277,19 @@ func writeMirrorRequest(t *testing.T, request axmmirror.MirrorNeuralEscalationRe
 		t.Fatal(err)
 	}
 	path := filepath.Join(t.TempDir(), "request.json")
+	if err := os.WriteFile(path, payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func writeMirrorOutcome(t *testing.T, request axmmirror.MirrorExperienceOutcomeRequest) string {
+	t.Helper()
+	payload, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "outcome.json")
 	if err := os.WriteFile(path, payload, 0o600); err != nil {
 		t.Fatal(err)
 	}
