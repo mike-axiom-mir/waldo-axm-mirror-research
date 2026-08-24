@@ -31,12 +31,12 @@ type nativeWaldoBridge struct {
 	modelRoot string
 }
 
-type nativeChatRequest struct {
-	Model    string              `json:"model"`
-	Messages []nativeChatMessage `json:"messages"`
+type waldoBridgeChatRequest struct {
+	Model    string                   `json:"model"`
+	Messages []waldoBridgeChatMessage `json:"messages"`
 }
 
-type nativeChatMessage struct {
+type waldoBridgeChatMessage struct {
 	Role    string          `json:"role"`
 	Content json.RawMessage `json:"content"`
 }
@@ -83,33 +83,33 @@ func runNativeWaldoBridge(addr string) {
 func (b *nativeWaldoBridge) chat(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 8<<20)
 	defer r.Body.Close()
-	var request nativeChatRequest
+	var request waldoBridgeChatRequest
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		nativeBridgeError(w, http.StatusBadRequest, err)
+		waldoBridgeError(w, http.StatusBadRequest, err)
 		return
 	}
 	name := strings.TrimSpace(request.Model)
 	if name == "" {
 		name = env("AXM_AI_MODEL", "waldo")
 	}
-	prompt, err := nativePrompt(request.Messages)
+	prompt, err := waldoBridgePrompt(request.Messages)
 	if err != nil {
-		nativeBridgeError(w, http.StatusBadRequest, err)
+		waldoBridgeError(w, http.StatusBadRequest, err)
 		return
 	}
 	opened, err := b.session(name)
 	if err != nil {
-		nativeBridgeError(w, http.StatusBadGateway, err)
+		waldoBridgeError(w, http.StatusBadGateway, err)
 		return
 	}
-	maxTokens := envInt("AXM_WALDO_MAX_TOKENS", 512, 1, 65536)
+	maxTokens := waldoBridgeEnvInt("AXM_WALDO_MAX_TOKENS", 512, 1, 65536)
 	result, err := opened.Session.Generate(r.Context(), prompt, inference.Options{
 		MaxTokens:   maxTokens,
 		Temperature: 0.4,
 		TopP:        0.95,
 	}, nil)
 	if err != nil {
-		nativeBridgeError(w, http.StatusBadGateway, fmt.Errorf("Waldo generation failed: %w", err))
+		waldoBridgeError(w, http.StatusBadGateway, fmt.Errorf("Waldo generation failed: %w", err))
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -144,13 +144,13 @@ func (b *nativeWaldoBridge) session(name string) (inference.Opened, error) {
 	return opened, nil
 }
 
-func nativePrompt(messages []nativeChatMessage) (string, error) {
+func waldoBridgePrompt(messages []waldoBridgeChatMessage) (string, error) {
 	if len(messages) == 0 {
 		return "", errors.New("chat request has no messages")
 	}
 	var builder strings.Builder
 	for _, message := range messages {
-		text, err := nativeMessageText(message.Content)
+		text, err := waldoBridgeMessageText(message.Content)
 		if err != nil {
 			return "", err
 		}
@@ -168,7 +168,7 @@ func nativePrompt(messages []nativeChatMessage) (string, error) {
 	return builder.String(), nil
 }
 
-func nativeMessageText(raw json.RawMessage) (string, error) {
+func waldoBridgeMessageText(raw json.RawMessage) (string, error) {
 	var text string
 	if err := json.Unmarshal(raw, &text); err == nil {
 		return text, nil
@@ -198,13 +198,13 @@ func nativeMessageText(raw json.RawMessage) (string, error) {
 	return strings.TrimSpace(builder.String()), nil
 }
 
-func nativeBridgeError(w http.ResponseWriter, status int, err error) {
+func waldoBridgeError(w http.ResponseWriter, status int, err error) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"message": err.Error()}})
 }
 
-func envInt(name string, fallback, minimum, maximum int) int {
+func waldoBridgeEnvInt(name string, fallback, minimum, maximum int) int {
 	value := strings.TrimSpace(os.Getenv(name))
 	if value == "" {
 		return fallback
