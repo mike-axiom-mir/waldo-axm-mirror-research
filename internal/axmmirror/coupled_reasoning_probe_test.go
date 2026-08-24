@@ -100,7 +100,11 @@ func TestCoupledReasoningV024CausalAndReceiptGuards(t *testing.T) {
 		t.Fatal("expected stale receipt rejection")
 	}
 
-	unknown := bytes.Replace(data, []byte(`"authority": "NONE"`), []byte(`"unexpected": true, "authority": "NONE"`), 1)
+	// Inject an unknown field without depending on the fixture's whitespace.
+	unknown := bytes.Replace(data, []byte(`"authority":`), []byte(`"unexpected":true,"authority":`), 1)
+	if bytes.Equal(unknown, data) {
+		t.Fatal("failed to construct unknown-field mutation")
+	}
 	if _, err := VerifyCoupledReasoningV024Contract(unknown); err == nil {
 		t.Fatal("expected unknown field rejection")
 	}
