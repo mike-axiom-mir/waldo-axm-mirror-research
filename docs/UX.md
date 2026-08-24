@@ -8,6 +8,8 @@ for flags and detailed behavior.
 ```text
 waldo
 ├── advisor
+├── mirror
+│   └── reason
 ├── config
 │   ├── show
 │   ├── get
@@ -179,6 +181,17 @@ fail when the selected host lacks a compatible runtime or artifacts.
 Models with a declared `interaction.template` automatically receive the
 matching prompt format and multi-turn history in `model chat`; models without
 one remain raw causal-continuation models.
+
+## Experimental AXM Mirror reasoning
+
+The experimental branch exposes deterministic-primary Mirror reasoning through a strict request file:
+
+```bash
+waldo mirror reason request.json
+waldo mirror reason request.json --neural --model local-model
+```
+
+Stable requests resolve without opening a model. Uncertain or conflicting requests HOLD unless local neural escalation is explicitly opted into. Neural responses remain candidates with authority `NONE`. `--trace` writes hash-only receipts; `--learn-to` can visibly capture chat-derived learning input as either review-required or explicitly approved for later training.
 
 Reference composes under `composes/` are test and experiment inputs, not model
 quality guarantees. See the [model compose guide](MODEL-COMPOSE.md) for the

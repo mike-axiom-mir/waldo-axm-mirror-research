@@ -91,6 +91,7 @@ func newRootCommand() *cobra.Command {
 	root.PersistentFlags().BoolVar(&state.json, "json", false, "emit structured JSON output; progress remains on stderr")
 	root.AddCommand(
 		leaf(state, "advisor <model-name>", "Chat with an AI model advisor", "For an existing model, explains its configuration and live training state and can propose a follow-up compose. For a new name, gathers requirements, creates a validated compose, and starts training only after confirmation.", cobra.ExactArgs(1), runModelAdvisor, advisorFlags()...),
+		newMirrorCommand(state),
 		newIndexCommand(state),
 		newShardCommand(state),
 		newLookasideCommand(state),
@@ -98,6 +99,24 @@ func newRootCommand() *cobra.Command {
 		newConfigCommand(state),
 	)
 	return root
+}
+
+func newMirrorCommand(state *cobraState) *cobra.Command {
+	command := group("mirror", "Run experimental deterministic-primary AXM Mirror reasoning", "Mirror reasoning remains deterministic-primary. A local WALDO model can provide a non-authoritative candidate only through --neural. Optional traces are hash-only; --learn-to writes visible private chat-learning records.")
+	command.AddCommand(
+		leaf(state, "reason <request.json>", "Resolve through Mirror with optional local neural escalation", "The strict request declares grounding state, consequence, escalation reason, prompt, and optional visible identity roots. STABLE requests return the deterministic response without opening a model. UNCERTAIN or CONFLICT requests HOLD unless --neural and --model are supplied. --learn-to records the full exchange as a visible candidate or as explicitly approved-for-training input; it does not silently train during inference.", cobra.ExactArgs(1), runMirrorReason,
+			booleanFlag("neural", "opt into local WALDO neural escalation for unresolved reasoning"),
+			textFlag("model", "", "local WALDO model name used only with --neural"),
+			integerFlag("max-tokens", 256, "maximum generated candidate tokens"),
+			decimalFlag("temperature", 0.2, "candidate sampling temperature"),
+			decimalFlag("top-p", 0.95, "candidate nucleus sampling probability"),
+			unsigned64Flag("seed", 0, "deterministic candidate sampling seed"),
+			integerFlag("timeout-seconds", 120, "bounded local neural call timeout (1..900)"),
+			textFlag("trace", "", "append hash-only private JSONL trace"),
+			textFlag("learn-to", "", "append full visible chat-learning JSONL record"),
+			textFlag("learning-mode", mirrorLearningModeCandidate, "learning record state: candidate or approved")),
+	)
+	return command
 }
 
 func newIndexCommand(state *cobraState) *cobra.Command {
