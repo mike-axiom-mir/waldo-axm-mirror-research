@@ -15,26 +15,105 @@
   const digest = deterministicKernel.digest;
   const canonicalJson = deterministicKernel.canonicalJson;
 
-  function jsonTransformSource(parameters) {
-    const config={inputField:parameters.inputField,outputField:parameters.outputField,defaultValue:parameters.defaultValue,outputSchema:parameters.outputSchema,maxInputKeys:parameters.maxInputKeys};
-    return "'use strict';\nconst CONFIG=Object.freeze("+JSON.stringify(config)+");\nfunction own(v,k){return Object.prototype.hasOwnProperty.call(Object(v),k);}\nfunction run(input){if(!input||typeof input!=='object'||Array.isArray(input))return {schema:CONFIG.outputSchema,ok:false,code:'INPUT_OBJECT_REQUIRED'};if(Object.keys(input).length>CONFIG.maxInputKeys)return {schema:CONFIG.outputSchema,ok:false,code:'INPUT_KEY_LIMIT'};const output={};output[CONFIG.outputField]=own(input,CONFIG.inputField)?input[CONFIG.inputField]:CONFIG.defaultValue;return {schema:CONFIG.outputSchema,ok:true,output:output};}\nmodule.exports={CONFIG:CONFIG,run:run};\n";
+  function jsonTransformField(value,label){
+    if(typeof value!=='string'||!/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(value)||['constructor','prototype'].includes(value))throw new Error(label+' is invalid');
+    return value;
   }
-  function jsonTransformSelftest(parameters) {
-    return "'use strict';\nconst assert=require('assert');const capability=require('./capability.js');let input={};input["+JSON.stringify(parameters.inputField)+"]='proof';const result=capability.run(input);assert.equal(result.ok,true);assert.equal(result.output["+JSON.stringify(parameters.outputField)+"],'proof');const fallback=capability.run({});assert.deepStrictEqual(fallback.output["+JSON.stringify(parameters.outputField)+"],"+JSON.stringify(parameters.defaultValue)+");console.log('PASS pure JSON transform capability');\n";
+  function jsonTransformText(value,label,maxLength){
+    if(typeof value!=='string'||value.length>maxLength)throw new Error(label+' must be a bounded string');
+    return value;
+  }
+  function jsonTransformSchema(value){
+    if(typeof value!=='string'||!/^[A-Za-z0-9][A-Za-z0-9._:/+-]{2,179}$/.test(value))throw new Error('outputSchema is invalid');
+    return value;
+  }
+  function jsonTransformSource(config) {
+    return [
+      "'use strict';",
+      "function deepFreeze(value){if(value&&typeof value==='object'&&!Object.isFrozen(value)){Object.freeze(value);Object.getOwnPropertyNames(value).forEach(function(key){deepFreeze(value[key]);});}return value;}",
+      'const CONFIG=deepFreeze('+JSON.stringify(config)+');',
+      "function own(value,key){return Object.prototype.hasOwnProperty.call(Object(value),key);}",
+      "function safeField(value){return typeof value==='string'&&/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(value)&&value!=='constructor'&&value!=='prototype';}",
+      "function recordPrototype(value){const prototype=Object.getPrototypeOf(value);if(prototype===null)return true;if(Object.getPrototypeOf(prototype)!==null||Object.getOwnPropertySymbols(prototype).length)return false;const constructor=Object.getOwnPropertyDescriptor(prototype,'constructor'),safe=['__defineGetter__','__defineSetter__','__lookupGetter__','__lookupSetter__','__proto__','constructor','hasOwnProperty','isPrototypeOf','propertyIsEnumerable','toLocaleString','toString','valueOf'];return !!constructor&&own(constructor,'value')&&typeof constructor.value==='function'&&constructor.value.name==='Object'&&Function.prototype.toString.call(constructor.value)==='function Object() { [native code] }'&&Object.getOwnPropertyNames(prototype).every(function(key){return safe.includes(key);});}",
+      "function inspectRecord(value){if(!value||typeof value!=='object'||Array.isArray(value))return 'INPUT_OBJECT_REQUIRED';if(!recordPrototype(value)||Object.getOwnPropertySymbols(value).length)return 'INPUT_FIELD_UNSUPPORTED';const names=Object.getOwnPropertyNames(value);if(names.length>CONFIG.maxInputKeys)return 'INPUT_KEY_LIMIT';for(let index=0;index<names.length;index+=1){const key=names[index],descriptor=Object.getOwnPropertyDescriptor(value,key);if(!safeField(key)||!descriptor||!descriptor.enumerable||!own(descriptor,'value'))return 'INPUT_FIELD_UNSUPPORTED';if(typeof descriptor.value!=='string'||descriptor.value.length>CONFIG.maxValueLength)return 'INPUT_VALUE_INVALID';}return null;}",
+      "function utf8Bytes(value){let total=0;for(let index=0;index<value.length;index+=1){const code=value.charCodeAt(index);if(code<128)total+=1;else if(code<2048)total+=2;else if(code>=55296&&code<=56319&&index+1<value.length){const next=value.charCodeAt(index+1);if(next>=56320&&next<=57343){total+=4;index+=1;}else total+=3;}else total+=3;}return total;}",
+      "function recordBytes(value){const keys=Object.getOwnPropertyNames(value).sort();let total=2;keys.forEach(function(key,index){const descriptor=Object.getOwnPropertyDescriptor(value,key);if(index)total+=1;total+=utf8Bytes(JSON.stringify(key))+1+utf8Bytes(JSON.stringify(descriptor.value));});return total;}",
+      "function failure(code){return {schema:CONFIG.outputSchema,ok:false,code:code};}",
+      "function run(input){const problem=inspectRecord(input);if(problem)return failure(problem);if(recordBytes(input)>CONFIG.maxInputBytes)return failure('INPUT_BYTES_EXCEEDED');const descriptor=own(input,CONFIG.inputField)?Object.getOwnPropertyDescriptor(input,CONFIG.inputField):null,value=descriptor?descriptor.value:CONFIG.defaultValue,output={};Object.defineProperty(output,CONFIG.outputField,{value:value,enumerable:true,writable:true,configurable:true});if(utf8Bytes(JSON.stringify(output))>CONFIG.maxOutputBytes)return failure('OUTPUT_BYTES_EXCEEDED');return {schema:CONFIG.outputSchema,ok:true,output:output};}",
+      'module.exports={CONFIG:CONFIG,run:run};',
+      ''
+    ].join('\n');
+  }
+  function jsonTransformSelftest(config) {
+    return "'use strict';\nconst assert=require('assert');const capability=require('./capability.js');assert(Object.isFrozen(capability.CONFIG));const input={"+JSON.stringify(config.inputField)+":'proof',note:'bounded'},first=capability.run(input),second=capability.run(input);assert.equal(first.ok,true);assert.deepStrictEqual(first,second);assert.deepStrictEqual(first.output,{"+JSON.stringify(config.outputField)+":'proof'});assert.notStrictEqual(first.output,input);const fallback=capability.run({});assert.deepStrictEqual(fallback.output,{"+JSON.stringify(config.outputField)+":"+JSON.stringify(config.defaultValue)+"});assert.equal(capability.run(null).code,'INPUT_OBJECT_REQUIRED');assert.equal(capability.run([]).code,'INPUT_OBJECT_REQUIRED');assert.equal(capability.run(new Date()).code,'INPUT_FIELD_UNSUPPORTED');assert.equal(capability.run({"+JSON.stringify(config.inputField)+":7}).code,'INPUT_VALUE_INVALID');assert.equal(capability.run({"+JSON.stringify(config.inputField)+":'x'.repeat("+(config.maxValueLength+1)+")}).code,'INPUT_VALUE_INVALID');const accessor={};let getterRead=false;Object.defineProperty(accessor,"+JSON.stringify(config.inputField)+",{enumerable:true,get(){getterRead=true;throw new Error('must not execute');}});assert.equal(capability.run(accessor).code,'INPUT_FIELD_UNSUPPORTED');assert.equal(getterRead,false);let inheritedHookRead=false;const inheritedPrototype=Object.create(null);Object.defineProperty(inheritedPrototype,'constructor',{value:Object});Object.defineProperty(inheritedPrototype,'toJSON',{get(){inheritedHookRead=true;throw new Error('must not execute');}});const inherited=Object.create(inheritedPrototype);inherited["+JSON.stringify(config.inputField)+"]='proof';assert.equal(capability.run(inherited).code,'INPUT_FIELD_UNSUPPORTED');assert.equal(inheritedHookRead,false);const custom={"+JSON.stringify(config.inputField)+":'proof',toJSON:function(){throw new Error('must not execute');}};assert.equal(capability.run(custom).code,'INPUT_VALUE_INVALID');const symbolRecord={"+JSON.stringify(config.inputField)+":'proof'};symbolRecord[Symbol('hidden')]='x';assert.equal(capability.run(symbolRecord).code,'INPUT_FIELD_UNSUPPORTED');const reserved={"+JSON.stringify(config.inputField)+":'proof'};Object.defineProperty(reserved,'__proto__',{value:'x',enumerable:true});assert.equal(capability.run(reserved).code,'INPUT_FIELD_UNSUPPORTED');class RecordValue{constructor(){this["+JSON.stringify(config.inputField)+"]='proof';}}assert.equal(capability.run(new RecordValue()).code,'INPUT_FIELD_UNSUPPORTED');const keys={};for(let index=0;index<"+(config.maxInputKeys+1)+";index+=1)keys['k'+index]='x';assert.equal(capability.run(keys).code,'INPUT_KEY_LIMIT');const byteHeavy={a:'é'.repeat("+config.maxValueLength+"),b:'é'.repeat("+config.maxValueLength+"),c:'é'.repeat("+config.maxValueLength+")};assert.equal(capability.run(byteHeavy).code,'INPUT_BYTES_EXCEEDED');assert.equal(capability.run({"+JSON.stringify(config.inputField)+":'\\\\'.repeat("+config.maxValueLength+")}).code,'OUTPUT_BYTES_EXCEEDED');console.log('PASS bounded JavaScript string-record transform capability');\n";
   }
   function buildJsonTransform(parameters) {
-    return {capabilityKind:'HAND',source:jsonTransformSource(parameters),selftest:jsonTransformSelftest(parameters),provides:[parameters.outputSchema],consumes:['application/json'],summary:'Pure bounded JSON field transform.'};
+    htmlExact(parameters,['inputField','outputField','defaultValue','outputSchema','maxInputKeys','maxValueLength','maxInputBytes','maxOutputBytes'],'parameters');
+    if(!Number.isInteger(parameters.maxInputKeys)||parameters.maxInputKeys<1||parameters.maxInputKeys>64)throw new Error('maxInputKeys is outside the bounded range');
+    if(!Number.isInteger(parameters.maxValueLength)||parameters.maxValueLength<8||parameters.maxValueLength>4096)throw new Error('maxValueLength is outside the bounded range');
+    if(!Number.isInteger(parameters.maxInputBytes)||parameters.maxInputBytes<128||parameters.maxInputBytes>1048576)throw new Error('maxInputBytes is outside the bounded range');
+    if(!Number.isInteger(parameters.maxOutputBytes)||parameters.maxOutputBytes<64||parameters.maxOutputBytes>1048576)throw new Error('maxOutputBytes is outside the bounded range');
+    const config={inputField:jsonTransformField(parameters.inputField,'inputField'),outputField:jsonTransformField(parameters.outputField,'outputField'),defaultValue:jsonTransformText(parameters.defaultValue,'defaultValue',parameters.maxValueLength),outputSchema:jsonTransformSchema(parameters.outputSchema),maxInputKeys:parameters.maxInputKeys,maxValueLength:parameters.maxValueLength,maxInputBytes:parameters.maxInputBytes,maxOutputBytes:parameters.maxOutputBytes};
+    if(byteLength(JSON.stringify(Object.fromEntries([[config.outputField,config.defaultValue]])))>config.maxOutputBytes)throw new Error('default output exceeds maxOutputBytes');
+    return {capabilityKind:'HAND',source:jsonTransformSource(config),selftest:jsonTransformSelftest(config),provides:[config.outputSchema],consumes:['axm.bounded-string-record/v1'],summary:'Strict deterministic JavaScript string-record field transform with accessor refusal and byte ceilings.'};
   }
 
-  function svgBadgeSource(parameters) {
-    const config={label:parameters.label,value:parameters.value,background:parameters.background,foreground:parameters.foreground,width:parameters.width};
-    return "'use strict';\nconst CONFIG=Object.freeze("+JSON.stringify(config)+");\nfunction esc(v){return String(v).slice(0,48).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\\\"/g,'&quot;').replace(/'/g,'&#39;');}\nfunction render(input){input=input&&typeof input==='object'&&!Array.isArray(input)?input:{};const label=esc(input.label==null?CONFIG.label:input.label),value=esc(input.value==null?CONFIG.value:input.value),split=Math.floor(CONFIG.width*0.58);const svg='<svg xmlns=\\\"http://www.w3.org/2000/svg\\\" width=\\\"'+CONFIG.width+'\\\" height=\\\"28\\\" role=\\\"img\\\" aria-label=\\\"'+label+': '+value+'\\\"><rect width=\\\"'+CONFIG.width+'\\\" height=\\\"28\\\" rx=\\\"5\\\" fill=\\\"'+CONFIG.background+'\\\"/><rect x=\\\"'+split+'\\\" width=\\\"'+(CONFIG.width-split)+'\\\" height=\\\"28\\\" rx=\\\"5\\\" fill=\\\"'+CONFIG.foreground+'\\\"/><text x=\\\"10\\\" y=\\\"19\\\" fill=\\\"#ffffff\\\" font-family=\\\"system-ui,sans-serif\\\" font-size=\\\"13\\\">'+label+'</text><text x=\\\"'+(split+8)+'\\\" y=\\\"19\\\" fill=\\\"#081018\\\" font-family=\\\"system-ui,sans-serif\\\" font-size=\\\"13\\\" font-weight=\\\"700\\\">'+value+'</text></svg>';return {schema:'axm.creation.svg-status-badge/v1',ok:true,mimeType:'image/svg+xml',svg:svg};}\nmodule.exports={CONFIG:CONFIG,render:render};\n";
+  function svgXmlText(value){
+    if(typeof value!=='string'||!value.trim()||value.length>48)return false;
+    for(let index=0;index<value.length;index+=1){
+      const code=value.charCodeAt(index);
+      if(code===9||code===10||code===13||(code>=32&&code<=55295)||(code>=57344&&code<=65533))continue;
+      if(code>=55296&&code<=56319&&index+1<value.length){const next=value.charCodeAt(index+1);if(next>=56320&&next<=57343){index+=1;continue;}}
+      return false;
+    }
+    return true;
   }
-  function svgBadgeSelftest() {
-    return "'use strict';\nconst assert=require('assert');const capability=require('./capability.js');const first=capability.render({label:'A&B',value:'<ok>'}),second=capability.render({label:'A&B',value:'<ok>'});assert.equal(first.ok,true);assert.equal(first.svg,second.svg);assert(first.svg.includes('A&amp;B'));assert(first.svg.includes('&lt;ok&gt;'));console.log('PASS deterministic SVG badge capability');\n";
+  function svgText(value,label){
+    if(!svgXmlText(value))throw new Error(label+' is invalid');
+    return value;
+  }
+  function svgColor(value,label){
+    if(typeof value!=='string'||!/^#[0-9a-fA-F]{6}$/.test(value))throw new Error(label+' must be a six-digit hexadecimal color');
+    return value.toLowerCase();
+  }
+  function svgEscape(value){
+    return value.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;').replace(/'/g,'&#39;');
+  }
+  function svgBadgeMarkup(config,label,value){
+    const escapedLabel=svgEscape(label),escapedValue=svgEscape(value),title=svgEscape(label+': '+value),split=Math.floor(config.width*0.58);
+    return '<svg xmlns="http://www.w3.org/2000/svg" width="'+config.width+'" height="28" viewBox="0 0 '+config.width+' 28" role="img" focusable="false" aria-label="'+title+'"><title>'+title+'</title><rect width="'+config.width+'" height="28" rx="5" fill="'+config.background+'"/><rect x="'+split+'" width="'+(config.width-split)+'" height="28" rx="5" fill="'+config.foreground+'"/><text x="10" y="19" fill="#ffffff" font-family="system-ui, sans-serif" font-size="13">'+escapedLabel+'</text><text x="'+(split+8)+'" y="19" fill="#081018" font-family="system-ui, sans-serif" font-size="13" font-weight="700">'+escapedValue+'</text></svg>';
+  }
+  function svgBadgeSource(config) {
+    return [
+      "'use strict';",
+      "function deepFreeze(value){if(value&&typeof value==='object'&&!Object.isFrozen(value)){Object.freeze(value);Object.getOwnPropertyNames(value).forEach(function(key){deepFreeze(value[key]);});}return value;}",
+      'const CONFIG=deepFreeze('+JSON.stringify(config)+');',
+      "function own(value,key){return Object.prototype.hasOwnProperty.call(Object(value),key);}",
+      "function recordPrototype(value){const prototype=Object.getPrototypeOf(value);if(prototype===null)return true;if(Object.getPrototypeOf(prototype)!==null||Object.getOwnPropertySymbols(prototype).length)return false;const constructor=Object.getOwnPropertyDescriptor(prototype,'constructor'),safe=['__defineGetter__','__defineSetter__','__lookupGetter__','__lookupSetter__','__proto__','constructor','hasOwnProperty','isPrototypeOf','propertyIsEnumerable','toLocaleString','toString','valueOf'];return !!constructor&&own(constructor,'value')&&typeof constructor.value==='function'&&constructor.value.name==='Object'&&Function.prototype.toString.call(constructor.value)==='function Object() { [native code] }'&&Object.getOwnPropertyNames(prototype).every(function(key){return safe.includes(key);});}",
+      "function jsonRecord(value){if(!value||typeof value!=='object'||Array.isArray(value)||!recordPrototype(value))return false;if(Object.getOwnPropertySymbols(value).length)return false;return Object.getOwnPropertyNames(value).every(function(key){const descriptor=Object.getOwnPropertyDescriptor(value,key);return descriptor&&descriptor.enumerable&&own(descriptor,'value');});}",
+      "function utf8Bytes(value){let total=0;for(let index=0;index<value.length;index+=1){const code=value.charCodeAt(index);if(code<128)total+=1;else if(code<2048)total+=2;else if(code>=55296&&code<=56319&&index+1<value.length){const next=value.charCodeAt(index+1);if(next>=56320&&next<=57343){total+=4;index+=1;}else total+=3;}else total+=3;}return total;}",
+      "function recordBytes(value){let total=2,written=false;['label','value'].forEach(function(key){if(!own(value,key))return;if(written)total+=1;written=true;total+=utf8Bytes(JSON.stringify(key))+1+utf8Bytes(JSON.stringify(Object.getOwnPropertyDescriptor(value,key).value));});return total;}",
+      "function xmlText(value){if(typeof value!=='string'||!value.trim()||value.length>48)return false;for(let index=0;index<value.length;index+=1){const code=value.charCodeAt(index);if(code===9||code===10||code===13||(code>=32&&code<=55295)||(code>=57344&&code<=65533))continue;if(code>=55296&&code<=56319&&index+1<value.length){const next=value.charCodeAt(index+1);if(next>=56320&&next<=57343){index+=1;continue;}}return false;}return true;}",
+      "function text(value){return xmlText(value)?value:null;}",
+      "function esc(value){return value.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\\\"/g,'&quot;').replace(/'/g,'&#39;');}",
+      "function markup(label,value){const escapedLabel=esc(label),escapedValue=esc(value),title=esc(label+': '+value),split=Math.floor(CONFIG.width*0.58);return '<svg xmlns=\\\"http://www.w3.org/2000/svg\\\" width=\\\"'+CONFIG.width+'\\\" height=\\\"28\\\" viewBox=\\\"0 0 '+CONFIG.width+' 28\\\" role=\\\"img\\\" focusable=\\\"false\\\" aria-label=\\\"'+title+'\\\"><title>'+title+'</title><rect width=\\\"'+CONFIG.width+'\\\" height=\\\"28\\\" rx=\\\"5\\\" fill=\\\"'+CONFIG.background+'\\\"/><rect x=\\\"'+split+'\\\" width=\\\"'+(CONFIG.width-split)+'\\\" height=\\\"28\\\" rx=\\\"5\\\" fill=\\\"'+CONFIG.foreground+'\\\"/><text x=\\\"10\\\" y=\\\"19\\\" fill=\\\"#ffffff\\\" font-family=\\\"system-ui, sans-serif\\\" font-size=\\\"13\\\">'+escapedLabel+'</text><text x=\\\"'+(split+8)+'\\\" y=\\\"19\\\" fill=\\\"#081018\\\" font-family=\\\"system-ui, sans-serif\\\" font-size=\\\"13\\\" font-weight=\\\"700\\\">'+escapedValue+'</text></svg>';}",
+      "function render(input){if(!jsonRecord(input))return {schema:CONFIG.resultSchemaId,ok:false,code:'INPUT_OBJECT_REQUIRED'};const keys=Object.keys(input);if(keys.some(function(key){return key!=='label'&&key!=='value';}))return {schema:CONFIG.resultSchemaId,ok:false,code:'INPUT_FIELDS_UNSUPPORTED'};const label=text(own(input,'label')?Object.getOwnPropertyDescriptor(input,'label').value:CONFIG.label),value=text(own(input,'value')?Object.getOwnPropertyDescriptor(input,'value').value:CONFIG.value);if(!label||!value)return {schema:CONFIG.resultSchemaId,ok:false,code:'TEXT_INVALID'};if(recordBytes(input)>CONFIG.maxInputBytes)return {schema:CONFIG.resultSchemaId,ok:false,code:'INPUT_BYTES_EXCEEDED'};const svg=markup(label,value);if(utf8Bytes(svg)>CONFIG.maxOutputBytes)return {schema:CONFIG.resultSchemaId,ok:false,code:'SVG_BYTES_EXCEEDED'};return {schema:CONFIG.resultSchemaId,ok:true,mimeType:'image/svg+xml',svg:svg};}",
+      'module.exports={CONFIG:CONFIG,render:render};',
+      ''
+    ].join('\n');
+  }
+  function svgBadgeSelftest(config) {
+    return "'use strict';\nconst assert=require('assert');const capability=require('./capability.js');assert(Object.isFrozen(capability.CONFIG));const first=capability.render({label:'A&B',value:'<ok>'}),second=capability.render({label:'A&B',value:'<ok>'});assert.equal(first.ok,true);assert.equal(first.svg,second.svg);assert(first.svg.includes('<title>A&amp;B: &lt;ok&gt;</title>'));assert(first.svg.includes('viewBox=\\\"0 0 "+config.width+" 28\\\"'));assert(!/(?:<script|<style|\\son[a-z]+=|href=|xlink:href|url\\s*\\(|@import|<animate|<set|<foreignObject)/i.test(first.svg));assert.equal(capability.render({unexpected:true}).code,'INPUT_FIELDS_UNSUPPORTED');assert.equal(capability.render({label:'',value:'ok'}).code,'TEXT_INVALID');assert.equal(capability.render({label:'x'.repeat(49),value:'ok'}).code,'TEXT_INVALID');assert.equal(capability.render({label:'ok\\u0000',value:'ok'}).code,'TEXT_INVALID');assert.equal(capability.render({label:'ok\\u0001',value:'ok'}).code,'TEXT_INVALID');assert.equal(capability.render({label:'ok\\ud800',value:'ok'}).code,'TEXT_INVALID');assert.equal(capability.render([]).code,'INPUT_OBJECT_REQUIRED');assert.equal(capability.render(new Date()).code,'INPUT_OBJECT_REQUIRED');const accessor={value:'ok'};Object.defineProperty(accessor,'label',{enumerable:true,get(){throw new Error('must not execute');}});assert.equal(capability.render(accessor).code,'INPUT_OBJECT_REQUIRED');const hostile={label:'ok',value:'ok',toJSON(){throw new Error('must not execute');}};assert.equal(capability.render(hostile).code,'INPUT_FIELDS_UNSUPPORTED');let inheritedHookRead=false;const inheritedPrototype=Object.create(null);Object.defineProperty(inheritedPrototype,'constructor',{value:Object});Object.defineProperty(inheritedPrototype,'toJSON',{get(){inheritedHookRead=true;throw new Error('must not execute');}});const inherited=Object.create(inheritedPrototype);inherited.label='ok';inherited.value='ok';assert.equal(capability.render(inherited).code,'INPUT_OBJECT_REQUIRED');assert.equal(inheritedHookRead,false);assert.equal(capability.render({label:'😀'.repeat(24),value:'😀'.repeat(24)}).code,'INPUT_BYTES_EXCEEDED');assert.equal(capability.render({label:'&'.repeat(48),value:'&'.repeat(48)}).code,'SVG_BYTES_EXCEEDED');console.log('PASS strict deterministic SVG badge capability');\n";
   }
   function buildSvgBadge(parameters) {
-    return {capabilityKind:'HAND',source:svgBadgeSource(parameters),selftest:svgBadgeSelftest(parameters),provides:['axm.creation.svg-status-badge/v1','image/svg+xml'],consumes:['application/json'],summary:'Deterministic text-only SVG status badge creation hand.'};
+    htmlExact(parameters,['resultSchemaId','label','value','background','foreground','width','maxInputBytes','maxOutputBytes'],'parameters');
+    if(!/^[A-Za-z0-9][A-Za-z0-9._:/+-]{2,179}$/.test(parameters.resultSchemaId||''))throw new Error('resultSchemaId is invalid');
+    if(!Number.isInteger(parameters.width)||parameters.width<120||parameters.width>512)throw new Error('width is outside the bounded range');
+    if(!Number.isInteger(parameters.maxInputBytes)||parameters.maxInputBytes<128||parameters.maxInputBytes>65536)throw new Error('maxInputBytes is outside the bounded range');
+    if(!Number.isInteger(parameters.maxOutputBytes)||parameters.maxOutputBytes<512||parameters.maxOutputBytes>65536)throw new Error('maxOutputBytes is outside the bounded range');
+    const config={resultSchemaId:parameters.resultSchemaId,label:svgText(parameters.label,'label'),value:svgText(parameters.value,'value'),background:svgColor(parameters.background,'background'),foreground:svgColor(parameters.foreground,'foreground'),width:parameters.width,maxInputBytes:parameters.maxInputBytes,maxOutputBytes:parameters.maxOutputBytes};
+    if(Buffer.byteLength(svgBadgeMarkup(config,config.label,config.value),'utf8')>config.maxOutputBytes)throw new Error('default SVG exceeds maxOutputBytes');
+    return {capabilityKind:'HAND',source:svgBadgeSource(config),selftest:svgBadgeSelftest(config),provides:[config.resultSchemaId,'image/svg+xml'],consumes:['axm.svg-status-badge-content/v1'],summary:'Strict deterministic text-only SVG status badge renderer with closed input and byte ceilings.'};
   }
 
   function directionAdapterSource(parameters) {
@@ -129,6 +208,73 @@
     if(!Number.isInteger(parameters.maxTextLength)||parameters.maxTextLength<16||parameters.maxTextLength>4000)throw new Error('maxTextLength is outside the bounded range');
     const config={resultSchemaId:parameters.resultSchemaId,documentTitle:htmlText(parameters.documentTitle,'documentTitle',120),language:language,defaultHeading:htmlText(parameters.defaultHeading,'defaultHeading',120),defaultIntro:htmlText(parameters.defaultIntro,'defaultIntro',500),maxSections:parameters.maxSections,maxInputBytes:parameters.maxInputBytes,maxTextLength:parameters.maxTextLength};
     return {capabilityKind:'HAND',source:htmlPageSource(config),selftest:htmlPageSelftest(config),provides:[parameters.resultSchemaId,'text/html'],consumes:['axm.markup-page-content/v1'],summary:'Pure deterministic accessible HTML document-structure renderer.'};
+  }
+
+  function cssTokenName(value,label,maximum){
+    const text=String(value||'');
+    if(!/^[a-z][a-z0-9-]*$/.test(text)||text.length>maximum)throw new Error(label+' is invalid');
+    return text;
+  }
+  function cssTokenValue(kind,value,label){
+    if(kind==='COLOR_HEX'){
+      if(typeof value!=='string'||!/^#[0-9a-fA-F]{6}$/.test(value))throw new Error(label+' must be a six-digit hexadecimal color');
+      return value.toLowerCase();
+    }
+    if(kind==='LENGTH_PX'){
+      if(!Number.isInteger(value)||value<0||value>4096)throw new Error(label+' must be an integer from 0 to 4096');
+      return String(value)+'px';
+    }
+    if(kind==='INTEGER'){
+      if(!Number.isInteger(value)||value<-1000||value>1000)throw new Error(label+' must be an integer from -1000 to 1000');
+      return String(value);
+    }
+    if(kind==='PERCENT'){
+      if(!Number.isInteger(value)||value<0||value>100)throw new Error(label+' must be an integer from 0 to 100');
+      return String(value)+'%';
+    }
+    if(kind==='TIME_MS'){
+      if(!Number.isInteger(value)||value<0||value>60000)throw new Error(label+' must be an integer from 0 to 60000');
+      return String(value)+'ms';
+    }
+    throw new Error(label+' has an unsupported token kind');
+  }
+  function cssStylesheetSource(config){
+    return [
+      "'use strict';",
+      'function deepFreeze(value){if(value&&typeof value===\'object\'&&!Object.isFrozen(value)){Object.freeze(value);Object.keys(value).forEach(function(key){deepFreeze(value[key]);});}return value;}',
+      'const CONFIG=deepFreeze('+JSON.stringify(config)+');',
+      'function own(value,key){return Object.prototype.hasOwnProperty.call(Object(value),key);}',
+      'function jsonRecord(value){if(!value||typeof value!==\'object\'||Array.isArray(value))return false;const prototype=Object.getPrototypeOf(value);if(prototype!==Object.prototype&&prototype!==null)return false;if(Object.getOwnPropertySymbols(value).length)return false;return Object.getOwnPropertyNames(value).every(function(key){const descriptor=Object.getOwnPropertyDescriptor(value,key);return descriptor&&descriptor.enumerable&&own(descriptor,\'value\');});}',
+      'function bytes(value){try{return Buffer.byteLength(JSON.stringify(value),\'utf8\');}catch(_){return Infinity;}}',
+      'function cssValue(token,value){if(token.kind===\'COLOR_HEX\')return typeof value===\'string\'&&/^#[0-9a-fA-F]{6}$/.test(value)?value.toLowerCase():null;if(token.kind===\'LENGTH_PX\')return Number.isInteger(value)&&value>=0&&value<=4096?String(value)+\'px\':null;if(token.kind===\'INTEGER\')return Number.isInteger(value)&&value>=-1000&&value<=1000?String(value):null;if(token.kind===\'PERCENT\')return Number.isInteger(value)&&value>=0&&value<=100?String(value)+\'%\':null;if(token.kind===\'TIME_MS\')return Number.isInteger(value)&&value>=0&&value<=60000?String(value)+\'ms\':null;return null;}',
+      'function render(input){if(!jsonRecord(input))return {schema:CONFIG.resultSchemaId,ok:false,code:\'INPUT_OBJECT_REQUIRED\'};const inputKeys=Object.keys(input);if(inputKeys.some(function(key){return key!==\'overrides\';}))return {schema:CONFIG.resultSchemaId,ok:false,code:\'INPUT_FIELDS_UNSUPPORTED\'};const overrides=own(input,\'overrides\')?input.overrides:{};if(!jsonRecord(overrides))return {schema:CONFIG.resultSchemaId,ok:false,code:\'OVERRIDES_OBJECT_REQUIRED\'};const overrideKeys=Object.keys(overrides);if(overrideKeys.length>CONFIG.tokens.length)return {schema:CONFIG.resultSchemaId,ok:false,code:\'OVERRIDE_KEY_LIMIT\'};const known=new Set(CONFIG.tokens.map(function(token){return token.name;}));const unknown=overrideKeys.filter(function(key){return !known.has(key);}).sort();if(unknown.length)return {schema:CONFIG.resultSchemaId,ok:false,code:\'UNKNOWN_TOKEN\',token:unknown[0]};const rows=[];for(const token of CONFIG.tokens){const raw=own(overrides,token.name)?overrides[token.name]:token.defaultValue;const value=cssValue(token,raw);if(value===null)return {schema:CONFIG.resultSchemaId,ok:false,code:\'TOKEN_VALUE_INVALID\',token:token.name};rows.push(\'  --\'+CONFIG.prefix+\'-\'+token.name+\': \'+value+\';\');}if(bytes(input)>CONFIG.maxInputBytes)return {schema:CONFIG.resultSchemaId,ok:false,code:\'INPUT_BYTES_EXCEEDED\'};const css=\':root {\\n\'+rows.join(\'\\n\')+\'\\n}\\n\';if(Buffer.byteLength(css,\'utf8\')>CONFIG.maxOutputBytes)return {schema:CONFIG.resultSchemaId,ok:false,code:\'CSS_BYTES_EXCEEDED\'};return {schema:CONFIG.resultSchemaId,ok:true,mimeType:\'text/css; charset=utf-8\',css:css,tokenCount:CONFIG.tokens.length};}',
+      'module.exports={CONFIG:CONFIG,render:render};',
+      ''
+    ].join('\n');
+  }
+  function cssStylesheetSelftest(config){
+    const first=config.tokens[0],override=first.kind==='COLOR_HEX'?'#A1B2C3':first.kind==='INTEGER'?-7:first.kind==='PERCENT'?75:first.kind==='TIME_MS'?250:24;
+    return "'use strict';\nconst assert=require('assert');const stylesheet=require('./capability.js');const defaults=stylesheet.render({}),again=stylesheet.render({});assert.equal(defaults.ok,true);assert.equal(defaults.css,again.css);assert(defaults.css.startsWith(':root {\\n'));assert(defaults.css.includes('--"+config.prefix+"-"+first.name+":'));assert(!/@import|url\\s*\\(|<\\/?style/i.test(defaults.css));const changed=stylesheet.render({overrides:{"+JSON.stringify(first.name)+":"+JSON.stringify(override)+"}});assert.equal(changed.ok,true);assert.equal(stylesheet.render({overrides:{unknown:'red'}}).code,'UNKNOWN_TOKEN');assert.equal(stylesheet.render({overrides:{"+JSON.stringify(first.name)+":'red;display:none'}}).code,'TOKEN_VALUE_INVALID');assert.equal(stylesheet.render({extra:true}).code,'INPUT_FIELDS_UNSUPPORTED');process.stdout.write('bounded CSS token stylesheet candidate selftest PASS\\n');\n";
+  }
+  function buildCssTokenStylesheet(parameters){
+    htmlExact(parameters,['resultSchemaId','prefix','tokens','maxInputBytes','maxOutputBytes'],'parameters');
+    if(!/^[A-Za-z0-9][A-Za-z0-9._:/+-]{2,179}$/.test(parameters.resultSchemaId||''))throw new Error('resultSchemaId is invalid');
+    const prefix=cssTokenName(parameters.prefix,'prefix',24);
+    if(!Array.isArray(parameters.tokens)||parameters.tokens.length<1||parameters.tokens.length>32)throw new Error('tokens must contain 1 to 32 entries');
+    const seen=new Set(),tokens=parameters.tokens.map(function(row,index){
+      htmlExact(row,['name','kind','defaultValue'],'tokens['+index+']');
+      const name=cssTokenName(row.name,'tokens['+index+'].name',32);
+      if(seen.has(name))throw new Error('token names must be unique');seen.add(name);
+      if(!['COLOR_HEX','INTEGER','LENGTH_PX','PERCENT','TIME_MS'].includes(row.kind))throw new Error('tokens['+index+'].kind is unsupported');
+      cssTokenValue(row.kind,row.defaultValue,'tokens['+index+'].defaultValue');
+      return {name:name,kind:row.kind,defaultValue:row.defaultValue};
+    }).sort(function(left,right){return left.name.localeCompare(right.name);});
+    if(!Number.isInteger(parameters.maxInputBytes)||parameters.maxInputBytes<128||parameters.maxInputBytes>65536)throw new Error('maxInputBytes is outside the bounded range');
+    if(!Number.isInteger(parameters.maxOutputBytes)||parameters.maxOutputBytes<128||parameters.maxOutputBytes>65536)throw new Error('maxOutputBytes is outside the bounded range');
+    const defaultCss=':root {\n'+tokens.map(function(token){return '  --'+prefix+'-'+token.name+': '+cssTokenValue(token.kind,token.defaultValue,'defaultValue')+';';}).join('\n')+'\n}\n';
+    if(Buffer.byteLength(defaultCss,'utf8')>parameters.maxOutputBytes)throw new Error('default stylesheet exceeds maxOutputBytes');
+    const config={resultSchemaId:parameters.resultSchemaId,prefix:prefix,tokens:tokens,maxInputBytes:parameters.maxInputBytes,maxOutputBytes:parameters.maxOutputBytes};
+    return {capabilityKind:'HAND',source:cssStylesheetSource(config),selftest:cssStylesheetSelftest(config),provides:[parameters.resultSchemaId,'text/css'],consumes:['axm.css-token-overrides/v1'],summary:'Pure bounded CSS custom-property stylesheet renderer with typed design tokens.'};
   }
 
   function pythonField(value,label){
@@ -361,13 +507,14 @@
     return {id:id,capabilityKind:kind,status:status,proposalDigest:proposalDigest,implementationDigest:digest(material),build:build};
   }
   const entries=[
-    makeEntry('pure-json-transform-v1','HAND',ACTIVE,null,buildJsonTransform,[jsonTransformSource,jsonTransformSelftest,buildJsonTransform]),
-    makeEntry('svg-status-badge-v1','HAND',ACTIVE,null,buildSvgBadge,[svgBadgeSource,svgBadgeSelftest,buildSvgBadge]),
+    makeEntry('pure-json-transform-v1','HAND',ACTIVE,null,buildJsonTransform,[jsonTransformField,jsonTransformText,jsonTransformSchema,jsonTransformSource,jsonTransformSelftest,buildJsonTransform]),
+    makeEntry('svg-status-badge-v1','HAND',ACTIVE,null,buildSvgBadge,[svgXmlText,svgText,svgColor,svgEscape,svgBadgeMarkup,svgBadgeSource,svgBadgeSelftest,buildSvgBadge]),
     makeEntry('workshop-direction-adapter-v1','HAND',ACTIVE,null,buildDirectionAdapter,[directionAdapterSource,directionAdapterSelftest,buildDirectionAdapter]),
     makeEntry('closed-json-schema-validator-v1','HAND',REVIEW_CANDIDATE,'sha256:02a61d48f5213edc9140f1720c12f84a8de1ebc0bbc7f1b338d9a9e8bf0df14f',buildSchemaValidator,[stable,byteLength,exactKeys,inspectSchema,validatorSource,validatorSelftest,exampleFor,buildSchemaValidator]),
     makeEntry('bounded-review-procedure-skill-v1','SKILL',REVIEW_CANDIDATE,'sha256:acd5678b5327fda7c2a2f1280fb4fa26f41cfd188e4788c1df3c2e539ee532ba',buildReviewSkill,[exact,list,safeId,contractId,renderSkillMarkdown,renderSkillSelftest,buildReviewSkill]),
     makeEntry('closed-object-contract-adapter-v1','HAND',REVIEW_CANDIDATE,'sha256:65a4fbfab2452f0e2c6a8fbff0f873f2b58f6b6cb7f0f533cbe1a260f9f151d1',buildObjectAdapter,[adapterFieldName,primitiveValueValid,inspectAdapterPrimitive,inspectAdapterObjectSchema,primitiveSchemaCompatible,adapterExample,inspectAdapterParameters,objectAdapterSource,objectAdapterSelftest,buildObjectAdapter]),
     makeEntry('static-accessible-html-page-v1','HAND',REVIEW_CANDIDATE,'sha256:983ff82440f97044d5d1af9737e7656df547898b9a0753579fb01440ca4ecfc6',buildHtmlPage,[htmlExact,htmlText,htmlPageSource,htmlPageSelftest,buildHtmlPage]),
+    makeEntry('bounded-css-token-stylesheet-v1','HAND',ACTIVE,null,buildCssTokenStylesheet,[htmlExact,cssTokenName,cssTokenValue,cssStylesheetSource,cssStylesheetSelftest,buildCssTokenStylesheet]),
     makeEntry('bounded-python-record-transform-v1','HAND',ACTIVE,null,buildPythonRecordTransform,[htmlExact,pythonField,pythonText,pythonRecordTransformSource,pythonRecordTransformSelftest,buildPythonRecordTransform])
   ];
   // Lifecycle activation is applied after implementation sealing so the exact
