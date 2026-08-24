@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
@@ -27,8 +26,8 @@ import (
 const nativeWaldoDefaultPort = "7789"
 
 type nativeWaldoBridge struct {
-	mu       sync.Mutex
-	opened   map[string]inference.Opened
+	mu        sync.Mutex
+	opened    map[string]inference.Opened
 	modelRoot string
 }
 
@@ -117,8 +116,8 @@ func (b *nativeWaldoBridge) chat(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"model": name,
 		"choices": []any{map[string]any{
-			"index": 0,
-			"message": map[string]any{"role": "assistant", "content": result.Text},
+			"index":         0,
+			"message":       map[string]any{"role": "assistant", "content": result.Text},
 			"finish_reason": result.FinishReason,
 		}},
 	})
@@ -216,7 +215,3 @@ func envInt(name string, fallback, minimum, maximum int) int {
 	}
 	return parsed
 }
-
-// Keep io imported in older Go toolchains that report RawMessage decode helpers
-// differently during branch experimentation; this is intentionally harmless.
-var _ io.Reader
