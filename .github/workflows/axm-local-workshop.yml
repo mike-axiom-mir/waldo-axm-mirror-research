@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   workshop:
@@ -17,15 +17,13 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Apply Go formatting
+      - name: Format
         run: |
-          gofmt -w cmd/workshop
-          if ! git diff --quiet -- cmd/workshop; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add cmd/workshop
-            git commit -m "style(workshop): gofmt"
-            git push
+          files="$(gofmt -l cmd/workshop)"
+          if [ -n "$files" ]; then
+            echo "gofmt required for:"
+            echo "$files"
+            exit 1
           fi
       - name: Vet
         run: go vet ./cmd/workshop
