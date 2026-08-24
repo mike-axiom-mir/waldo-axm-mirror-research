@@ -1,0 +1,7 @@
+schema: axm.waldo.real-model-ab-run-request/v0.36
+request: DEVELOPMENT
+parentCheckpoint: adddcb2a7384bc70a52f76943a90c880e824ea9f
+runtime: PYTORCH_CPU_REAL_WEIGHTS
+authority: NONE
+maxTokensPerGeneration: 8
+pairCount: 18

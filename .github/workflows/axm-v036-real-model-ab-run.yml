@@ -1,0 +1,38 @@
+name: AXM v0.36 bounded real-model A/B
+
+on:
+  push:
+    branches:
+      - axm/mirror-waldo-experiment-v0.36-real-model-ab
+    paths:
+      - research/v0.36-real-model-ab/RUN_REQUEST
+
+permissions:
+  contents: read
+
+jobs:
+  development-ab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install bounded CPU PyTorch runtime
+        run: python3 -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch==2.8.0
+      - name: Run real PyTorch development A/B
+        run: research/v0.36-real-model-ab/github_development_ab.sh
+      - name: Upload private run evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: waldo-v036-development-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/waldo-v036-development
+            ${{ runner.temp }}/waldo-v036-pytorch-e2e.log
+          if-no-files-found: error
+          retention-days: 7
