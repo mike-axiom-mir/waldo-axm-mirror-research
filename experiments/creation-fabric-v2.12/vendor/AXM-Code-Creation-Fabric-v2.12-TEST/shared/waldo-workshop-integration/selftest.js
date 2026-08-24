@@ -11,9 +11,9 @@ function test(name, fn) { fn(); pass += 1; console.log('PASS', name); }
 function ref(n) { return { id:'ref-' + n, schema:'axm.test.ref/v1', sha256:'sha256:' + Number(n).toString(16).padStart(64,'0'), byteLength:100 + n }; }
 
 const inventory = Integration.creationInventory();
-test('all three selected deterministic creation builders are active', () => {
+test('all selected deterministic creation builders are active', () => {
   assert.equal(inventory.allRequiredActive, true);
-  assert.deepEqual(inventory.entries.map(x => x.id).sort(), ['bounded-css-token-stylesheet-v1','pure-json-transform-v1','svg-status-badge-v1']);
+  assert.deepEqual(inventory.entries.map(x => x.id).sort(), ['bounded-css-token-stylesheet-v1','bounded-record-query-v1','closed-object-contract-adapter-v2','pure-json-transform-v1','svg-status-badge-v1']);
 });
 
 test('CSS builder is callable through WALDO integration', () => {
@@ -147,6 +147,7 @@ test('integration snapshot exposes all four callable seams', () => {
   assert.ok(snap.seams.includes('GRAMMAR_GLASS_TO_PRODUCTION_DRAFT_CANDIDATE'));
   assert.ok(snap.seams.includes('GRAMMAR_GLASS_TO_MIRROR_WALDO_SPECIALIST_TEAM'));
   assert.ok(snap.seams.includes('WALDO_TO_DETERMINISTIC_CSS_SVG_JAVASCRIPT_BUILDERS'));
+  assert.ok(snap.seams.includes('WALDO_TO_DETERMINISTIC_OBJECT_ADAPTER_AND_RECORD_QUERY'));
   assert.equal(snap.runtimeDependencyOnAXMRepository,false);
 });
 

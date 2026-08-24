@@ -11,7 +11,9 @@ const SCHEMA = 'axm.waldo.workshop-integration/v0.54';
 const CREATION_BUILDERS = Object.freeze([
   'bounded-css-token-stylesheet-v1',
   'svg-status-badge-v1',
-  'pure-json-transform-v1'
+  'pure-json-transform-v1',
+  'closed-object-contract-adapter-v2',
+  'bounded-record-query-v1'
 ]);
 
 function clone(value) { return JSON.parse(JSON.stringify(value)); }
@@ -43,7 +45,10 @@ function creationInventory() {
       active: active.has(id),
       descriptor,
       purpose: id === 'bounded-css-token-stylesheet-v1' ? 'CSS_STYLE_CREATION' :
-        id === 'svg-status-badge-v1' ? 'SVG_MARKUP_CREATION' : 'JAVASCRIPT_STRING_RECORD_TRANSFORM'
+        id === 'svg-status-badge-v1' ? 'SVG_MARKUP_CREATION' :
+        id === 'pure-json-transform-v1' ? 'JAVASCRIPT_STRING_RECORD_TRANSFORM' :
+        id === 'closed-object-contract-adapter-v2' ? 'JAVASCRIPT_CLOSED_OBJECT_CONTRACT_ADAPTER' :
+        'JAVASCRIPT_BOUNDED_RECORD_QUERY'
     };
   });
   return Object.freeze({
@@ -170,7 +175,8 @@ function snapshot() {
       'DETERMINIZATION_TO_EVIDENCE_BOUND_LESSON',
       'GRAMMAR_GLASS_TO_PRODUCTION_DRAFT_CANDIDATE',
       'GRAMMAR_GLASS_TO_MIRROR_WALDO_SPECIALIST_TEAM',
-      'WALDO_TO_DETERMINISTIC_CSS_SVG_JAVASCRIPT_BUILDERS'
+      'WALDO_TO_DETERMINISTIC_CSS_SVG_JAVASCRIPT_BUILDERS',
+      'WALDO_TO_DETERMINISTIC_OBJECT_ADAPTER_AND_RECORD_QUERY'
     ],
     runtimeDependencyOnAXMRepository: false,
     automaticAction: false,
