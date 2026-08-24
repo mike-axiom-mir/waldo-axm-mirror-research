@@ -6,32 +6,32 @@ A deliberately small local workspace for Waldo first and additional AI identitie
 
 - Local browser chat workspace.
 - Waldo is the seeded identity; sessions are separate.
+- Native Waldo model bridge inside the workshop process.
+- External OpenAI-compatible model endpoints remain an override for later models and vision adapters.
 - A goal field per session.
 - A real opt-in background goal runtime per session.
 - Start / pause controls and selectable heartbeat interval.
 - Background heartbeats write visible progress notes into the session.
 - No overlapping heartbeat calls for the same session.
 - Runtime state survives process restarts; active sessions resume when the workshop is running again.
+- Windows and Linux user auto-start installers.
 - Explicit consent requests with approve/reject history.
 - Three memory layers:
   - session memory;
   - AI identity memory;
   - shared vault memory.
 - Creative Room image intake and per-session gallery.
-- Images can be attached to chat requests for vision-capable models.
+- Images can be attached to chat requests for vision-capable endpoints.
 - Local JSON persistence plus local media files.
-- An OpenAI-compatible local model adapter.
 
-The workshop is intentionally not an IDE, giant agent framework, vector database, or security platform. The workspace owns state, memory, consent, media, and heartbeat scheduling; the model adapter generates replies.
+The workshop is intentionally not an IDE, giant agent framework, vector database, or security platform. The workspace owns state, memory, consent, media, and heartbeat scheduling; the selected model runtime generates replies.
 
-## Run
+## Run Waldo natively
 
 From the repository root:
 
 ```bash
-AXM_AI_BASE_URL=http://127.0.0.1:11434/v1 \
-AXM_AI_MODEL=waldo \
-go run ./cmd/workshop
+AXM_AI_MODEL=waldo go run ./cmd/workshop
 ```
 
 Then open:
@@ -40,15 +40,68 @@ Then open:
 http://127.0.0.1:7788
 ```
 
-The workshop process is the required runtime. Background heartbeats only happen while this process is running. Closing it stops all runtime activity. Session/runtime state remains on disk and is restored on the next start.
+When `AXM_AI_BASE_URL` is not set, the workshop starts its own small local compatibility bridge on `127.0.0.1:7789` and routes chat into WALDO's real local model artifacts through `inference.OpenAXMHybrid`. The model name defaults to `waldo` and is resolved from WALDO's configured model root (normally beneath `~/.waldo/models`).
+
+The bridge is not a second AI installation. It lives in the same workshop binary so chat and background heartbeats can use native WALDO inference without keeping another server command running.
+
+## Use another local model endpoint
+
+Setting `AXM_AI_BASE_URL` overrides the native Waldo bridge:
+
+```bash
+AXM_AI_BASE_URL=http://127.0.0.1:11434/v1 \
+AXM_AI_MODEL=my-model \
+go run ./cmd/workshop
+```
+
+This keeps the workshop usable with other local AI builds later.
 
 Optional environment variables:
 
-- `AXM_AI_BASE_URL` — local OpenAI-compatible API base URL.
-- `AXM_AI_MODEL` — model name exposed by that endpoint.
-- `AXM_AI_KEY` — optional bearer key if the local endpoint requires one.
-- `AXM_WORKSHOP_PORT` — defaults to `7788`.
+- `AXM_AI_BASE_URL` — override with an OpenAI-compatible API base URL; when omitted, native Waldo mode is used.
+- `AXM_AI_MODEL` — WALDO/local model name; defaults to `waldo`.
+- `AXM_AI_KEY` — optional bearer key for an external endpoint.
+- `AXM_WORKSHOP_NATIVE_WALDO=off` — disable automatic native bridge startup.
+- `AXM_WALDO_BRIDGE_PORT` — native bridge port; defaults to `7789`.
+- `AXM_WALDO_MAX_TOKENS` — native generation limit; defaults to `512`.
+- `AXM_WORKSHOP_PORT` — workshop UI port; defaults to `7788`.
 - `AXM_WORKSHOP_DATA` — defaults to `~/.axm-workshop`.
+
+## Auto-start with the computer
+
+The installers build one `axm-workshop` binary. The native Waldo bridge and heartbeat scheduler are part of that binary.
+
+### Windows
+
+From PowerShell in the repository:
+
+```powershell
+.\cmd\workshop\install-autostart.ps1
+```
+
+This builds the workshop under `%LOCALAPPDATA%\AXM\LocalWorkshop` and registers **AXM Local Workshop** as a Scheduled Task at user logon. It starts the task immediately too.
+
+Remove auto-start without deleting workshop memory/media:
+
+```powershell
+.\cmd\workshop\uninstall-autostart.ps1
+```
+
+### Linux
+
+```bash
+bash ./cmd/workshop/install-autostart.sh
+```
+
+This builds `~/.local/bin/axm-workshop` and enables a `systemd --user` service. It normally starts when the user logs in and restarts after process failures.
+
+Remove auto-start without deleting workshop memory/media:
+
+```bash
+bash ./cmd/workshop/uninstall-autostart.sh
+```
+
+The auto-start scripts do not delete `~/.axm-workshop` or WALDO model data.
 
 ## Background goal runtime
 
@@ -60,6 +113,12 @@ Optional environment variables:
 6. Press **Pause** to prevent future heartbeats.
 
 The scheduler runs one heartbeat at a time per session. If a model response takes longer than the configured interval, another request is not stacked on top of it. A failed model call is recorded visibly and retried on the next normal interval while the session remains active.
+
+## Creative Room and native Waldo
+
+The Creative Room still stores and shares images with the session. The current native WALDO inference path is text generation, so it does **not** pretend to inspect image pixels. In native mode an attached image is represented to Waldo by an explicit text marker saying that the image exists but its pixels were not inspected.
+
+If `AXM_AI_BASE_URL` points to a vision-capable OpenAI-compatible endpoint, the existing workshop request contains the image data and that endpoint can inspect it. A native WALDO vision capability can be added later without changing the Creative Room storage model.
 
 ## Storage
 
@@ -79,20 +138,16 @@ Consent items are records, not hidden execution permissions. Approving an item r
 
 The background runtime can think, continue a goal, and produce a progress note. It does not gain separate tool/app/file execution authority from being active.
 
-## Verification performed for this change
+## Verification history
 
-- `go test ./...` passes locally.
-- End-to-end local runtime probe passed using a fake OpenAI-compatible model endpoint:
-  - goal saved;
-  - runtime activated;
-  - background heartbeat fired without a user chat request;
-  - model response was written into the session;
-  - pulse count incremented;
-  - next heartbeat was scheduled.
+Before the native bridge change, `go test ./...` and an end-to-end fake-endpoint runtime probe passed locally: goal saved, runtime activated, background heartbeat fired without a user chat request, model response was written into the session, pulse count incremented, and the next heartbeat was scheduled.
+
+The native bridge adds focused prompt/Creative-Room tests under `waldo_native_bridge_test.go`. The branch also carries a workshop-specific CI gate so post-bridge compile/test status is evidence from the repository rather than assumed from the earlier test.
 
 ## Deliberate v0.1 limits
 
-- The current Waldo research CLI is not claimed to be a chat API. The workshop adapter still expects a local OpenAI-compatible endpoint; a native Waldo bridge remains the next seam if Waldo remains CLI-only.
+- Native WALDO mode requires a usable trained/downloaded local WALDO model with the selected name.
+- Current native WALDO inference is text-only; image pixels require a vision-capable adapter/model.
 - App connectors are not wired yet. They should enter through the existing explicit adapter/consent boundary.
-- The workshop does not install itself as an operating-system service yet. For always-on use, the workshop process must be kept running by the user or later wrapped as a local service.
+- Auto-start is user-level: Windows Scheduled Task at logon or Linux `systemd --user`. It does not force machine-wide boot privileges.
 - No merge is performed by this branch.
