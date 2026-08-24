@@ -1,0 +1,827 @@
+{
+  "schema": "axm.capability-recipe-catalog/v1",
+  "status": "EXPERIMENTAL",
+  "activationPolicy": "SOURCE_REVIEW_AND_MIKE_MERGE",
+  "recipes": [
+    {
+      "activation": "ACTIVE_SOURCE_REVIEWED",
+      "boundaries": [
+        "portable instruction plus contract only",
+        "host re-checks authority at use time",
+        "no model, network, filesystem, install, promotion, merge, Foundation, or CANON authority"
+      ],
+      "builderId": "bounded-review-procedure-skill-v1",
+      "candidatePolicy": {
+        "defaultCount": 1,
+        "defaultVariantId": "portable-default",
+        "variants": [
+          {
+            "id": "portable-default",
+            "parameterOverrides": {},
+            "title": "Portable host-mediated procedure"
+          }
+        ]
+      },
+      "capabilityContract": {
+        "entry": null,
+        "operation": "followProcedure",
+        "portableForm": "SKILL_MD",
+        "portablePath": "SKILL.md",
+        "requiredHostCapabilities": [
+          "human-or-agent-procedure-runner/v1"
+        ],
+        "resultContractPolicy": "BUILDER_PROVIDES_EXACT",
+        "runtimeMode": "HOST_MEDIATED"
+      },
+      "capabilityKind": "SKILL",
+      "exampleRequest": {
+        "family": "capability-review",
+        "id": "closed-capability-review-skill-example",
+        "parameters": {
+          "boundaries": [
+            "No source execution.",
+            "No inherited permission.",
+            "No install, promotion, merge, or CANON change."
+          ],
+          "inputs": [
+            "axm.capability-review-input/v1"
+          ],
+          "maxSteps": 8,
+          "outputs": [
+            "axm.capability-review-receipt/v1"
+          ],
+          "procedure": [
+            "Confirm exact contract identity.",
+            "Map each claim to an admissible evidence surface.",
+            "Record PASS, FAIL, or UNKNOWN without promotion."
+          ],
+          "purpose": "Follow a bounded evidence-first review procedure without inheriting authority.",
+          "receiptSchema": "axm.capability-review-receipt/v1",
+          "skillId": "closed-capability-review",
+          "title": "Closed capability review"
+        },
+        "purpose": "Build the portable review procedure pilot.",
+        "recipeId": "closed-capability-review-skill",
+        "source": {
+          "kind": "HUMAN",
+          "ref": "modular-hand-skill-extension"
+        },
+        "variantId": null
+      },
+      "family": "capability-review",
+      "id": "closed-capability-review-skill",
+      "parameterSpec": {
+        "boundaries": {
+          "description": "Explicit authority and behavior boundaries.",
+          "maxBytes": 8192,
+          "required": true,
+          "type": "array"
+        },
+        "inputs": {
+          "description": "Exact input contracts.",
+          "maxBytes": 8192,
+          "required": true,
+          "type": "array"
+        },
+        "maxSteps": {
+          "description": "Maximum procedure steps.",
+          "maximum": 32,
+          "minimum": 1,
+          "required": true,
+          "type": "integer"
+        },
+        "outputs": {
+          "description": "Exact output contracts.",
+          "maxBytes": 8192,
+          "required": true,
+          "type": "array"
+        },
+        "procedure": {
+          "description": "Ordered bounded procedure.",
+          "maxBytes": 16384,
+          "required": true,
+          "type": "array"
+        },
+        "purpose": {
+          "description": "Bounded skill purpose.",
+          "maxLength": 500,
+          "required": true,
+          "type": "string"
+        },
+        "receiptSchema": {
+          "description": "Exact receipt contract.",
+          "maxLength": 180,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+-]{2,179}$",
+          "required": true,
+          "type": "string"
+        },
+        "skillId": {
+          "description": "Portable skill id.",
+          "maxLength": 80,
+          "pattern": "^[a-z][a-z0-9-]{2,79}$",
+          "required": true,
+          "type": "string"
+        },
+        "title": {
+          "description": "Portable skill title.",
+          "maxLength": 120,
+          "required": true,
+          "type": "string"
+        }
+      },
+      "reviewPolicy": {
+        "activation": "source-review-and-merge",
+        "canonAuthority": "NONE",
+        "sharedUseRequires": "MIKE_TOBI_MERGE"
+      },
+      "schema": "axm.capability-recipe/v1",
+      "summary": "Compile a portable bounded evidence-first review procedure and exact skill contract.",
+      "title": "Closed Capability Review Skill",
+      "verifiers": [
+        "Capability Fabric inactive proposal inspection",
+        "portable file exact-set verification",
+        "trusted-host builder contribution selftest",
+        "deterministic rebuild parity",
+        "authority inheritance refusal"
+      ],
+      "version": "0.1.0",
+      "builderDigest": "sha256:ecc33f215b679abd21b2c5680bcc5797095474267de370d9c3fff10f8e2913fa",
+      "recipeDigest": "sha256:e907a432e4f1dfa4922b8982c276a6910da03017af25f27380fb23308e74a576"
+    },
+    {
+      "activation": "ACTIVE_SOURCE_REVIEWED",
+      "boundaries": [
+        "pure deterministic generation only",
+        "closed reviewed schema subset only",
+        "generated code is emitted but never executed by Capability Fabric or Recipe Foundry",
+        "no network, install, registration, promotion, permission, Foundation, or CANON authority"
+      ],
+      "builderId": "closed-json-schema-validator-v1",
+      "candidatePolicy": {
+        "defaultCount": 1,
+        "defaultVariantId": "bounded-default",
+        "variants": [
+          {
+            "id": "bounded-default",
+            "parameterOverrides": {},
+            "title": "Bounded default validator"
+          }
+        ]
+      },
+      "capabilityContract": {
+        "entry": "capability.js",
+        "operation": "validate",
+        "portableForm": "NONE",
+        "portablePath": null,
+        "requiredHostCapabilities": [],
+        "resultContractPolicy": "BUILDER_PROVIDES_EXACT",
+        "runtimeMode": "EXECUTABLE"
+      },
+      "capabilityKind": "HAND",
+      "exampleRequest": {
+        "family": "schema-validation",
+        "id": "closed-json-schema-validator-example",
+        "parameters": {
+          "inputSchemaId": "axm.example.schema-validation-subject/v1",
+          "maxInputBytes": 4096,
+          "resultSchemaId": "axm.schema-validation-result/v1",
+          "schema": {
+            "additionalProperties": false,
+            "properties": {
+              "attempts": {
+                "maximum": 10,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "enabled": {
+                "type": "boolean"
+              },
+              "name": {
+                "maxLength": 80,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "attempts",
+              "enabled"
+            ],
+            "type": "object"
+          }
+        },
+        "purpose": "Build the first bounded validator capability pilot.",
+        "recipeId": "closed-json-schema-validator",
+        "source": {
+          "kind": "HUMAN",
+          "ref": "capability-recipe-foundry-pilot"
+        },
+        "variantId": null
+      },
+      "family": "schema-validation",
+      "id": "closed-json-schema-validator",
+      "parameterSpec": {
+        "inputSchemaId": {
+          "description": "Exact schema contract consumed by the generated validator.",
+          "maxLength": 180,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+-]{2,179}$",
+          "required": true,
+          "type": "string"
+        },
+        "maxInputBytes": {
+          "description": "Maximum JSON input bytes accepted before typed refusal.",
+          "maximum": 65536,
+          "minimum": 64,
+          "required": true,
+          "type": "integer"
+        },
+        "resultSchemaId": {
+          "description": "Exact validation result contract emitted by the generated validator.",
+          "maxLength": 180,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+-]{2,179}$",
+          "required": true,
+          "type": "string"
+        },
+        "schema": {
+          "description": "Source-reviewed closed JSON Schema subset embedded into the generated validator.",
+          "maxBytes": 16384,
+          "required": true,
+          "type": "object"
+        }
+      },
+      "reviewPolicy": {
+        "activation": "source-review-and-merge",
+        "canonAuthority": "NONE",
+        "sharedUseRequires": "MIKE_TOBI_MERGE"
+      },
+      "schema": "axm.capability-recipe/v1",
+      "summary": "Compiles one source-reviewed closed JSON Schema subset into a bounded deterministic validation capability.",
+      "title": "Closed JSON Schema Validator",
+      "verifiers": [
+        "Capability Fabric inactive proposal inspection",
+        "independent builder contribution source review",
+        "trusted-host builder contribution selftest",
+        "deterministic rebuild parity",
+        "adversarial generated-validator fixtures"
+      ],
+      "version": "0.1.0",
+      "builderDigest": "sha256:d5bbf6fc6c4219fd90987b7b458c2d396ce5d5c421f06c8763b85338e40c38a0",
+      "recipeDigest": "sha256:8840621b497fda2296a370c220de52a6e18147bf5562a0ff1e050965ec454b23"
+    },
+    {
+      "schema": "axm.capability-recipe/v1",
+      "id": "static-accessible-html-page",
+      "version": "0.1.0",
+      "title": "Static Accessible HTML Page Hand",
+      "summary": "Compile a dependency-free semantic HTML document renderer with strict text escaping and bounded sections.",
+      "family": "markup-creation",
+      "capabilityKind": "HAND",
+      "capabilityContract": {
+        "runtimeMode": "EXECUTABLE",
+        "entry": "capability.js",
+        "operation": "render",
+        "portableForm": "NONE",
+        "portablePath": null,
+        "resultContractPolicy": "BUILDER_PROVIDES_EXACT",
+        "requiredHostCapabilities": []
+      },
+      "builderId": "static-accessible-html-page-v1",
+      "builderDigest": "sha256:ca938e6fe3b7635c4fe30b00c1fc13edb9a875257cabdcce1c487d35640aa122",
+      "activation": "ACTIVE_SOURCE_REVIEWED",
+      "reviewPolicy": {
+        "activation": "source-review-and-merge",
+        "sharedUseRequires": "MIKE_TOBI_MERGE",
+        "canonAuthority": "NONE"
+      },
+      "candidatePolicy": {
+        "defaultCount": 1,
+        "defaultVariantId": "semantic-default",
+        "variants": [
+          {
+            "id": "semantic-default",
+            "title": "Semantic structure without style or script",
+            "parameterOverrides": {}
+          }
+        ]
+      },
+      "parameterSpec": {
+        "resultSchemaId": {
+          "type": "string",
+          "required": true,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+-]{2,179}$",
+          "maxLength": 180,
+          "description": "Exact result envelope emitted by the renderer."
+        },
+        "documentTitle": {
+          "type": "string",
+          "required": true,
+          "maxLength": 120,
+          "description": "Fixed escaped document title."
+        },
+        "language": {
+          "type": "string",
+          "required": true,
+          "pattern": "^[a-z]{2,3}(?:-[A-Z]{2})?$",
+          "maxLength": 6,
+          "description": "Exact HTML language tag."
+        },
+        "defaultHeading": {
+          "type": "string",
+          "required": true,
+          "maxLength": 120,
+          "description": "Default escaped page heading."
+        },
+        "defaultIntro": {
+          "type": "string",
+          "required": true,
+          "maxLength": 500,
+          "description": "Default escaped introductory text."
+        },
+        "maxSections": {
+          "type": "integer",
+          "required": true,
+          "minimum": 0,
+          "maximum": 24,
+          "description": "Maximum semantic content sections."
+        },
+        "maxInputBytes": {
+          "type": "integer",
+          "required": true,
+          "minimum": 128,
+          "maximum": 65536,
+          "description": "Maximum serialized content bytes before refusal."
+        },
+        "maxTextLength": {
+          "type": "integer",
+          "required": true,
+          "minimum": 16,
+          "maximum": 4000,
+          "description": "Maximum characters in each runtime text field."
+        }
+      },
+      "exampleRequest": {
+        "id": "accessible-html-page-example",
+        "family": "markup-creation",
+        "purpose": "Build one detached semantic HTML page renderer candidate for the markup specialist pilot.",
+        "recipeId": "static-accessible-html-page",
+        "variantId": null,
+        "parameters": {
+          "resultSchemaId": "axm.markup-page-render-result/v1",
+          "documentTitle": "AXM Detached Creation Candidate",
+          "language": "en",
+          "defaultHeading": "Creation candidate",
+          "defaultIntro": "A deterministic semantic page candidate awaiting review.",
+          "maxSections": 8,
+          "maxInputBytes": 16384,
+          "maxTextLength": 1000
+        },
+        "source": {
+          "kind": "HUMAN",
+          "ref": "markup-specialist-v1.8"
+        }
+      },
+      "boundaries": [
+        "text input only; every inserted value is HTML escaped",
+        "semantic document structure only; no CSS or presentation claim",
+        "no script, inline event handler, external resource, network, filesystem, clock, environment, dynamic code, or randomness",
+        "generated code and selftest are emitted but never executed by Capability Fabric",
+        "visual appearance, accessibility usability, and interaction remain UNKNOWN until separate browser evidence",
+        "detached candidate output only; no install, merge, promotion, Foundation, or CANON authority"
+      ],
+      "verifiers": [
+        "package digest and exact deterministic rebuild",
+        "generated-source static checks for escaping and forbidden active content",
+        "externally execute emitted selftest.js only after separate sandbox consent",
+        "live browser render and keyboard inspection only after separate execution consent",
+        "Detached Candidate Nursery structural scan"
+      ],
+      "recipeDigest": "sha256:e5216430a135f44927364f3beb9bd7825f0aa2e4b5410be6e9cf3cc5c6a28417"
+    },
+    {
+      "schema": "axm.capability-recipe/v1",
+      "id": "bounded-python-record-transform",
+      "version": "0.1.0",
+      "title": "Bounded Python Record Transform",
+      "summary": "Compile a dependency-free Python record-field transform with fixed string-only inputs and an emitted inert selftest.",
+      "family": "python-module",
+      "capabilityKind": "HAND",
+      "capabilityContract": {
+        "runtimeMode": "EXECUTABLE",
+        "sourceLanguage": "python",
+        "entry": "capability.py",
+        "selftest": "selftest.py",
+        "operation": "run",
+        "portableForm": "NONE",
+        "portablePath": null,
+        "resultContractPolicy": "BUILDER_PROVIDES_EXACT",
+        "requiredHostCapabilities": ["python-runtime/v3"]
+      },
+      "builderId": "bounded-python-record-transform-v1",
+      "builderDigest": "sha256:ad281fa5a1381de86d71e1c4a2ffbad30ee20683cb705b4a09d778464ea5227c",
+      "activation": "ACTIVE_SOURCE_REVIEWED",
+      "reviewPolicy": {
+        "activation": "source-review-and-merge",
+        "sharedUseRequires": "MIKE_TOBI_MERGE",
+        "canonAuthority": "NONE"
+      },
+      "candidatePolicy": {
+        "defaultCount": 1,
+        "defaultVariantId": "bounded-default",
+        "variants": [
+          {
+            "id": "bounded-default",
+            "title": "Bounded standard-library record transform",
+            "parameterOverrides": {}
+          }
+        ]
+      },
+      "parameterSpec": {
+        "resultSchemaId": {
+          "type": "string",
+          "required": true,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+-]{2,179}$",
+          "maxLength": 180,
+          "description": "Exact result envelope emitted by the generated Python function."
+        },
+        "sourceField": {
+          "type": "string",
+          "required": true,
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "maxLength": 64,
+          "description": "Exact source field read from the bounded input record."
+        },
+        "targetField": {
+          "type": "string",
+          "required": true,
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "maxLength": 64,
+          "description": "Exact output field written into the result record."
+        },
+        "defaultValue": {
+          "type": "string",
+          "required": true,
+          "maxLength": 256,
+          "description": "Fixed fallback string used when the source field is absent."
+        },
+        "maxInputKeys": {
+          "type": "integer",
+          "required": true,
+          "minimum": 1,
+          "maximum": 128,
+          "description": "Maximum accepted top-level record keys."
+        },
+        "maxInputBytes": {
+          "type": "integer",
+          "required": true,
+          "minimum": 128,
+          "maximum": 65536,
+          "description": "Maximum canonical JSON input bytes before typed refusal."
+        }
+      },
+      "exampleRequest": {
+        "id": "python-status-normalizer-candidate",
+        "family": "python-module",
+        "purpose": "Build one detached bounded Python record transform for the application-logic specialist pilot.",
+        "recipeId": "bounded-python-record-transform",
+        "variantId": null,
+        "parameters": {
+          "resultSchemaId": "axm.python.status-normalized/v1",
+          "sourceField": "status",
+          "targetField": "normalized_status",
+          "defaultValue": "unknown",
+          "maxInputKeys": 16,
+          "maxInputBytes": 4096
+        },
+        "source": {
+          "kind": "HUMAN",
+          "ref": "python-specialist-v2.1"
+        }
+      },
+      "boundaries": [
+        "pure top-level string-or-null record input only",
+        "Python standard-library json import only",
+        "no filesystem, network, subprocess, socket, environment, clock, dynamic code, reflection, package installation, or randomness",
+        "generated capability.py and selftest.py are emitted as inert UTF-8 data and never executed by Capability Fabric",
+        "runtime correctness remains UNKNOWN until separate exact sandbox consent and Python host evidence",
+        "detached candidate output only; no install, merge, promotion, Foundation, or CANON authority"
+      ],
+      "verifiers": [
+        "package digest and exact deterministic rebuild",
+        "builder registry implementation-digest match",
+        "generated Python static allowlist and forbidden-capability checks",
+        "externally execute emitted selftest.py only after separate sandbox consent",
+        "Detached Candidate Nursery structural scan"
+      ],
+      "recipeDigest": "sha256:82d04d8b78e44978f4d5a42c8c7fb62b944279c89dd498f1268d3cfa97bc5637"
+    },
+    {
+      "schema": "axm.capability-recipe/v1",
+      "id": "pure-json-transform",
+      "version": "1.0.0",
+      "title": "Pure JSON Transform",
+      "summary": "Compile a dependency-free bounded field transform with an emitted external selftest.",
+      "family": "code-module",
+      "capabilityKind": "HAND",
+      "capabilityContract": {
+        "runtimeMode": "EXECUTABLE",
+        "entry": "capability.js",
+        "operation": "run",
+        "portableForm": "NONE",
+        "portablePath": null,
+        "resultContractPolicy": "BUILDER_PROVIDES_EXACT",
+        "requiredHostCapabilities": []
+      },
+      "builderId": "pure-json-transform-v1",
+      "builderDigest": "sha256:79c263e8df6e941c55abd734beca53a5bf6a04c6524e3188a5ee729230b49997",
+      "activation": "ACTIVE_SOURCE_REVIEWED",
+      "reviewPolicy": {
+        "activation": "source-review-and-merge",
+        "sharedUseRequires": "MIKE_TOBI_MERGE",
+        "canonAuthority": "NONE"
+      },
+      "candidatePolicy": {
+        "defaultCount": 1,
+        "defaultVariantId": "standard",
+        "variants": [
+          {
+            "id": "standard",
+            "title": "Standard bounded transform",
+            "parameterOverrides": {}
+          }
+        ]
+      },
+      "parameterSpec": {
+        "inputField": {
+          "type": "string",
+          "required": true,
+          "pattern": "^[a-z][a-zA-Z0-9]{0,63}$",
+          "maxLength": 64,
+          "description": "Exact input field to read."
+        },
+        "outputField": {
+          "type": "string",
+          "required": true,
+          "pattern": "^[a-z][a-zA-Z0-9]{0,63}$",
+          "maxLength": 64,
+          "description": "Exact output field to emit."
+        },
+        "defaultValue": {
+          "type": "string",
+          "required": true,
+          "maxLength": 256,
+          "description": "Fallback string when the input field is absent."
+        },
+        "outputSchema": {
+          "type": "string",
+          "required": true,
+          "pattern": "^[a-z0-9][a-z0-9._-]{2,127}/v[0-9]+$",
+          "maxLength": 128,
+          "description": "Schema emitted by the transform envelope."
+        },
+        "maxInputKeys": {
+          "type": "integer",
+          "required": true,
+          "minimum": 1,
+          "maximum": 128,
+          "description": "Maximum accepted top-level input keys."
+        }
+      },
+      "exampleRequest": {
+        "id": "status-normalizer",
+        "family": "code-module",
+        "purpose": "Map a reviewed status field into a small stable result envelope.",
+        "recipeId": "pure-json-transform",
+        "variantId": null,
+        "parameters": {
+          "inputField": "status",
+          "outputField": "normalizedStatus",
+          "defaultValue": "unknown",
+          "outputSchema": "axm.example.status-normalized/v1",
+          "maxInputKeys": 16
+        },
+        "source": {
+          "kind": "HUMAN",
+          "ref": "capability-fabric-starter"
+        }
+      },
+      "boundaries": [
+        "pure JSON input only",
+        "no filesystem, network, clock, environment, dynamic code, or implicit randomness",
+        "detached candidate output only",
+        "generated tests are emitted but never executed by the Fabric"
+      ],
+      "verifiers": [
+        "package digest and exact deterministic rebuild",
+        "externally execute emitted selftest.js",
+        "Detached Candidate Nursery structural scan"
+      ],
+      "recipeDigest": "sha256:91e29dd9c52a00bd8f91517ef4ca27d18639e6536c2230203e2ca5a97b3e6696"
+    },
+    {
+      "schema": "axm.capability-recipe/v1",
+      "id": "svg-status-badge",
+      "version": "1.0.0",
+      "title": "SVG Status Badge Creation Hand",
+      "summary": "Compile a dependency-free deterministic SVG status badge renderer with XML escaping.",
+      "family": "creation-hand",
+      "capabilityKind": "HAND",
+      "capabilityContract": {
+        "runtimeMode": "EXECUTABLE",
+        "entry": "capability.js",
+        "operation": "render",
+        "portableForm": "NONE",
+        "portablePath": null,
+        "resultContractPolicy": "BUILDER_PROVIDES_EXACT",
+        "requiredHostCapabilities": []
+      },
+      "builderId": "svg-status-badge-v1",
+      "builderDigest": "sha256:8dd49f60d84185f356c7d2df40afe90543cdfeb652727e061f132588bdbcfdad",
+      "activation": "ACTIVE_SOURCE_REVIEWED",
+      "reviewPolicy": {
+        "activation": "source-review-and-merge",
+        "sharedUseRequires": "MIKE_TOBI_MERGE",
+        "canonAuthority": "NONE"
+      },
+      "candidatePolicy": {
+        "defaultCount": 1,
+        "defaultVariantId": "standard",
+        "variants": [
+          {
+            "id": "standard",
+            "title": "Standard accessible badge",
+            "parameterOverrides": {}
+          }
+        ]
+      },
+      "parameterSpec": {
+        "label": {
+          "type": "string",
+          "required": true,
+          "maxLength": 48,
+          "description": "Default badge label."
+        },
+        "value": {
+          "type": "string",
+          "required": true,
+          "maxLength": 48,
+          "description": "Default badge value."
+        },
+        "background": {
+          "type": "string",
+          "required": true,
+          "pattern": "^#[0-9a-fA-F]{6}$",
+          "maxLength": 7,
+          "description": "Left-side hexadecimal fill."
+        },
+        "foreground": {
+          "type": "string",
+          "required": true,
+          "pattern": "^#[0-9a-fA-F]{6}$",
+          "maxLength": 7,
+          "description": "Right-side hexadecimal fill."
+        },
+        "width": {
+          "type": "integer",
+          "required": true,
+          "minimum": 120,
+          "maximum": 512,
+          "description": "Badge width in SVG user units."
+        }
+      },
+      "exampleRequest": {
+        "id": "workshop-build-badge",
+        "family": "creation-hand",
+        "purpose": "Create a stable local badge renderer for experimental capability build state.",
+        "recipeId": "svg-status-badge",
+        "variantId": null,
+        "parameters": {
+          "label": "CAPABILITY",
+          "value": "EXPERIMENTAL",
+          "background": "#17324d",
+          "foreground": "#79e6c2",
+          "width": 240
+        },
+        "source": {
+          "kind": "HUMAN",
+          "ref": "capability-fabric-starter"
+        }
+      },
+      "boundaries": [
+        "text and six-digit hexadecimal colours only",
+        "bounded static SVG; no scripts, external resources, fonts, network, or filesystem",
+        "visual fitness still requires separate human observation",
+        "detached candidate output only"
+      ],
+      "verifiers": [
+        "package digest and exact deterministic rebuild",
+        "externally execute emitted selftest.js",
+        "live render and visual inspection",
+        "Detached Candidate Nursery structural scan"
+      ],
+      "recipeDigest": "sha256:13217046a13893679ec31ae70038529df44b255dd9efb1e6ce4e653f8a9973fc"
+    },
+    {
+      "schema": "axm.capability-recipe/v1",
+      "id": "workshop-direction-adapter",
+      "version": "1.0.0",
+      "title": "Workshop Direction Capability Adapter",
+      "summary": "Compile a bounded adapter from Workshop Direction hand requests to digest-bound Capability Fabric build requests that remain human-review held.",
+      "family": "contract-adapter",
+      "capabilityKind": "HAND",
+      "capabilityContract": {
+        "runtimeMode": "EXECUTABLE",
+        "entry": "capability.js",
+        "operation": "adapt",
+        "portableForm": "NONE",
+        "portablePath": null,
+        "resultContractPolicy": "BUILDER_PROVIDES_EXACT",
+        "requiredHostCapabilities": []
+      },
+      "builderId": "workshop-direction-adapter-v1",
+      "builderDigest": "sha256:868c7540189204f60da18b59e0cbdf961851434035e6f9d9c26ff0349b7c7221",
+      "activation": "ACTIVE_SOURCE_REVIEWED",
+      "reviewPolicy": {
+        "activation": "source-review-and-merge",
+        "sharedUseRequires": "MIKE_TOBI_MERGE",
+        "canonAuthority": "NONE"
+      },
+      "candidatePolicy": {
+        "defaultCount": 1,
+        "defaultVariantId": "standard",
+        "variants": [
+          {
+            "id": "standard",
+            "title": "Human-review-held adapter",
+            "parameterOverrides": {}
+          }
+        ]
+      },
+      "parameterSpec": {
+        "targetRecipeId": {
+          "type": "string",
+          "required": true,
+          "pattern": "^[a-z][a-z0-9-]{2,79}$",
+          "maxLength": 80,
+          "description": "Exact recipe the generated adapter targets."
+        },
+        "targetFamily": {
+          "type": "string",
+          "required": true,
+          "pattern": "^[a-z][a-z0-9-]{2,79}$",
+          "maxLength": 80,
+          "description": "Exact capability family the generated adapter targets."
+        },
+        "targetParameters": {
+          "type": "object",
+          "required": true,
+          "maxBytes": 16384,
+          "description": "Reviewed target recipe parameters copied into adapted requests."
+        },
+        "idSuffix": {
+          "type": "string",
+          "required": true,
+          "pattern": "^[a-z][a-z0-9-]{2,31}$",
+          "maxLength": 32,
+          "description": "Bounded suffix for adapted request ids."
+        }
+      },
+      "exampleRequest": {
+        "id": "direction-to-status-transform",
+        "family": "contract-adapter",
+        "purpose": "Create a callable bridge that turns an explicit Direction hand request into a still-unreviewed status-transform build request.",
+        "recipeId": "workshop-direction-adapter",
+        "variantId": null,
+        "parameters": {
+          "targetRecipeId": "pure-json-transform",
+          "targetFamily": "code-module",
+          "targetParameters": {
+            "inputField": "status",
+            "outputField": "normalizedStatus",
+            "defaultValue": "unknown",
+            "outputSchema": "axm.example.status-normalized/v1",
+            "maxInputKeys": 16
+          },
+          "idSuffix": "capability"
+        },
+        "source": {
+          "kind": "HUMAN",
+          "ref": "capability-fabric-starter"
+        }
+      },
+      "boundaries": [
+        "accept exact axm.workshop-direction.hand-request/v1 only",
+        "target recipe and parameters are explicit at adapter build time",
+        "adapted requests always set humanReviewed false",
+        "no build, install, promotion, permission, or CANON authority"
+      ],
+      "verifiers": [
+        "package digest and exact deterministic rebuild",
+        "externally execute emitted selftest.js",
+        "adapted request contract and digest validation",
+        "Detached Candidate Nursery structural scan"
+      ],
+      "recipeDigest": "sha256:754d323174787080f5d61c2c5fe515bc74ea126af21a498bbec17a6e4665594d"
+    }
+  ],
+  "catalogDigest": "sha256:798c934b36f1032e08194439904527d4fd069e34e27ca80d5f6e4d871c813786"
+}
