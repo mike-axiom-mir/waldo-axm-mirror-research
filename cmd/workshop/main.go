@@ -187,7 +187,9 @@ func out(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-func fail(w http.ResponseWriter, status int, err error) { out(w, status, map[string]string{"error": err.Error()}) }
+func fail(w http.ResponseWriter, status int, err error) {
+	out(w, status, map[string]string{"error": err.Error()})
+}
 func readJSON(r *http.Request, v any) error {
 	defer r.Body.Close()
 	return json.NewDecoder(io.LimitReader(r.Body, 2<<20)).Decode(v)
