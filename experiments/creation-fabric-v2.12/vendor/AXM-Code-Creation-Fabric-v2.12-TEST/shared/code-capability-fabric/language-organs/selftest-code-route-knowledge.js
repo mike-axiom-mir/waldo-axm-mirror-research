@@ -53,6 +53,12 @@ assert(br.filter(x=>!x.optional).every(x=>x.status==='ACTIVE_MATCH'||x.status===
 assert.strictEqual(browser.truth.languageSwitched,false);
 assert.strictEqual(browser.truth.dependenciesInstalled,false);
 assert.strictEqual(browser.truth.toolchainExecuted,false);
+const website=route.planGoal({goal:'Create a website.',activeLanguageIds:['html','css','javascript']});
+assert.strictEqual(website.result,'ROUTE_RECIPES_FOUND');
+assert.strictEqual(website.recipes[0].id,'web-application');
+assert(website.recipes[0].score>website.recipes.find(x=>x.id==='browser-game').score);
+assert.strictEqual(website.recipes[0].roles.find(x=>x.role==='document-ui').candidates[0].languageId,'html');
+assert.strictEqual(website.recipes[0].roles.find(x=>x.role==='browser-runtime').candidates[0].languageId,'javascript');
 const nativeGame=route.planGoal({goal:'native game engine',activeLanguageIds:['rust']});
 assert.strictEqual(nativeGame.recipes[0].id,'native-game');
 assert(nativeGame.recipes[0].roles.find(x=>x.role==='engine-runtime').candidates.some(x=>x.languageId==='rust'));
