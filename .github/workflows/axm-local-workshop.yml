@@ -18,7 +18,13 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Format
-        run: test -z "$(gofmt -l cmd/workshop)"
+        run: |
+          files="$(gofmt -l cmd/workshop)"
+          if [ -n "$files" ]; then
+            echo "gofmt required for:"
+            echo "$files"
+            exit 1
+          fi
       - name: Vet
         run: go vet ./cmd/workshop
       - name: Test
