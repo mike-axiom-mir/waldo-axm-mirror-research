@@ -7,11 +7,11 @@ import (
 )
 
 func TestNativePromptPreservesRoles(t *testing.T) {
-	messages := []nativeChatMessage{
+	messages := []waldoBridgeChatMessage{
 		{Role: "system", Content: json.RawMessage(`"You are Waldo."`)},
 		{Role: "user", Content: json.RawMessage(`"Continue the goal."`)},
 	}
-	prompt, err := nativePrompt(messages)
+	prompt, err := waldoBridgePrompt(messages)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,7 +27,7 @@ func TestNativeMessageTextMarksImageWithoutClaimingVision(t *testing.T) {
 		{"type":"text","text":"What do you notice?"},
 		{"type":"image_url","image_url":{"url":"data:image/png;base64,AA=="}}
 	]`)
-	text, err := nativeMessageText(raw)
+	text, err := waldoBridgeMessageText(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
