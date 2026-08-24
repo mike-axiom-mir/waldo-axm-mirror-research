@@ -4,7 +4,7 @@ Challenge: `A_RUNTIME_SEAM_IS_NOT_A_QUALITY_WIN`
 
 Parent checkpoint: v0.35 `1e555aa33a026315d5e4d7c55b50709d624741eb`.
 
-Status: **evaluation package ready; compatible real-model host still required**.
+Status: **development run completed and frozen; fresh held-out cases have not been seen**.
 
 ## Why this rung exists
 
@@ -67,7 +67,7 @@ python3 run_ab.py --validate-only
 python3 -m unittest -v test_run_ab.py
 ```
 
-## Run development on a compatible host
+## Reproduce development on a compatible host
 
 The host must already have:
 
@@ -75,7 +75,7 @@ The host must already have:
 - an existing local WALDO model compatible with MLX or PyTorch;
 - the same model available for both modes.
 
-The runner does not install or train anything. It refuses to overwrite an existing output directory.
+The runner itself does not install or train anything. It refuses to overwrite an existing output directory.
 
 ```bash
 python3 run_ab.py \
@@ -87,6 +87,14 @@ python3 run_ab.py \
 Defaults are intentionally bounded: seed `36001`, temperature `0`, top-p `1`, max tokens `64`, and a 15-minute per-command timeout.
 
 The private output contains prompts and model outputs. `PUBLIC-SUMMARY.json` contains metrics and hashes without raw prompt/output text. A successful development run also creates `preheldout-freeze.json`.
+
+For the recorded smoke-model run, `github_development_ab.sh` builds WALDO, trains the repository's tiny real PyTorch fixture, and invokes the same runner with max tokens `8`. Despite its historical filename, it is a host-side reproduction helper and does not require GitHub Actions.
+
+## Recorded development result
+
+The 2026-08-24 run used PyTorch `2.8.0+cpu` and the repository's deliberately tiny `pytorch-smoke` model. It completed 18 raw/hybrid pairs (36 real neural generations). See `results/DEVELOPMENT-RESULT.md` and the machine-readable receipts in `results/`.
+
+This run validates the response-boundary wrapper behavior, not answer quality. The tiny model was incorrect on every exact development oracle, so no capable-model quality claim is authorized.
 
 ## Held-out gate
 
@@ -119,11 +127,25 @@ The runner refuses held-out execution when a frozen identity differs.
 
 Generated run directories are private evidence and are not committed automatically.
 
+Recorded public evidence excludes raw prompts and model outputs:
+
+- `results/development-run.json` — hash-bound run receipt and per-case policy observations;
+- `results/PUBLIC-SUMMARY.json` — redacted metrics and identities;
+- `results/preheldout-freeze.json` — policy/model/binary freeze before held-out cases;
+- `results/DEVELOPMENT-RESULT.md` — human-readable interpretation.
+
 ## Claim boundary
 
-Not yet observed:
+Observed only for the recorded tiny PyTorch smoke model:
 
-- a compatible model run;
+- 18 completed raw/hybrid pairs;
+- 9/9 exact LOW passthrough comparisons;
+- 7/7 expected HIGH holds, with no missed or unexpected holds;
+- 1/1 stale-reference recovery pair;
+- 0/18 raw exact-oracle correctness.
+
+Not observed:
+
 - fresh held-out results;
 - answer-content improvement from grounding;
 - token-level coupled reasoning;

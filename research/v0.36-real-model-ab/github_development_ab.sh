@@ -13,7 +13,11 @@ test ! -e "$output" || {
 }
 
 export WALDO_E2E_KEEP=1
-"$repo_root/testing/e2e/model-pytorch.sh" | tee "$e2e_log"
+if ! "$repo_root/testing/e2e/model-pytorch.sh" >"$e2e_log" 2>&1; then
+  cat "$e2e_log"
+  exit 1
+fi
+cat "$e2e_log"
 
 work=$(sed -n 's/^preserved PyTorch E2E workspace: //p' "$e2e_log" | tail -1)
 test -n "$work" && test -d "$work" || {

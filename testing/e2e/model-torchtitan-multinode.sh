@@ -79,7 +79,8 @@ destination="$index_root/core/e2e/torchtitan"
   --description Disposable-multi-node-TorchTitan-input \
   --license CC0-1.0 \
   --source https://example.invalid/torchtitan-mn-e2e \
-  --source-category public-dataset >/dev/null
+  --source-category public-dataset \
+  --language en >/dev/null
 
 contribution=""
 for candidate in "$staging"/*/contribution; do

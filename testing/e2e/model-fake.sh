@@ -88,6 +88,7 @@ destination="$index_root/core/e2e/model-corpus"
   --license CC0-1.0 \
   --source https://example.invalid/model-e2e \
   --source-category public-dataset \
+  --language en \
   --input-profile "$input_profile"
 
 contribution=""
