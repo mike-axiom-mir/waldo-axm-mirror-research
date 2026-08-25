@@ -623,6 +623,7 @@ type advisorCheckpointMonitor struct {
 	output     io.Writer
 	warnings   io.Writer
 	events     chan model.Progress
+	buildDone  chan struct{}
 	done       chan struct{}
 }
 
@@ -630,7 +631,7 @@ func newAdvisorCheckpointMonitor(ctx context.Context, root, name string, selecti
 	monitor := &advisorCheckpointMonitor{
 		ctx: ctx, root: root, name: name, selection: selection, index: index,
 		transcript: transcript, output: output, warnings: warnings,
-		events: make(chan model.Progress, 1), done: make(chan struct{}),
+		events: make(chan model.Progress, 1), buildDone: make(chan struct{}), done: make(chan struct{}),
 	}
 	go monitor.run()
 	return monitor
@@ -656,6 +657,7 @@ func (monitor *advisorCheckpointMonitor) Observe(event model.Progress) {
 }
 
 func (monitor *advisorCheckpointMonitor) Close() {
+	close(monitor.buildDone)
 	close(monitor.events)
 	<-monitor.done
 }
@@ -664,23 +666,33 @@ func (monitor *advisorCheckpointMonitor) run() {
 	defer close(monitor.done)
 	for event := range monitor.events {
 		var report model.Advice
+		var buildHistory []advisorBuildSummary
+		var composeHistory []string
 		var err error
-		for attempt := 0; attempt < 100; attempt++ {
+		buildDone := monitor.buildDone
+		attemptsAfterBuild := 0
+		for {
 			report, err = currentAdvisorEvidence(monitor.root, monitor.name)
 			if err == nil {
+				buildHistory, composeHistory, err = currentAdvisorBuildHistory(monitor.root, monitor.name)
+			}
+			if err == nil {
 				break
+			}
+			if buildDone == nil {
+				attemptsAfterBuild++
+				if attemptsAfterBuild >= 100 {
+					break
+				}
 			}
 			select {
 			case <-monitor.ctx.Done():
 				return
+			case <-buildDone:
+				buildDone = nil
 			case <-time.After(10 * time.Millisecond):
 			}
 		}
-		if err != nil {
-			fmt.Fprintf(monitor.warnings, "warning: advisor checkpoint monitor: %v\n", err)
-			continue
-		}
-		buildHistory, composeHistory, err := currentAdvisorBuildHistory(monitor.root, monitor.name)
 		if err != nil {
 			fmt.Fprintf(monitor.warnings, "warning: advisor checkpoint monitor: %v\n", err)
 			continue

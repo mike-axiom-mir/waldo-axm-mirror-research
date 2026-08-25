@@ -108,6 +108,18 @@ func main() {
 			os.Exit(2)
 		}
 		err = verifyInnerAssetFile(os.Args[2])
+	case "apply-candidate":
+		if len(os.Args) != 5 {
+			usage()
+			os.Exit(2)
+		}
+		err = applyCandidateFile(os.Args[2], os.Args[3], os.Args[4])
+	case "verify-experience-trajectory":
+		if len(os.Args) != 3 {
+			usage()
+			os.Exit(2)
+		}
+		err = verifyExperienceTrajectoryFile(os.Args[2])
 	case "census-capabilities":
 		if len(os.Args) != 4 {
 			usage()
@@ -243,6 +255,8 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror situated-context <context-packet.json> <situated-request.json> <situated-envelope.json>")
 	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror forge-asset <inner-asset-recipe.json> <candidate.axmasset>")
 	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror verify-asset <candidate.axmasset>")
+	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror apply-candidate <request.json> <workspace-root> <receipt.json>")
+	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror verify-experience-trajectory <record.json>")
 	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror census-capabilities <census-request.json> <self-snapshot.json>")
 	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror intake-capabilities <external-snapshot.json> <external-receipt.json>")
 	fmt.Fprintln(os.Stderr, "  waldo-axm-mirror plan-handoff <self-snapshot.json> <external-receipt.json> <gap-request.json> <plan.json>")
@@ -567,6 +581,43 @@ func verifyInnerAssetFile(path string) error {
 		return err
 	}
 	fmt.Println("OK", candidate.State, candidate.CandidateSHA256)
+	return nil
+}
+
+func applyCandidateFile(requestPath, rootPath, receiptPath string) error {
+	if _, err := os.Lstat(receiptPath); err == nil {
+		return fmt.Errorf("output %s already exists", receiptPath)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("inspect output %s: %w", receiptPath, err)
+	}
+	var request axmmirror.CandidateWriteRequest
+	if err := readStrictJSON(requestPath, &request); err != nil {
+		return err
+	}
+	receipt, err := axmmirror.ApplyCandidateWrites(rootPath, request)
+	if err != nil {
+		return err
+	}
+	if err := writeJSON(receiptPath, receipt); err != nil {
+		return err
+	}
+	fmt.Println(receipt.State, receipt.ReceiptSHA256)
+	return nil
+}
+
+func verifyExperienceTrajectoryFile(path string) error {
+	var record axmmirror.MirrorExperienceTrajectoryRecord
+	if err := readStrictJSON(path, &record); err != nil {
+		return err
+	}
+	projection, receipt, err := axmmirror.ProjectMirrorExperienceTrajectory(record)
+	if err != nil {
+		return err
+	}
+	if len(projection) == 0 {
+		return errors.New("experience trajectory projection is empty")
+	}
+	fmt.Println(receipt.State, receipt.RecordSHA256, receipt.ProjectionSHA256, receipt.ReceiptSHA256)
 	return nil
 }
 
