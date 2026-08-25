@@ -221,6 +221,27 @@ structured training targets; harmful, inconclusive, and unreviewed records are
 retained without becoming positive targets. `--training-to` writes a new mode
 `0600` file and never mutates weights by itself.
 
+### Bounded project workspace
+
+Create a strict request such as:
+
+```json
+{
+  "schema": "axm.waldo.workspace-loop-request/v0.2",
+  "prompt": "Inspect this project, repair the failing test, verify it, and explain the result.",
+  "max_turns": 16,
+  "verify_commands": [["go", "test", "./..."]]
+}
+```
+
+Then explicitly select the only visible project root and local model:
+
+```bash
+waldo mirror workspace C:\Projects\MyGame workspace-request.json --model local-model
+```
+
+That invocation is read-only. Add `--allow-write` only when the bounded transactional writer may change files inside the selected root. Verification commands come only from the request JSON and never pass through a shell. `--experience-to private-workspace.jsonl` retains a review-required receipt; it does not automatically train or change weights.
+
 Reference composes under `composes/` are test and experiment inputs, not model
 quality guarantees. See the [model compose guide](MODEL-COMPOSE.md) for the
 complete schema, defaults, profiles, and validation rules.

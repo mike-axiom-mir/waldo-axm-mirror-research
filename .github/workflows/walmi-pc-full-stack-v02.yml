@@ -1,0 +1,139 @@
+name: WALMI PC full stack v0.2 Workspace Hand
+
+on:
+  push:
+    branches:
+      - axm/walmi-pc-workspace-assets-v0.2
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  package-windows:
+    runs-on: windows-2025
+    timeout-minutes: 120
+    steps:
+      - name: Checkout complete WALMI history
+        shell: pwsh
+        run: |
+          git config --global core.longpaths true
+          git init .
+          git remote add origin https://github.com/mike-axiom-mir/waldo-axm-mirror-research.git
+          git fetch origin '+refs/heads/*:refs/remotes/origin/*' --force
+          git checkout --force -B axm/walmi-pc-workspace-assets-v0.2 refs/remotes/origin/axm/walmi-pc-workspace-assets-v0.2
+
+      - name: Install Go and Python
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Format source once and repush exact formatted head
+        shell: pwsh
+        run: |
+          gofmt -w .
+          git diff --check
+          if (-not (git diff --quiet)) {
+            git config user.name 'WALMI packaging steward'
+            git config user.email 'actions@users.noreply.github.com'
+            git add -A
+            git commit -m 'build: gofmt WALMI workspace Hand v0.2'
+            git push origin HEAD:axm/walmi-pc-workspace-assets-v0.2
+            "REFORMATTED_AND_REPUSHED=1" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          }
+
+      - name: Stop first run after formatting handoff
+        if: env.REFORMATTED_AND_REPUSHED == '1'
+        shell: pwsh
+        run: exit 0
+
+      - name: Verify complete source
+        if: env.REFORMATTED_AND_REPUSHED != '1'
+        shell: pwsh
+        run: |
+          git diff --exit-code
+          go test ./internal/axmmirror ./internal/cli | Tee-Object -FilePath GO_TEST_FOCUSED.txt
+          bash ./testing/all.sh | Tee-Object -FilePath GO_TEST_ALL.txt
+          go test ./... | Tee-Object -FilePath GO_TEST_GO_ALL.txt
+
+      - name: Assemble exact source and history
+        if: env.REFORMATTED_AND_REPUSHED != '1'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist-v02/cartridge/source,dist-v02/cartridge/history,dist-v02/cartridge/inventory,dist-v02/cartridge/runtime/go,dist-v02/cartridge/runtime,dist-v02/cartridge/native/windows,dist-v02/host/bin,dist-v02/host/runtime | Out-Null
+          git archive --format=zip --output=dist-v02/cartridge/source/WALMI_CURRENT_STACK_v0_2.zip HEAD
+          git bundle create dist-v02/cartridge/history/WALDO_ALL_EXPERIMENTS_v0_2.bundle --all
+          git bundle verify dist-v02/cartridge/history/WALDO_ALL_EXPERIMENTS_v0_2.bundle | Tee-Object -FilePath dist-v02/cartridge/inventory/GIT_BUNDLE_VERIFY.txt
+          Copy-Item GO_TEST_ALL.txt,GO_TEST_GO_ALL.txt,GO_TEST_FOCUSED.txt dist-v02/cartridge/inventory/
+
+      - name: Apply package-only Windows runtime membrane
+        if: env.REFORMATTED_AND_REPUSHED != '1'
+        shell: pwsh
+        run: |
+          python portable/walmi-pc-package/patch_windows_runtime.py
+          gofmt -w internal/training internal/model
+          git diff --check
+          Copy-Item dist/WINDOWS_RUNTIME_PATCH_RECEIPT.json dist-v02/cartridge/inventory/
+
+      - name: Build and verify native Windows binaries
+        if: env.REFORMATTED_AND_REPUSHED != '1'
+        shell: pwsh
+        run: |
+          go test ./internal/training ./internal/model ./internal/inference ./internal/axmmirror ./internal/cli | Tee-Object -FilePath dist-v02/cartridge/inventory/WINDOWS_RUNTIME_VERIFY.txt
+          go build -trimpath -ldflags='-s -w' -o dist-v02/host/bin/waldo.exe ./cmd/waldo
+          go build -trimpath -ldflags='-s -w' -o dist-v02/host/bin/waldo-axm-mirror.exe ./cmd/waldo-axm-mirror
+          go build -trimpath -ldflags='-s -w' -o dist-v02/host/bin/waldo-mirror-review.exe ./cmd/waldo-mirror-review
+          & .\dist-v02\host\bin\waldo.exe --version
+          & .\dist-v02\host\bin\waldo.exe mirror workspace --help | Tee-Object -FilePath dist-v02/cartridge/inventory/WALMI_WORKSPACE_HELP.txt
+
+      - name: Bundle portable Python and CPU PyTorch
+        if: env.REFORMATTED_AND_REPUSHED != '1'
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu torch
+          python -c "import pathlib,shutil,sys; shutil.copytree(pathlib.Path(sys.prefix),pathlib.Path('dist-v02/host/runtime/python'),dirs_exist_ok=True)"
+          & .\dist-v02\host\runtime\python\python.exe -c "import pathlib,torch; torch.manual_seed(7); m=torch.nn.Linear(4,2); opt=torch.optim.SGD(m.parameters(),lr=.1); x=torch.arange(12,dtype=torch.float32).reshape(3,4)/10; before=m.weight.detach().clone(); loss=torch.nn.functional.mse_loss(m(x),torch.zeros((3,2))); loss.backward(); opt.step(); assert not torch.equal(before,m.weight.detach()); out=pathlib.Path('dist-v02/host/state/PACKAGE_TRAINING_SMOKE.pt'); out.parent.mkdir(parents=True,exist_ok=True); torch.save({'state_dict':m.state_dict(),'verification_only':True},out); print('WALMI_V02_RELOCATED_TRAINING_PASS',float(loss),out.stat().st_size)" | Tee-Object -FilePath dist-v02/cartridge/inventory/PYTORCH_RUNTIME_VERIFY.txt
+
+      - name: Build browser fallback and host layout
+        if: env.REFORMATTED_AND_REPUSHED != '1'
+        shell: pwsh
+        run: |
+          $env:GOOS='js'
+          $env:GOARCH='wasm'
+          go build -trimpath -ldflags='-s -w' -o dist-v02/cartridge/runtime/go/walmi-axm-mirror.wasm ./cmd/walmi-browser-wasm
+          Remove-Item Env:GOOS
+          Remove-Item Env:GOARCH
+          $wasmExec=(Get-ChildItem (go env GOROOT) -Recurse -Filter wasm_exec.js | Select-Object -First 1).FullName
+          if (-not $wasmExec) { throw 'wasm_exec.js missing' }
+          Copy-Item $wasmExec dist-v02/cartridge/runtime/go/wasm_exec.js
+          Copy-Item portable/walmi-browser-cartridge/runtime/browser-entry.js dist-v02/cartridge/runtime/browser-entry.js
+          python portable/walmi-pc-package/write_host_layout_v02.py
+
+      - name: Seal build receipt and final ZIP
+        if: env.REFORMATTED_AND_REPUSHED != '1'
+        shell: python
+        run: |
+          import json,pathlib,subprocess
+          root=pathlib.Path('dist-v02/cartridge/inventory')
+          commit=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
+          receipt={'schema':'axm.walmi-pc-build-receipt/v0.2','status':'PASS','commit':commit,'workspaceHand':True,'neuralToolLoop':True,'transactionalWriter':True,'verificationCommandsWithoutShell':True,'sourceArchive':True,'completeHistoryBundle':True,'portablePython':True,'portablePyTorchCPU':True,'startingModelWeightsBundled':False,'installAuthority':False,'integrationAuthority':False,'promotionAuthority':False,'learningAuthority':False,'canonAuthority':False}
+          (root/'WALMI_V02_BUILD_RECEIPT.json').write_text(json.dumps(receipt,indent=2),encoding='utf-8')
+          subprocess.check_call(['python','portable/walmi-pc-package/package_v02.py'])
+
+      - name: Upload complete WALMI v0.2 package
+        if: env.REFORMATTED_AND_REPUSHED != '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: WALMI-PC-FULL-STACK-v0-2-WORKSPACE-HAND
+          path: |
+            dist-v02/WALMI_PC_FULL_STACK_v0_2.zip
+            dist-v02/WALMI_PC_FULL_STACK_v0_2.sha256.txt
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
