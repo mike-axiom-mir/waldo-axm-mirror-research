@@ -63,8 +63,6 @@ changes.append("Python worker cancellation uses portable Process.Kill")
 p = Path("internal/training/torchtitan.go")
 s = p.read_text(encoding="utf-8")
 s = s.replace('\n\t"syscall"', "")
-run_start = "func (backend TorchTitan) Run(ctx context.Context, request Request) {"
-# Function returns values, so patch the exact signature instead.
 run_start = "func (backend TorchTitan) Run(ctx context.Context, request Request) (Observation, error) {\n"
 if run_start not in s:
     raise SystemExit("TorchTitan Run seam missing")
@@ -102,6 +100,42 @@ for name in ["python_worker_test.go", "mlx_test.go", "pytorch_test.go", "torchti
     if not s.startswith("//go:build !windows"):
         p.write_text("//go:build !windows\n\n" + s, encoding="utf-8")
 changes.append("Unix host-specific training tests excluded only from Windows package tests")
+
+# The inference suite has two shell-script fake Python workers and one POSIX
+# permission-bit assertion. Keep all production inference code and the useful
+# tests; skip only those fake-worker executions on Windows and keep the
+# append-only/privacy trace assertions while omitting a Unix mode-bit check
+# that Windows filesystems cannot represent through Go's permission bits.
+replace_once(
+    "internal/inference/inference_test.go",
+    '\t"path/filepath"\n\t"strings"',
+    '\t"path/filepath"\n\t"runtime"\n\t"strings"',
+    "Windows inference tests import runtime for fixture gating",
+)
+replace_once(
+    "internal/inference/inference_test.go",
+    'func TestMLXSessionConsumesStreamingProtocol(t *testing.T) {\n',
+    'func TestMLXSessionConsumesStreamingProtocol(t *testing.T) {\n\tif runtime.GOOS == "windows" {\n\t\tt.Skip("Unix shell-worker fixture; MLX is not the WALMI Windows backend")\n\t}\n',
+    "Windows skips Unix MLX shell-worker fixture",
+)
+replace_once(
+    "internal/inference/inference_test.go",
+    'func TestPyTorchSessionConsumesStreamingProtocol(t *testing.T) {\n',
+    'func TestPyTorchSessionConsumesStreamingProtocol(t *testing.T) {\n\tif runtime.GOOS == "windows" {\n\t\tt.Skip("Unix shell-worker fixture; packaged PyTorch is verified with the real portable Python runtime")\n\t}\n',
+    "Windows skips Unix PyTorch shell-worker fixture",
+)
+replace_once(
+    "internal/inference/axm_hybrid_test.go",
+    '\t"path/filepath"\n\t"strings"',
+    '\t"path/filepath"\n\t"runtime"\n\t"strings"',
+    "Windows hybrid trace test imports runtime for permission semantics",
+)
+replace_once(
+    "internal/inference/axm_hybrid_test.go",
+    'if info.Mode().Perm() != 0o600 {\n\t\tt.Fatalf("trace mode = %o, want 600", info.Mode().Perm())\n\t}',
+    'if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {\n\t\tt.Fatalf("trace mode = %o, want 600", info.Mode().Perm())\n\t}',
+    "Windows preserves trace checks without Unix permission-bit assertion",
+)
 
 # Model compose locking used direct Unix flock. Move that behind a platform
 # seam and use Windows LockFileEx with FAIL_IMMEDIATELY to preserve exclusive,
@@ -279,7 +313,7 @@ Path("dist").mkdir(exist_ok=True)
 Path("dist/WINDOWS_RUNTIME_PATCH_RECEIPT.json").write_text(
     json.dumps(
         {
-            "schema": "walmi.windows-runtime-patch/v6",
+            "schema": "walmi.windows-runtime-patch/v7",
             "baseCommit": BASE_COMMIT,
             "scope": "PACKAGE_BUILD_ONLY_NOT_MERGED",
             "changes": changes,
