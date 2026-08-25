@@ -10,7 +10,37 @@ permissions:
   actions: read
 
 jobs:
+  verify-linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Format and verify complete Linux source
+        shell: bash
+        run: |
+          gofmt -w .
+          git diff --check
+          go test ./internal/axmmirror ./internal/cli | tee GO_TEST_FOCUSED.txt
+          ./testing/all.sh | tee GO_TEST_ALL.txt
+          go test ./... | tee GO_TEST_GO_ALL.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: walmi-v02-linux-test-receipts
+          path: |
+            GO_TEST_FOCUSED.txt
+            GO_TEST_ALL.txt
+            GO_TEST_GO_ALL.txt
+          if-no-files-found: error
+          retention-days: 7
+
   package-windows:
+    needs: verify-linux
     runs-on: windows-2025
     timeout-minutes: 120
     steps:
@@ -40,14 +70,6 @@ jobs:
           git diff --check
           git diff --stat
 
-      - name: Verify complete source
-        shell: pwsh
-        run: |
-          git diff --exit-code
-          go test ./internal/axmmirror ./internal/cli | Tee-Object -FilePath GO_TEST_FOCUSED.txt
-          bash ./testing/all.sh | Tee-Object -FilePath GO_TEST_ALL.txt
-          go test ./... | Tee-Object -FilePath GO_TEST_GO_ALL.txt
-
       - name: Assemble exact source and history
         shell: pwsh
         run: |
@@ -55,7 +77,12 @@ jobs:
           python -c "import pathlib,subprocess,zipfile; files=subprocess.check_output(['git','ls-files'],text=True).splitlines(); out=pathlib.Path('dist-v02/cartridge/source/WALMI_CURRENT_STACK_v0_2.zip'); z=zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED,allowZip64=True); [z.write(pathlib.Path(p),p) for p in files]; z.close(); z=zipfile.ZipFile(out); bad=z.testzip(); z.close(); assert bad is None,bad; print('FORMATTED_SOURCE_ZIP_PASS',len(files),out.stat().st_size)"
           git bundle create dist-v02/cartridge/history/WALDO_ALL_EXPERIMENTS_v0_2.bundle --all
           git bundle verify dist-v02/cartridge/history/WALDO_ALL_EXPERIMENTS_v0_2.bundle | Tee-Object -FilePath dist-v02/cartridge/inventory/GIT_BUNDLE_VERIFY.txt
-          Copy-Item GO_TEST_ALL.txt,GO_TEST_GO_ALL.txt,GO_TEST_FOCUSED.txt dist-v02/cartridge/inventory/
+
+      - name: Include Linux source-verification receipts
+        uses: actions/download-artifact@v4
+        with:
+          name: walmi-v02-linux-test-receipts
+          path: dist-v02/cartridge/inventory
 
       - name: Apply package-only Windows runtime membrane
         shell: pwsh
