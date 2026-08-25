@@ -93,6 +93,9 @@ changes.append("TorchTitan source retained; Windows runtime explicitly uses PyTo
 
 # These original tests create Unix fake executables/process groups. The exact
 # unmodified suite is already preserved and Linux-PASS in the source audit.
+# mlx_test.go also contains recordSourceFunc, a generic RecordSource test adapter;
+# the Windows package re-declares only that helper below rather than re-enabling
+# the Unix shell-based MLX tests.
 for name in ["python_worker_test.go", "mlx_test.go", "pytorch_test.go", "torchtitan_test.go"]:
     p = Path("internal/training") / name
     s = p.read_text(encoding="utf-8")
@@ -202,6 +205,8 @@ changes.append("model compose ownership uses Windows LockFileEx; Unix keeps floc
 
 # Windows package tests replace the Unix-host fixtures with relevant Windows
 # assertions while the original suite remains in the archived exact source.
+# recordSourceFunc is copied from mlx_test.go because it is a generic test-only
+# RecordSource adapter, not an MLX or Unix runtime behavior.
 Path("internal/training/walmi_windows_package_test.go").write_text(
     '''package training
 
@@ -212,6 +217,12 @@ import (
 \t"strings"
 \t"testing"
 )
+
+type recordSourceFunc func(context.Context, func(Record) error) error
+
+func (function recordSourceFunc) Stream(ctx context.Context, consume func(Record) error) error {
+\treturn function(ctx, consume)
+}
 
 func TestWALMIPackageWindowsPyTorch(t *testing.T) {
 \tarchitecture := json.RawMessage(`{"family":"decoder-transformer","vocabulary_size":259,"tokenizer":{"name":"byte","revision":"builtin-byte-schema-1"}}`)
@@ -234,6 +245,8 @@ func TestWALMIPackageTorchTitanRefusesWindows(t *testing.T) {
 ''',
     encoding="utf-8",
 )
+changes.append("Windows package preserves the generic recordSourceFunc test adapter")
+
 Path("internal/model/walmi_windows_lock_test.go").write_text(
     '''package model
 
@@ -266,7 +279,7 @@ Path("dist").mkdir(exist_ok=True)
 Path("dist/WINDOWS_RUNTIME_PATCH_RECEIPT.json").write_text(
     json.dumps(
         {
-            "schema": "walmi.windows-runtime-patch/v5",
+            "schema": "walmi.windows-runtime-patch/v6",
             "baseCommit": BASE_COMMIT,
             "scope": "PACKAGE_BUILD_ONLY_NOT_MERGED",
             "changes": changes,
