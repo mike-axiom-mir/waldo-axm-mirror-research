@@ -43,21 +43,21 @@ type MirrorExperienceTrainingReview struct {
 // still carries no training or execution authority; a separate WALDO training
 // command remains necessary for any weight mutation.
 type MirrorExperienceReviewedTrainingRecord struct {
-	Schema                       string    `json:"schema"`
-	EpisodeID                    string    `json:"episodeId"`
-	OutcomeSignal                string    `json:"outcomeSignal"`
-	Prompt                       string    `json:"prompt"`
-	TargetResponse               string    `json:"targetResponse"`
-	TrainingText                 string    `json:"text"`
-	SourceLearningRecordSHA256   string    `json:"sourceLearningRecordSha256"`
-	SourceReflectionEventSHA256  string    `json:"sourceReflectionEventSha256"`
-	ReviewSHA256                 string    `json:"reviewSha256"`
-	EvidenceClass                string    `json:"evidenceClass"`
-	EvidenceReceiptSHA256        string    `json:"evidenceReceiptSha256"`
-	ExperienceCapturedAt         time.Time `json:"experienceCapturedAt"`
-	ReviewedAt                   time.Time `json:"reviewedAt"`
-	Authority                    Authority `json:"authority"`
-	PromotionSHA256              string    `json:"promotionSha256"`
+	Schema                      string    `json:"schema"`
+	EpisodeID                   string    `json:"episodeId"`
+	OutcomeSignal               string    `json:"outcomeSignal"`
+	Prompt                      string    `json:"prompt"`
+	TargetResponse              string    `json:"targetResponse"`
+	TrainingText                string    `json:"text"`
+	SourceLearningRecordSHA256  string    `json:"sourceLearningRecordSha256"`
+	SourceReflectionEventSHA256 string    `json:"sourceReflectionEventSha256"`
+	ReviewSHA256                string    `json:"reviewSha256"`
+	EvidenceClass               string    `json:"evidenceClass"`
+	EvidenceReceiptSHA256       string    `json:"evidenceReceiptSha256"`
+	ExperienceCapturedAt        time.Time `json:"experienceCapturedAt"`
+	ReviewedAt                  time.Time `json:"reviewedAt"`
+	Authority                   Authority `json:"authority"`
+	PromotionSHA256             string    `json:"promotionSha256"`
 }
 
 func SealMirrorExperienceTrainingReview(review *MirrorExperienceTrainingReview) error {
