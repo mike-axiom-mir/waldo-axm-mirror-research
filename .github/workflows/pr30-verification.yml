@@ -51,14 +51,21 @@ jobs:
             cp "$file" ".pr30-verification/changed/$file"
           done < <(git diff --name-only -- . ':(exclude).github/workflows/pr30-verification.yml')
           printf 'source_head=%s\n' "$GITHUB_SHA" > .pr30-verification/context.txt
-      - name: Diagnose advisor fake-model lifecycle
+      - name: Inventory mutable CLI test state
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -R -n -E 'modelAdvisor(Ask|Input|Terminal)|terminalOutputWidth|os\.Chdir|t\.Parallel\(\)' internal/cli/*_test.go \
+            | tee .pr30-verification/global-test-state.txt || true
+          go test ./internal/cli -list . | tee .pr30-verification/test-list.txt
+      - name: Run complete CLI package with ordering evidence
         shell: bash
         run: |
           set +e
           set -o pipefail
-          go test ./internal/cli -run '^TestIndexExportEndToEnd$' -count=1 -v 2>&1 | tee .pr30-verification/target.log
+          go test ./internal/cli -count=1 -v 2>&1 | tee .pr30-verification/cli-all.log
           status=${PIPESTATUS[0]}
-          printf '%s\n' "$status" > .pr30-verification/target-exit-status.txt
+          printf '%s\n' "$status" > .pr30-verification/cli-all-exit-status.txt
           exit "$status"
       - name: Preserve verification evidence
         if: always()
