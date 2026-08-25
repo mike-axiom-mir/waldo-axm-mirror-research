@@ -54,6 +54,31 @@ go vet ./internal/axmmirror ./cmd/waldo-axm-mirror
 PASS
 ```
 
-The earlier full `./testing/all.sh` run was stopped during the fake-model lifecycle after its Go, static-analysis, direct-ingestion, recipe-ingestion, structured-conversation, and positive-ground phases passed. A complete full-suite result is therefore not claimed.
+## Complete repository-suite closure
 
-No website source, browser render, repair loop, training run, or weight update occurred because no WALDO neural source candidate, installed PyTorch/MLX backend, or trainable WALDO checkpoint was available to this machine run. The incomplete attempt nevertheless produced both retained observed experience and a trainable outcome-conditioned reflection projection; completion was not required.
+The previously stopped fake-model lifecycle was a deterministic repository test path, not the website source author and not a substitute neural model. Its remaining failure was a bounded filesystem-observation race in the advisor checkpoint monitor: model advice could become readable before the matching build-history evidence. The narrow repair keeps the existing bounded retry active until both evidence sources are readable.
+
+GitHub Actions verification run `32829707341` completed successfully from source head `e9d9ff4a62de11ec500294f5142a57ef9f30be73` after applying only that candidate repair:
+
+```text
+cli-stress-exit-status: 0
+all-exit-status: 0
+artifact: pr30-verification-evidence
+artifactId: 9556393812
+artifactDigest: sha256:e695499b21a30a43d2adaaf7ea6e5bf6d35181671bd90977eb90178570e29211
+```
+
+The artifact records the complete `./testing/all.sh` log through the fake-model lifecycle and its final environment-dependent skip notices. The fake backend identifies itself as `fake@builtin-fake-schema-1-r2` and explicitly states that its artifacts are not trained model weights.
+
+The tested candidate file `internal/cli/advisor.go` has Git blob `2dda117df19fd5e8ebc7d4662ae9568841c39bf2`. That exact blob was committed and is the blob present at PR head `acd40abd04b51cc6a9b0add41770103a2ef4e746`. Between the successful verification source head and that PR head, the only repository differences are:
+
+1. committing the exact tested `advisor.go` candidate; and
+2. removing the temporary diagnostic workflow.
+
+Therefore a complete `./testing/all.sh` pass is now claimed for the current production/test tree. The later diagnostic run `32830305868` failed before tests because its temporary workflow attempted to re-apply the already committed repair; its stress and full-suite steps were skipped, so it is not evidence of a code regression. Normal CI for the current head passed in run `32830340110`.
+
+## Infrastructure boundary
+
+No website source, browser render, source-quality judgment, repair loop, real training run, or weight update occurred because no WALDO neural source candidate, installed compatible neural runtime, or trainable WALDO checkpoint was available to this machine run. Those steps remain `INFRASTRUCTURE_BLOCKED` and must be resumed locally with the intended WALDO candidate/checkpoint.
+
+The deterministic fake lifecycle verifies repository orchestration, persistence, cleanup, and evidence handling only. It did not author website bytes and did not stand in for WALDO. The incomplete website attempt nevertheless produced both retained observed experience and a trainable outcome-conditioned reflection projection; completion was not required.
