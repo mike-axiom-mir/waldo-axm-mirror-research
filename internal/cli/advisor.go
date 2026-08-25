@@ -666,11 +666,16 @@ func (monitor *advisorCheckpointMonitor) run() {
 	defer close(monitor.done)
 	for event := range monitor.events {
 		var report model.Advice
+		var buildHistory []advisorBuildSummary
+		var composeHistory []string
 		var err error
 		buildDone := monitor.buildDone
 		attemptsAfterBuild := 0
 		for {
 			report, err = currentAdvisorEvidence(monitor.root, monitor.name)
+			if err == nil {
+				buildHistory, composeHistory, err = currentAdvisorBuildHistory(monitor.root, monitor.name)
+			}
 			if err == nil {
 				break
 			}
@@ -688,11 +693,6 @@ func (monitor *advisorCheckpointMonitor) run() {
 			case <-time.After(10 * time.Millisecond):
 			}
 		}
-		if err != nil {
-			fmt.Fprintf(monitor.warnings, "warning: advisor checkpoint monitor: %v\n", err)
-			continue
-		}
-		buildHistory, composeHistory, err := currentAdvisorBuildHistory(monitor.root, monitor.name)
 		if err != nil {
 			fmt.Fprintf(monitor.warnings, "warning: advisor checkpoint monitor: %v\n", err)
 			continue
