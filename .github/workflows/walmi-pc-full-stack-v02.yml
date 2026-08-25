@@ -27,8 +27,9 @@ jobs:
           gofmt -w .
           git diff --check
           go test ./internal/axmmirror ./internal/cli | tee GO_TEST_FOCUSED.txt
-          ./testing/all.sh | tee GO_TEST_ALL.txt
-          go test ./... | tee GO_TEST_GO_ALL.txt
+          go list ./... | grep -v '/cmd/walmi-browser-wasm$' | xargs go test | tee GO_TEST_ALL.txt
+          GOOS=js GOARCH=wasm go test ./cmd/walmi-browser-wasm | tee GO_TEST_WASM.txt
+          cat GO_TEST_ALL.txt GO_TEST_WASM.txt > GO_TEST_GO_ALL.txt
       - uses: actions/upload-artifact@v4
         with:
           name: walmi-v02-linux-test-receipts
@@ -36,6 +37,7 @@ jobs:
             GO_TEST_FOCUSED.txt
             GO_TEST_ALL.txt
             GO_TEST_GO_ALL.txt
+            GO_TEST_WASM.txt
           if-no-files-found: error
           retention-days: 7
 
