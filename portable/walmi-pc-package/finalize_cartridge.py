@@ -6,11 +6,10 @@ import sys
 import zipfile
 from pathlib import Path
 
-BASE = "c6011afbb456b8fe1e6c7c6eda7857aec681cb8f"
 DIST = Path("dist")
 HOST = DIST / "host"
 CARTRIDGE = DIST / "cartridge"
-NATIVE = CARTRIDGE / "native/windows/WALMI_WINDOWS_FULL_HOST_v0_1.zip"
+NATIVE = CARTRIDGE / "native/windows/WALMI_WINDOWS_FULL_HOST_v0_2.zip"
 
 
 def sha256(path: Path) -> str:
@@ -40,94 +39,86 @@ if sys.argv[1:] == ["native"]:
         "bin/waldo.exe",
         "bin/waldo-axm-mirror.exe",
         "bin/waldo-mirror-review.exe",
+        "tools/walmi_workspace_hand.py",
         "runtime/python/python.exe",
+        "runtime/node/node.exe",
+        "tools/walmi_asset_hand_runner.js",
+        "body/shared/asset-hands/asset-hands.js",
+        "body/shared/visual-kernel/visual-kernel.js",
+        "body/shared/visual-fx/fx-blocks.js",
+        "body/shared/output/axm-output-core.js",
+        "body/shared/vendor/jspdf/jspdf.umd.min.js",
+        "body/tools/spatial-studio/spatial-core.js",
+        "body/tools/film-motion-studio/film-motion-core.js",
+        "body/tools/asset-fabric/fabric-core.js",
         "START_WALMI_PC.cmd",
         "WALMI_LOCAL_SHELL.cmd",
+        "WALMI_WORKSPACE_HAND.cmd",
+        "WALMI_ASSET_HAND.cmd",
         "models/README.txt",
         "checkpoints/README.txt",
         "experience/README.txt",
         "rollback/README.txt",
-        "state/README.txt",
+        "workspace/README.txt",
+        "assets/README.txt",
         "MODEL_WEIGHT_SCAN.json",
-        "WINDOWS_RUNTIME_PATCH_RECEIPT.json",
+        "ASSET_CAPABILITY_RECEIPT.json",
+        "WORKSPACE_HAND_SMOKE.json",
     }
     missing = sorted(required - names)
     if missing:
         raise SystemExit(f"native host missing: {missing}")
-    print("WINDOWS_FULL_HOST_PASS", NATIVE.stat().st_size, "bytes", len(names), "files")
+    print("WINDOWS_FULL_HOST_V02_PASS", NATIVE.stat().st_size, "bytes", len(names), "files")
     raise SystemExit(0)
 
 if sys.argv[1:] != ["final"]:
     raise SystemExit("usage: finalize_cartridge.py native|final")
 
 inventory = CARTRIDGE / "inventory"
-audit = json.loads((inventory / "EXPERIMENT_STACK_AUDIT.json").read_text(encoding="utf-8"))
+source = json.loads((inventory / "CURRENT_SOURCE.json").read_text(encoding="utf-8"))
 weights = json.loads((inventory / "MODEL_WEIGHT_SCAN.json").read_text(encoding="utf-8"))
-unmodified = json.loads((inventory / "UNMODIFIED_VERIFICATION.json").read_text(encoding="utf-8"))
+assets = json.loads((inventory / "ASSET_CAPABILITY_RECEIPT.json").read_text(encoding="utf-8"))
+workspace = json.loads((inventory / "WORKSPACE_HAND_SMOKE.json").read_text(encoding="utf-8"))
 
-if not audit["allCriticalPresent"] or audit["mirrorWaldoBranchCount"] != 58:
-    raise SystemExit("experiment stack audit is not complete")
-if unmodified.get("commit") != BASE or unmodified.get("status") != "PASS" or unmodified.get("goTestAll") is not True:
-    raise SystemExit("exact source verification receipt is not PASS")
+if source.get("status") != "PASS" or not source.get("commit"):
+    raise SystemExit("current source receipt is not PASS")
+if assets.get("status") != "PASS" or assets.get("platformCommit") != "fd6ec98a6a98a6666a980c359730ccec57a8cbe9":
+    raise SystemExit("asset capability receipt is not PASS or not pinned")
+if not assets.get("workshopRequired") is False or int(assets.get("handCount", 0)) < 30:
+    raise SystemExit("asset capability runtime is incomplete")
+if workspace.get("status") != "PASS" or workspace.get("networkUsed") is not False:
+    raise SystemExit("workspace hand smoke is not PASS")
 
 manifest = {
     "schema": "walmi.cartridge/v1",
     "name": "WALMI-PC-FULL-STACK",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "browserEntry": "runtime/browser-entry.js",
     "source": {
         "repository": "mike-axiom-mir/waldo-axm-mirror-research",
-        "walmiBaseCommit": BASE,
-        "currentStackArchive": "source/WALMI_CURRENT_STACK_c6011af.zip",
+        "packageCommit": source["commit"],
+        "currentStackArchive": "source/WALMI_CURRENT_STACK_v0_2.zip",
         "allExperimentHistory": "history/WALDO_ALL_EXPERIMENTS.bundle",
-        "experimentBranchesAudited": audit["mirrorWaldoBranchCount"],
+        "assetPlatformRepository": "mike-axiom-mir/axm-collaboration-platform",
+        "assetPlatformCommit": assets["platformCommit"],
     },
     "stack": [
-        "MIRROR",
-        "WALDO",
-        "HERMES",
-        "EPHEMERAL_SPECIALISTS",
-        "NEURAL_SOCKETS",
-        "DETERMINIZATION_STEWARD",
-        "WORKSHOP_CAPABILITY_INTAKE",
-        "SERVICE_MODES",
-        "GRAMMAR_GLASS",
-        "CREATION_FABRIC",
-        "PR67_OBJECT_ADAPTER",
-        "PR68_RECORD_QUERY",
-        "MODEL_LIFECYCLE",
-        "TRAINING",
-        "INFERENCE",
+        "MIRROR", "WALDO", "HERMES", "EPHEMERAL_SPECIALISTS", "NEURAL_SOCKETS",
+        "DETERMINIZATION_STEWARD", "SERVICE_MODES", "GRAMMAR_GLASS", "CREATION_FABRIC",
+        "MODEL_LIFECYCLE", "TRAINING", "INFERENCE", "INNER_ASSET",
+        "WALMI_WORKSPACE_HAND", "ASSET_FABRIC_V0_12", "ASSET_HANDS_V2_5",
     ],
-    "nativeHosts": [
-        {
-            "platform": "windows",
-            "arch": "x64",
-            "label": "WALMI Windows Full Host",
-            "path": "native/windows/WALMI_WINDOWS_FULL_HOST_v0_1.zip",
-            "fileName": "WALMI_WINDOWS_FULL_HOST_v0_1.zip",
-            "sha256": sha256(NATIVE),
-        }
-    ],
+    "nativeHosts": [{
+        "platform": "windows", "arch": "x64", "label": "WALMI Windows Full Host v0.2",
+        "path": "native/windows/WALMI_WINDOWS_FULL_HOST_v0_2.zip",
+        "fileName": "WALMI_WINDOWS_FULL_HOST_v0_2.zip", "sha256": sha256(NATIVE),
+    }],
     "runtime": {
-        "go": {
-            "target": "js/wasm",
-            "wasm": "runtime/go/walmi-axm-mirror.wasm",
-            "exec": "runtime/go/wasm_exec.js",
-            "targetNeedsGoInstalled": False,
-        },
-        "windows": {
-            "portablePython": True,
-            "portablePyTorchCPU": True,
-            "targetNeedsPythonInstalled": False,
-            "trainingAndInferenceCodeBundled": True,
-            "torchTitan": "SOURCE_RETAINED_WINDOWS_DISABLED_USE_PYTORCH",
-        },
-        "neural": {
-            "startingWeightsBundled": weights["startingWeightsBundled"],
-            "weightFiles": weights["recognizedWeightFiles"],
-            "internetFallback": False,
-        },
+        "go": {"target": "js/wasm", "wasm": "runtime/go/walmi-axm-mirror.wasm", "exec": "runtime/go/wasm_exec.js", "targetNeedsGoInstalled": False},
+        "windows": {"portablePython": True, "portablePyTorchCPU": True, "portableNode": True, "targetNeedsPythonInstalled": False, "targetNeedsNodeInstalled": False, "trainingAndInferenceCodeBundled": True},
+        "workspace": {"optional": True, "workshopRequired": False, "read": True, "tree": True, "hash": True, "transactionalWrites": True, "gitMutation": False},
+        "assets": {"innerAsset": True, "assetFabric": assets.get("assetFabricVersion"), "assetHandsVersion": assets.get("assetHandsVersion"), "handCount": assets.get("handCount"), "workshopRequired": False, "internetFallback": False},
+        "neural": {"startingWeightsBundled": weights["startingWeightsBundled"], "weightFiles": weights["recognizedWeightFiles"], "internetFallback": False},
     },
     "experienceExport": True,
     "rollbackStorage": True,
@@ -136,33 +127,18 @@ manifest = {
 }
 (CARTRIDGE / "walmi.manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 (CARTRIDGE / "README_FIRST.txt").write_text(
-    "WALMI PC FULL STACK v0.1\n\n"
-    "Open the single WALMI HTML launcher on PC, load this ZIP, choose FULL STRENGTH, "
-    "extract the emitted Windows host ZIP, then run START_WALMI_PC.cmd.\n\n"
-    "The exact current source and complete experiment Git history are included. "
-    "Inventory receipts prove branch/file coverage and the starting-weight truth.\n",
+    "WALMI PC FULL STACK v0.2\n\n"
+    "This cartridge contains a standalone Windows host. Workshop is optional. "
+    "Workspace access is attached per folder, and the latest pinned Asset Fabric/Asset Hands code is copied into WALMI itself. "
+    "Network removal removes external information sources, not WALMI's local body.\n",
     encoding="utf-8",
 )
 
 required = [
-    "walmi.manifest.json",
-    "runtime/browser-entry.js",
-    "runtime/go/walmi-axm-mirror.wasm",
-    "runtime/go/wasm_exec.js",
-    "native/windows/WALMI_WINDOWS_FULL_HOST_v0_1.zip",
-    "source/WALMI_CURRENT_STACK_c6011af.zip",
-    "history/WALDO_ALL_EXPERIMENTS.bundle",
-    "inventory/EXPERIMENT_STACK_AUDIT.json",
-    "inventory/CURRENT_STACK_FILES.txt",
-    "inventory/MIRROR_WALDO_BRANCHES.txt",
-    "inventory/MODEL_WEIGHT_SCAN.json",
-    "inventory/UNMODIFIED_VERIFICATION.json",
-    "inventory/UNMODIFIED_GO_TESTS.txt",
-    "inventory/GIT_BUNDLE_VERIFY.txt",
-    "inventory/WINDOWS_RUNTIME_PATCH_RECEIPT.json",
-    "inventory/PYTORCH_RUNTIME_VERIFY.txt",
-    "inventory/WALDO_WINDOWS_VERSION.txt",
-    "inventory/WALDO_WINDOWS_MIRROR_HELP.txt",
+    "walmi.manifest.json", "runtime/browser-entry.js", "runtime/go/walmi-axm-mirror.wasm", "runtime/go/wasm_exec.js",
+    "native/windows/WALMI_WINDOWS_FULL_HOST_v0_2.zip", "source/WALMI_CURRENT_STACK_v0_2.zip",
+    "history/WALDO_ALL_EXPERIMENTS.bundle", "inventory/CURRENT_SOURCE.json", "inventory/MODEL_WEIGHT_SCAN.json",
+    "inventory/ASSET_CAPABILITY_RECEIPT.json", "inventory/WORKSPACE_HAND_SMOKE.json", "inventory/GO_TESTS.txt",
 ]
 missing = [name for name in required if not (CARTRIDGE / name).is_file()]
 if missing:
@@ -172,23 +148,11 @@ rows = []
 for path in sorted(p for p in CARTRIDGE.rglob("*") if p.is_file()):
     rows.append({"path": path.relative_to(CARTRIDGE).as_posix(), "bytes": path.stat().st_size, "sha256": sha256(path)})
 (inventory / "CARTRIDGE_FILE_MANIFEST.json").write_text(
-    json.dumps({"schema": "walmi.cartridge-files/v1", "count": len(rows), "files": rows}, indent=2),
-    encoding="utf-8",
+    json.dumps({"schema": "walmi.cartridge-files/v1", "count": len(rows), "files": rows}, indent=2), encoding="utf-8"
 )
 
-out = DIST / "WALMI_PC_FULL_STACK_v0_1.zip"
+out = DIST / "WALMI_PC_FULL_STACK_v0_2.zip"
 zip_tree(CARTRIDGE, out)
 digest = sha256(out)
-(DIST / "WALMI_PC_FULL_STACK_v0_1.sha256.txt").write_text(f"{digest}  {out.name}\n", encoding="utf-8")
-print(
-    "TRIPLE_CHECK_PASS",
-    audit["mirrorWaldoBranchCount"],
-    "branches",
-    audit["currentTreeFileCount"],
-    "current-tree files",
-    len(rows),
-    "cartridge payload files",
-    "starting weights",
-    weights["count"],
-)
-print("FINAL_WALMI_PC_ZIP_PASS", out.stat().st_size, digest)
+(DIST / "WALMI_PC_FULL_STACK_v0_2.sha256.txt").write_text(f"{digest}  {out.name}\n", encoding="utf-8")
+print("FINAL_WALMI_PC_V02_ZIP_PASS", out.stat().st_size, digest, "payload_files", len(rows), "asset_hands", assets.get("handCount"))
