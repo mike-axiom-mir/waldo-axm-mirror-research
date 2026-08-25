@@ -1,0 +1,402 @@
+name: WALMI PC full stack package
+
+on:
+  push:
+    branches:
+      - axm/walmi-pc-full-stack-package-v0.1
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2025
+    timeout-minutes: 90
+    steps:
+      - name: Checkout package branch with full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch every experiment branch
+        shell: pwsh
+        run: |
+          git fetch origin '+refs/heads/*:refs/remotes/origin/*' --force
+          New-Item -ItemType Directory -Force dist, dist/inventory, dist/history, dist/source, dist/cartridge/runtime/go, dist/cartridge/runtime, dist/cartridge/native/windows, dist/host/bin, dist/host/runtime, dist/host/models, dist/host/checkpoints, dist/host/experience, dist/host/rollback, dist/host/state | Out-Null
+          git for-each-ref --format='%(refname:short) %(objectname)' refs/remotes/origin/axm/mirror-waldo* | Out-File -Encoding utf8 dist/inventory/MIRROR_WALDO_BRANCHES.txt
+          git ls-tree -r --name-only c6011afbb456b8fe1e6c7c6eda7857aec681cb8f | Out-File -Encoding utf8 dist/inventory/CURRENT_STACK_FILES.txt
+
+      - name: Triple-check experiment branch ladder
+        shell: python
+        run: |
+          import json, subprocess, pathlib, re, sys
+          out = subprocess.check_output(['git','for-each-ref','--format=%(refname:short) %(objectname)','refs/remotes/origin/axm/mirror-waldo*'], text=True)
+          refs = {}
+          for line in out.splitlines():
+              if not line.strip(): continue
+              name, sha = line.split(None,1)
+              refs[name.replace('origin/','',1)] = sha.strip()
+          required = [
+            'axm/mirror-waldo-experiment-v0.1',
+            'axm/mirror-waldo-experiment-v0.24',
+            'axm/mirror-waldo-experiment-v0.25-live-coupled-ab',
+            'axm/mirror-waldo-experiment-v0.35-live-neural-grounding-runtime',
+            'axm/mirror-waldo-experiment-v0.36-real-model-ab',
+            'axm/mirror-waldo-experiment-v0.38-visible-experience-spine',
+            'axm/mirror-waldo-experiment-v0.42-creation-fabric-direct',
+            'axm/mirror-waldo-experiment-v0.42-creation-fabric-sensory-bridge',
+            'axm/mirror-waldo-experiment-v0.43-portable-capability-growth',
+            'axm/mirror-waldo-experiment-v0.45-specialist-substrate',
+            'axm/mirror-waldo-experiment-v0.46-portable-continuation-capsule',
+            'axm/mirror-waldo-experiment-v0.47-gap-detection',
+            'axm/mirror-waldo-experiment-v0.48-evidence-routing',
+            'axm/mirror-waldo-experiment-v0.49-ephemeral-vision-buffer',
+            'axm/mirror-waldo-experiment-v0.50-visible-planning-roadmap',
+            'axm/mirror-waldo-experiment-v0.51-ephemeral-specialist-pools',
+            'axm/mirror-waldo-experiment-v0.51-website-creation-loop',
+            'axm/mirror-waldo-experiment-v0.52-neural-connection-sockets',
+            'axm/mirror-waldo-experiment-v0.53-determinization-steward',
+            'axm/mirror-waldo-experiment-v0.54-workshop-capability-intake',
+            'axm/mirror-waldo-service-modes-sidecar-v0.54',
+            'axm/mirror-waldo-capability-intake-pr68-sidecar'
+          ]
+          missing=[x for x in required if x not in refs]
+          # Verify the numbered ladder has at least one branch for every 0.1..0.54 step.
+          missing_versions=[]
+          for n in range(1,55):
+              prefix=f'axm/mirror-waldo-experiment-v0.{n}'
+              if not any(k==prefix or k.startswith(prefix+'-') for k in refs):
+                  missing_versions.append(f'v0.{n}')
+          audit={
+            'schema':'walmi.pc-experiment-stack-audit/v1',
+            'baseCommit':'c6011afbb456b8fe1e6c7c6eda7857aec681cb8f',
+            'mirrorWaldoBranchCount':len(refs),
+            'requiredCriticalBranches':required,
+            'missingCriticalBranches':missing,
+            'missingVersionSteps':missing_versions,
+            'allCriticalPresent':not missing and not missing_versions,
+            'branches':refs
+          }
+          pathlib.Path('dist/inventory/EXPERIMENT_STACK_AUDIT.json').write_text(json.dumps(audit,indent=2),encoding='utf-8')
+          if missing or missing_versions:
+              print(json.dumps(audit,indent=2))
+              sys.exit('experiment stack audit failed')
+          print('experiment stack audit PASS:', len(refs), 'branches; v0.1..v0.54 covered')
+
+      - name: Archive exact current stack and all experiment history
+        shell: pwsh
+        run: |
+          git archive --format=zip --output=dist/source/WALMI_CURRENT_STACK_c6011af.zip c6011afbb456b8fe1e6c7c6eda7857aec681cb8f
+          git bundle create dist/history/WALDO_ALL_EXPERIMENTS.bundle --all
+          git bundle verify dist/history/WALDO_ALL_EXPERIMENTS.bundle
+
+      - name: Scan repository for trained model weights
+        shell: python
+        run: |
+          import json, pathlib, subprocess, re
+          names=subprocess.check_output(['git','ls-tree','-r','--name-only','c6011afbb456b8fe1e6c7c6eda7857aec681cb8f'],text=True).splitlines()
+          exts={'.safetensors','.pt','.pth','.ckpt','.gguf','.onnx','.npz'}
+          weights=[p for p in names if pathlib.PurePosixPath(p).suffix.lower() in exts]
+          receipt={
+            'schema':'walmi.model-weight-scan/v1',
+            'commit':'c6011afbb456b8fe1e6c7c6eda7857aec681cb8f',
+            'recognizedWeightFiles':weights,
+            'count':len(weights),
+            'startingWeightsBundled':bool(weights),
+            'note':'No starting weights are fabricated. The full model/training/inference source and runtime are packaged regardless.'
+          }
+          pathlib.Path('dist/inventory/MODEL_WEIGHT_SCAN.json').write_text(json.dumps(receipt,indent=2),encoding='utf-8')
+          print(json.dumps(receipt,indent=2))
+
+      - name: Install Go and Python build runtimes
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Verify unmodified cumulative stack before PC patch
+        shell: pwsh
+        run: |
+          go version
+          go test ./internal/axmmirror
+          go test ./internal/model
+          go test ./internal/training
+          go test ./internal/inference
+
+      - name: Apply Windows-only runtime compatibility patch in build workspace
+        shell: python
+        run: |
+          from pathlib import Path
+          # This package-side patch is not merged into the research checkpoint.
+          p=Path('internal/training/pytorch.go')
+          s=p.read_text(encoding='utf-8')
+          old='if hostOS != "linux" {\n\t\treturn Selection{}, fmt.Errorf("PyTorch training currently requires Linux; this host is %s/%s", hostOS, hostArch)\n\t}'
+          new='if hostOS != "linux" && hostOS != "windows" {\n\t\treturn Selection{}, fmt.Errorf("PyTorch training currently requires Linux or Windows; this host is %s/%s", hostOS, hostArch)\n\t}'
+          if old not in s: raise SystemExit('PyTorch platform gate pattern not found')
+          p.write_text(s.replace(old,new,1),encoding='utf-8')
+
+          p=Path('internal/training/environment.go')
+          s=p.read_text(encoding='utf-8')
+          old='\tcase "linux":\n\t\tfor _, candidate := range []struct {'
+          new='\tcase "windows":\n\t\tinstallation, err := resolver.probe()(ctx, resolver.candidates(), "torch", "torch")\n\t\tif err == nil { return BackendPyTorch, &installation, nil }\n\t\tif !errors.Is(err, errPythonPackageNotFound) { return "", nil, fmt.Errorf("probe PyTorch: %w", err) }\n\t\treturn "", nil, fmt.Errorf("model.backend=auto found no usable bundled PyTorch runtime on Windows")\n\tcase "linux":\n\t\tfor _, candidate := range []struct {'
+          if old not in s: raise SystemExit('automatic backend switch pattern not found')
+          p.write_text(s.replace(old,new,1),encoding='utf-8')
+
+          p=Path('internal/training/python_worker.go')
+          s=p.read_text(encoding='utf-8')
+          s=s.replace('\n\t"syscall"','')
+          start=s.index('func terminateWorkerGroup(command *exec.Cmd) string {')
+          end=s.index('\n}\n\nfunc writeStoppedByWorkerExit',start)+2
+          replacement='func terminateWorkerGroup(command *exec.Cmd) string {\n\tif command.Process == nil { return "left running" }\n\tif err := command.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) { return fmt.Sprintf("could not be killed: %v", err) }\n\treturn "killed"\n}'
+          s=s[:start]+replacement+s[end:]
+          s=s.replace('return errors.Is(err, os.ErrClosed) || errors.Is(err, io.ErrClosedPipe) || errors.Is(err, syscall.EPIPE)','return errors.Is(err, os.ErrClosed) || errors.Is(err, io.ErrClosedPipe)')
+          s=s.replace('\n\tif command.SysProcAttr == nil {\n\t\tcommand.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}\n\t}','')
+          p.write_text(s,encoding='utf-8')
+
+          Path('dist/inventory/WINDOWS_RUNTIME_PATCH_RECEIPT.json').write_text('''{
+            "schema":"walmi.windows-runtime-patch/v1",
+            "baseCommit":"c6011afbb456b8fe1e6c7c6eda7857aec681cb8f",
+            "scope":"PACKAGE_BUILD_ONLY_NOT_MERGED",
+            "changes":[
+              "allow PyTorch resolver on Windows",
+              "select PyTorch for model.backend=auto on Windows",
+              "replace Unix process-group kill with portable Process.Kill in packaged runtime"
+            ]
+          }''',encoding='utf-8')
+
+      - name: Add Windows runtime compatibility tests
+        shell: pwsh
+        run: |
+          @'
+          package training
+          import (
+            "context"
+            "encoding/json"
+            "testing"
+          )
+          func TestWALMIPackagePyTorchResolverAllowsWindows(t *testing.T) {
+            architecture := json.RawMessage(`{"family":"decoder-transformer","vocabulary_size":259,"tokenizer":{"name":"byte","revision":"builtin-byte-schema-1"}}`)
+            r := PyTorchResolver{OS:"windows",Arch:"amd64",Candidates:[]string{"python"},Probe:func(context.Context,string)(pyTorchProbe,error){
+              return pyTorchProbe{PythonVersion:"3.12",TorchVersion:"package",Device:"cpu",Manufacturer:"CPU",Accelerator:"x64"},nil
+            }}
+            s,err:=r.Resolve(context.Background(),ResolveRequest{Architecture:architecture})
+            if err!=nil { t.Fatal(err) }
+            if s.Execution.Host.OS!="windows" { t.Fatalf("host=%+v",s.Execution.Host) }
+          }
+          '@ | Set-Content -Encoding utf8 internal/training/walmi_windows_package_test.go
+
+      - name: Verify patched Windows training and inference code
+        shell: pwsh
+        run: |
+          gofmt -w internal/training/pytorch.go internal/training/environment.go internal/training/python_worker.go internal/training/walmi_windows_package_test.go
+          go test ./internal/training
+          go test ./internal/inference
+          go test ./internal/model
+          go test ./internal/axmmirror
+
+      - name: Build Windows native WALMI executables
+        shell: pwsh
+        run: |
+          go build -trimpath -ldflags='-s -w' -o dist/host/bin/waldo.exe ./cmd/waldo
+          go build -trimpath -ldflags='-s -w' -o dist/host/bin/waldo-axm-mirror.exe ./cmd/waldo-axm-mirror
+          go build -trimpath -ldflags='-s -w' -o dist/host/bin/waldo-mirror-review.exe ./cmd/waldo-mirror-review
+          dist/host/bin/waldo.exe --help | Out-File -Encoding utf8 dist/inventory/WALDO_WINDOWS_HELP.txt
+
+      - name: Bundle portable Python plus CPU PyTorch
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu torch
+          python - <<'PY'
+          import sys, pathlib, shutil
+          src=pathlib.Path(sys.prefix)
+          dst=pathlib.Path('dist/host/runtime/python')
+          shutil.copytree(src,dst,dirs_exist_ok=True)
+          print('copied Python',src,'to',dst)
+          PY
+          dist/host/runtime/python/python.exe -c "import torch,platform; print('WALMI portable Python',platform.python_version(),'PyTorch',torch.__version__,'CPU tensor',torch.tensor([1.0]).sum().item())"
+
+      - name: Add portable host launchers and state layout
+        shell: pwsh
+        run: |
+          @'
+          @echo off
+          setlocal
+          cd /d "%~dp0"
+          set "PATH=%CD%\runtime\python;%CD%\runtime\python\Scripts;%PATH%"
+          set "PYTHONHOME=%CD%\runtime\python"
+          set "WALMI_HOME=%CD%"
+          echo WALMI PC FULL STACK
+          echo Local runtime loaded. No Go or Python installation is required.
+          echo.
+          bin\waldo.exe advisor WALMI
+          if errorlevel 1 (
+            echo.
+            echo WALDO advisor exited. Opening local WALMI command shell.
+            echo Try: bin\waldo.exe --help
+            echo Mirror: bin\waldo.exe mirror --help
+            cmd /k
+          )
+          '@ | Set-Content -Encoding ascii dist/host/START_WALMI_PC.cmd
+          @'
+          @echo off
+          setlocal
+          cd /d "%~dp0"
+          set "PATH=%CD%\runtime\python;%CD%\runtime\python\Scripts;%PATH%"
+          set "PYTHONHOME=%CD%\runtime\python"
+          cmd /k "echo WALMI local shell ready. Try bin\waldo.exe --help"
+          '@ | Set-Content -Encoding ascii dist/host/WALMI_LOCAL_SHELL.cmd
+          @'
+          WALMI PC FULL STACK v0.1
+
+          Start with START_WALMI_PC.cmd.
+
+          Included locally:
+          - WALDO CLI and model lifecycle
+          - AXM Mirror executable
+          - Mirror review executable
+          - model / training / inference packages
+          - portable Python 3.12 runtime
+          - CPU PyTorch runtime
+          - writable models, checkpoints, experience, rollback and state folders
+
+          The source checkpoint did not contain a pretrained weight artifact if MODEL_WEIGHT_SCAN.json says count=0.
+          In that case WALMI must create/train a model before neural chat can produce real learned output.
+          No starting weights are fabricated by this package.
+          '@ | Set-Content -Encoding utf8 dist/host/README_FIRST.txt
+          Copy-Item dist/inventory/MODEL_WEIGHT_SCAN.json dist/host/
+          Copy-Item dist/inventory/WINDOWS_RUNTIME_PATCH_RECEIPT.json dist/host/
+          Copy-Item LICENSE,NOTICE dist/host/
+
+      - name: Verify native host bundle
+        shell: pwsh
+        run: |
+          dist/host/runtime/python/python.exe -c "import torch; assert torch.tensor([2.0]).sum().item()==2.0"
+          dist/host/bin/waldo.exe --version
+          dist/host/bin/waldo.exe mirror --help | Out-Null
+          dist/host/bin/waldo-axm-mirror.exe 2>$null
+          if ($LASTEXITCODE -ne 2) { throw "waldo-axm-mirror usage probe returned $LASTEXITCODE" }
+
+      - name: Package native Windows host
+        shell: python
+        run: |
+          from pathlib import Path
+          import zipfile
+          root=Path('dist/host')
+          out=Path('dist/cartridge/native/windows/WALMI_WINDOWS_FULL_HOST_v0_1.zip')
+          with zipfile.ZipFile(out,'w',compression=zipfile.ZIP_DEFLATED,compresslevel=6,allowZip64=True) as z:
+              for p in sorted(x for x in root.rglob('*') if x.is_file()):
+                  z.write(p,p.relative_to(root).as_posix())
+          print(out,out.stat().st_size)
+
+      - name: Build browser fallback from same package branch
+        shell: pwsh
+        run: |
+          $env:GOOS='js'; $env:GOARCH='wasm'
+          go build -trimpath -ldflags='-s -w' -o dist/cartridge/runtime/go/walmi-axm-mirror.wasm ./cmd/walmi-browser-wasm
+          Remove-Item Env:GOOS; Remove-Item Env:GOARCH
+          $wasmExec=(Get-ChildItem (go env GOROOT) -Recurse -Filter wasm_exec.js | Select-Object -First 1).FullName
+          if (-not $wasmExec) { throw 'wasm_exec.js not found' }
+          Copy-Item $wasmExec dist/cartridge/runtime/go/wasm_exec.js
+          Copy-Item portable/walmi-browser-cartridge/runtime/browser-entry.js dist/cartridge/runtime/browser-entry.js
+
+      - name: Copy audit, source and full history into cartridge
+        shell: pwsh
+        run: |
+          Copy-Item -Recurse dist/inventory dist/cartridge/inventory
+          Copy-Item -Recurse dist/source dist/cartridge/source
+          Copy-Item -Recurse dist/history dist/cartridge/history
+          Copy-Item LICENSE,NOTICE dist/cartridge/
+
+      - name: Write WALMI PC cartridge manifest
+        shell: python
+        run: |
+          import json, pathlib, hashlib
+          root=pathlib.Path('dist/cartridge')
+          def sha(p):
+              h=hashlib.sha256()
+              with open(p,'rb') as f:
+                  for b in iter(lambda:f.read(1024*1024),b''): h.update(b)
+              return h.hexdigest()
+          weight=json.loads((root/'inventory/MODEL_WEIGHT_SCAN.json').read_text())
+          native=root/'native/windows/WALMI_WINDOWS_FULL_HOST_v0_1.zip'
+          manifest={
+            'schema':'walmi.cartridge/v1',
+            'name':'WALMI-PC-FULL-STACK',
+            'version':'0.1.0',
+            'browserEntry':'runtime/browser-entry.js',
+            'source':{
+              'repository':'mike-axiom-mir/waldo-axm-mirror-research',
+              'walmiBaseCommit':'c6011afbb456b8fe1e6c7c6eda7857aec681cb8f',
+              'currentStackArchive':'source/WALMI_CURRENT_STACK_c6011af.zip',
+              'allExperimentHistory':'history/WALDO_ALL_EXPERIMENTS.bundle'
+            },
+            'stack':['MIRROR','WALDO','HERMES','EPHEMERAL_SPECIALISTS','NEURAL_SOCKETS','DETERMINIZATION_STEWARD','WORKSHOP_CAPABILITY_INTAKE','SERVICE_MODES','PR67_OBJECT_ADAPTER','PR68_RECORD_QUERY'],
+            'nativeHosts':[
+              {'platform':'windows','arch':'x64','label':'WALMI Windows Full Host','path':'native/windows/WALMI_WINDOWS_FULL_HOST_v0_1.zip','fileName':'WALMI_WINDOWS_FULL_HOST_v0_1.zip','sha256':sha(native)}
+            ],
+            'runtime':{
+              'go':{'target':'js/wasm','wasm':'runtime/go/walmi-axm-mirror.wasm','exec':'runtime/go/wasm_exec.js','targetNeedsGoInstalled':False},
+              'windows':{'portablePython':True,'portablePyTorchCPU':True,'targetNeedsPythonInstalled':False,'trainingAndInferenceCodeBundled':True},
+              'neural':{'startingWeightsBundled':weight['startingWeightsBundled'],'weightFiles':weight['recognizedWeightFiles'],'internetFallback':False}
+            },
+            'experienceExport':True,
+            'rollbackStorage':True,
+            'offlineRequired':True,
+            'authority':'NONE'
+          }
+          (root/'walmi.manifest.json').write_text(json.dumps(manifest,indent=2),encoding='utf-8')
+          (root/'README_FIRST.txt').write_text('WALMI PC FULL STACK v0.1\n\nUse the single WALMI HTML launcher. On Windows choose FULL STRENGTH; it extracts WALMI_WINDOWS_FULL_HOST_v0_1.zip from this cartridge. Extract that ZIP and run START_WALMI_PC.cmd.\n\nSee inventory/EXPERIMENT_STACK_AUDIT.json for branch coverage and inventory/MODEL_WEIGHT_SCAN.json for the exact starting-weight truth.\n',encoding='utf-8')
+
+      - name: Generate file hashes and final completeness audit
+        shell: python
+        run: |
+          from pathlib import Path
+          import hashlib,json,zipfile,sys
+          root=Path('dist/cartridge')
+          rows=[]
+          for p in sorted(x for x in root.rglob('*') if x.is_file()):
+              h=hashlib.sha256(p.read_bytes()).hexdigest()
+              rows.append({'path':p.relative_to(root).as_posix(),'bytes':p.stat().st_size,'sha256':h})
+          (root/'inventory/CARTRIDGE_FILE_MANIFEST.json').write_text(json.dumps({'schema':'walmi.cartridge-files/v1','count':len(rows),'files':rows},indent=2),encoding='utf-8')
+          required=[
+            'walmi.manifest.json','runtime/browser-entry.js','runtime/go/walmi-axm-mirror.wasm','runtime/go/wasm_exec.js',
+            'native/windows/WALMI_WINDOWS_FULL_HOST_v0_1.zip','source/WALMI_CURRENT_STACK_c6011af.zip','history/WALDO_ALL_EXPERIMENTS.bundle',
+            'inventory/EXPERIMENT_STACK_AUDIT.json','inventory/MODEL_WEIGHT_SCAN.json','inventory/WINDOWS_RUNTIME_PATCH_RECEIPT.json'
+          ]
+          missing=[p for p in required if not (root/p).is_file()]
+          audit=json.loads((root/'inventory/EXPERIMENT_STACK_AUDIT.json').read_text())
+          if missing or not audit['allCriticalPresent']:
+              raise SystemExit(f'final audit failed missing={missing}')
+          print('FINAL COMPLETENESS AUDIT PASS',len(rows),'cartridge files')
+
+      - name: Create final WALMI PC ZIP and integrity test
+        shell: python
+        run: |
+          from pathlib import Path
+          import zipfile,hashlib
+          root=Path('dist/cartridge')
+          out=Path('dist/WALMI_PC_FULL_STACK_v0_1.zip')
+          with zipfile.ZipFile(out,'w',compression=zipfile.ZIP_DEFLATED,compresslevel=6,allowZip64=True) as z:
+              for p in sorted(x for x in root.rglob('*') if x.is_file()): z.write(p,p.relative_to(root).as_posix())
+          with zipfile.ZipFile(out) as z:
+              bad=z.testzip()
+              if bad: raise SystemExit('bad zip member: '+bad)
+          h=hashlib.sha256(out.read_bytes()).hexdigest()
+          Path('dist/WALMI_PC_FULL_STACK_v0_1.sha256.txt').write_text(h+'  '+out.name+'\n')
+          print(out,out.stat().st_size,h)
+
+      - name: Upload full PC cartridge
+        uses: actions/upload-artifact@v4
+        with:
+          name: WALMI-PC-FULL-STACK-v0-1
+          path: |
+            dist/WALMI_PC_FULL_STACK_v0_1.zip
+            dist/WALMI_PC_FULL_STACK_v0_1.sha256.txt
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
