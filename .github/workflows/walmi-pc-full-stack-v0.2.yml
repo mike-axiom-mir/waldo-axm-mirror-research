@@ -14,6 +14,10 @@ jobs:
   package-windows:
     runs-on: windows-2025
     timeout-minutes: 90
+    env:
+      GIT_CONFIG_COUNT: '1'
+      GIT_CONFIG_KEY_0: core.longpaths
+      GIT_CONFIG_VALUE_0: 'true'
     steps:
       - name: Checkout WALMI with full history
         uses: actions/checkout@v4
