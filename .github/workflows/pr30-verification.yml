@@ -1,0 +1,48 @@
+name: pr30-verification
+
+on:
+  push:
+    branches:
+      - axm/mirror-waldo-experiment-v0.51-website-creation-loop
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Capture formatting gap
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .pr30-verification/formatted
+          gofmt -l . | tee .pr30-verification/gofmt-before.txt
+          while IFS= read -r file; do
+            [ -n "$file" ] || continue
+            gofmt -w "$file"
+            mkdir -p ".pr30-verification/formatted/$(dirname "$file")"
+            cp "$file" ".pr30-verification/formatted/$file"
+          done < .pr30-verification/gofmt-before.txt
+          git diff -- . ':(exclude).github/workflows/pr30-verification.yml' > .pr30-verification/gofmt.patch
+          printf 'source_head=%s\n' "$GITHUB_SHA" > .pr30-verification/context.txt
+      - name: Run complete repository suite
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          ./testing/all.sh 2>&1 | tee .pr30-verification/all.log
+          status=${PIPESTATUS[0]}
+          printf '%s\n' "$status" > .pr30-verification/all-exit-status.txt
+          exit "$status"
+      - name: Preserve verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr30-verification-evidence
+          path: .pr30-verification
+          if-no-files-found: error
+          retention-days: 7
