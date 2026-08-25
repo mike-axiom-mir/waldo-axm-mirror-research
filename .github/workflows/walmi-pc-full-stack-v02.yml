@@ -29,7 +29,7 @@ jobs:
           go test ./internal/axmmirror -run 'TestCandidate|TestWorkspace' | tee GO_TEST_WORKSPACE_HAND.txt
           go test ./internal/cli -run '^$' | tee GO_TEST_CLI_COMPILE.txt
           cat GO_TEST_WORKSPACE_HAND.txt GO_TEST_CLI_COMPILE.txt > GO_TEST_FOCUSED.txt
-          go list ./... | grep -v '/cmd/walmi-browser-wasm$' | xargs go test -skip '^TestIndexExportEndToEnd$' | tee GO_TEST_ALL.txt
+          go list -e ./... | grep -v '/cmd/walmi-browser-wasm$' | xargs go test -skip '^TestIndexExportEndToEnd$' | tee GO_TEST_ALL.txt
           GOOS=js GOARCH=wasm go build -o WALMI_BROWSER_TEST.wasm ./cmd/walmi-browser-wasm
           printf 'PASS: GOOS=js GOARCH=wasm go build ./cmd/walmi-browser-wasm\n' | tee GO_TEST_WASM.txt
           cat > KNOWN_UNRELATED_TEST_EXCEPTION.txt <<'EOF'
