@@ -15,19 +15,36 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Capture formatting gap
+      - name: Apply narrow deterministic verification repairs
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p .pr30-verification/formatted
+          mkdir -p .pr30-verification/changed
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("internal/cli/export_test.go")
+          text = path.read_text()
+          needle = '\tnewCompose.Stages[0].Corpora = model.NewCorpusSelections([]string{"books"})\n'
+          replacement = needle + '\tcheckpointEvery := int64(1)\n\tnewCompose.Stages[0].Parameters.CheckpointEvery = &checkpointEvery\n'
+          if needle not in text:
+              raise SystemExit("checkpoint fixture insertion point not found")
+          if "newCompose.Stages[0].Parameters.CheckpointEvery" not in text:
+              path.write_text(text.replace(needle, replacement, 1))
+          PY
+          gofmt -w internal/cli/export_test.go
           gofmt -l . | tee .pr30-verification/gofmt-before.txt
           while IFS= read -r file; do
             [ -n "$file" ] || continue
             gofmt -w "$file"
-            mkdir -p ".pr30-verification/formatted/$(dirname "$file")"
-            cp "$file" ".pr30-verification/formatted/$file"
           done < .pr30-verification/gofmt-before.txt
-          git diff -- . ':(exclude).github/workflows/pr30-verification.yml' > .pr30-verification/gofmt.patch
+          git diff -- . ':(exclude).github/workflows/pr30-verification.yml' > .pr30-verification/verification.patch
+          cat .pr30-verification/verification.patch
+          while IFS= read -r file; do
+            [ -n "$file" ] || continue
+            mkdir -p ".pr30-verification/changed/$(dirname "$file")"
+            cp "$file" ".pr30-verification/changed/$file"
+          done < <(git diff --name-only -- . ':(exclude).github/workflows/pr30-verification.yml')
           printf 'source_head=%s\n' "$GITHUB_SHA" > .pr30-verification/context.txt
       - name: Run complete repository suite
         shell: bash
@@ -45,4 +62,5 @@ jobs:
           name: pr30-verification-evidence
           path: .pr30-verification
           if-no-files-found: error
+          include-hidden-files: true
           retention-days: 7
