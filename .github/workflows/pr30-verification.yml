@@ -15,7 +15,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Apply narrow deterministic diagnostic patch
+      - name: Apply narrow lifecycle-race candidate repair
         shell: bash
         run: |
           set -euo pipefail
@@ -23,26 +23,28 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
-          path = Path("internal/cli/export_test.go")
+          path = Path("internal/cli/advisor.go")
           text = path.read_text()
-          needle = '\tnewCompose.Stages[0].Corpora = model.NewCorpusSelections([]string{"books"})\n'
-          replacement = needle + '\tcheckpointEvery := int64(1)\n\tnewCompose.Stages[0].Parameters.CheckpointEvery = &checkpointEvery\n'
-          if needle not in text:
-              raise SystemExit("checkpoint fixture insertion point not found")
-          if "newCompose.Stages[0].Parameters.CheckpointEvery" not in text:
-              text = text.replace(needle, replacement, 1)
-          old = '\t\tt.Fatalf("fresh advisor chat = %s, err = %v", chat, err)\n'
-          new = '\t\tt.Fatalf("fresh advisor chat = %s, err = %v, stdout = %q, stderr = %q", chat, err, stdout.String(), stderr.String())\n'
+
+          old = "\t\tvar report model.Advice\n\t\tvar err error\n"
+          new = "\t\tvar report model.Advice\n\t\tvar buildHistory []advisorBuildSummary\n\t\tvar composeHistory []string\n\t\tvar err error\n"
           if old not in text:
-              raise SystemExit("fresh advisor assertion not found")
-          path.write_text(text.replace(old, new, 1))
+              raise SystemExit("monitor declaration insertion point not found")
+          text = text.replace(old, new, 1)
+
+          old = "\t\t\treport, err = currentAdvisorEvidence(monitor.root, monitor.name)\n\t\t\tif err == nil {\n\t\t\t\tbreak\n\t\t\t}\n"
+          new = "\t\t\treport, err = currentAdvisorEvidence(monitor.root, monitor.name)\n\t\t\tif err == nil {\n\t\t\t\tbuildHistory, composeHistory, err = currentAdvisorBuildHistory(monitor.root, monitor.name)\n\t\t\t}\n\t\t\tif err == nil {\n\t\t\t\tbreak\n\t\t\t}\n"
+          if old not in text:
+              raise SystemExit("monitor retry body not found")
+          text = text.replace(old, new, 1)
+
+          old = "\t\tbuildHistory, composeHistory, err := currentAdvisorBuildHistory(monitor.root, monitor.name)\n\t\tif err != nil {\n\t\t\tfmt.Fprintf(monitor.warnings, \"warning: advisor checkpoint monitor: %v\\n\", err)\n\t\t\tcontinue\n\t\t}\n"
+          if old not in text:
+              raise SystemExit("unretried build-history block not found")
+          text = text.replace(old, "", 1)
+          path.write_text(text)
           PY
-          gofmt -w internal/cli/export_test.go
-          gofmt -l . | tee .pr30-verification/gofmt-before.txt
-          while IFS= read -r file; do
-            [ -n "$file" ] || continue
-            gofmt -w "$file"
-          done < .pr30-verification/gofmt-before.txt
+          gofmt -w internal/cli/advisor.go internal/axmmirror/experience_training_review.go
           git diff -- . ':(exclude).github/workflows/pr30-verification.yml' > .pr30-verification/verification.patch
           cat .pr30-verification/verification.patch
           while IFS= read -r file; do
@@ -51,21 +53,24 @@ jobs:
             cp "$file" ".pr30-verification/changed/$file"
           done < <(git diff --name-only -- . ':(exclude).github/workflows/pr30-verification.yml')
           printf 'source_head=%s\n' "$GITHUB_SHA" > .pr30-verification/context.txt
-      - name: Inventory mutable CLI test state
-        shell: bash
-        run: |
-          set -euo pipefail
-          grep -R -n -E 'modelAdvisor(Ask|Input|Terminal)|terminalOutputWidth|os\.Chdir|t\.Parallel\(\)' internal/cli/*_test.go \
-            | tee .pr30-verification/global-test-state.txt || true
-          go test ./internal/cli -list . | tee .pr30-verification/test-list.txt
-      - name: Run complete CLI package with ordering evidence
+          test -z "$(gofmt -l .)"
+      - name: Stress complete CLI package
         shell: bash
         run: |
           set +e
           set -o pipefail
-          go test ./internal/cli -count=1 -v 2>&1 | tee .pr30-verification/cli-all.log
+          go test ./internal/cli -count=10 2>&1 | tee .pr30-verification/cli-stress.log
           status=${PIPESTATUS[0]}
-          printf '%s\n' "$status" > .pr30-verification/cli-all-exit-status.txt
+          printf '%s\n' "$status" > .pr30-verification/cli-stress-exit-status.txt
+          exit "$status"
+      - name: Run complete repository suite
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          ./testing/all.sh 2>&1 | tee .pr30-verification/all.log
+          status=${PIPESTATUS[0]}
+          printf '%s\n' "$status" > .pr30-verification/all-exit-status.txt
           exit "$status"
       - name: Preserve verification evidence
         if: always()
