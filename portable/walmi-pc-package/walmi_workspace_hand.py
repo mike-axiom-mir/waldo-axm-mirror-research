@@ -53,7 +53,7 @@ def rel_path(value: str, *, allow_root: bool = False) -> str:
     if value.startswith("/"):
         raise ValueError("workspace path must be relative")
     parts = value.split("/")
-    if any(part in ("", ".", "..", ".git") for part in parts):
+    if any(part in ("", ".", "..") or part.casefold() == ".git" for part in parts):
         raise ValueError("workspace path contains a refused segment")
     return "/".join(parts)
 
@@ -105,9 +105,9 @@ def preflight(root: Path, write: dict) -> tuple[dict, list[dict]]:
             raise ValueError(f"operation {index} must be an object")
         action = str(raw.get("action", "")).strip().lower()
         relative = rel_path(str(raw.get("path", "")))
-        if relative in seen:
+        if relative.casefold() in seen:
             raise ValueError(f"duplicate workspace path {relative!r}")
-        seen.add(relative)
+        seen.add(relative.casefold())
         path = target(root, relative)
         exists = path.exists()
         if exists and (path.is_symlink() or not path.is_file()):
@@ -225,10 +225,12 @@ def execute(root: Path, request: dict) -> dict:
         rows, truncated = [], False
         for current, dirs, files in os.walk(start, topdown=True, followlinks=False):
             current_path = Path(current)
-            dirs[:] = sorted(d for d in dirs if d != ".git" and not (current_path / d).is_symlink())
+            dirs[:] = sorted(d for d in dirs if d.casefold() != ".git" and not (current_path / d).is_symlink())
             for name, kind in [(d, "directory") for d in dirs] + [(f, "file") for f in sorted(files) if not (current_path / f).is_symlink()]:
                 path = current_path / name
                 relative = path.relative_to(root).as_posix()
+                if any(part.casefold() == ".git" for part in relative.split("/")):
+                    continue
                 if len(rows) >= limit:
                     truncated = True
                     break
