@@ -1,4 +1,22 @@
-# WALDO
+# WALDO — AXM/Mirror Research Fork
+
+[![Apache License 2.0](https://img.shields.io/badge/license-Apache--2.0-3b82f6)](LICENSE) ![Status experimental](https://img.shields.io/badge/status-experimental-f59e0b) ![Research fork](https://img.shields.io/badge/repository-research%20fork-8b5cf6)
+
+This repository is an experimental AXM/Mirror research fork of [OpenWALDO](https://github.com/openwaldo/waldo). It explores inspectable AI development through model and dataset provenance, behavioural evidence, dissent preservation, permission boundaries, portable experience, and user-owned local operation.
+
+It is not affiliated with or endorsed by the OpenWALDO maintainers.
+
+## Current truth
+
+- `main` still preserves the upstream WALDO foundation described below.
+- AXM/Mirror experiments remain separated in reviewable draft pull requests; they are not silently presented as merged or CANON.
+- The latest visible cumulative research lane is [PR #30 — WALDO v0.51 website creation experience loop](https://github.com/mike-axiom-mir/waldo-axm-mirror-research/pull/30).
+- This repository makes no blanket claim of intelligence, safety, autonomy, or production readiness.
+- Private experience, personal saves, model weights, secrets, and local continuity do not belong in the public repository.
+
+Explore the wider family in the [AXM Public Project Map](https://github.com/mike-axiom-mir/axm-collaboration-platform/blob/main/docs/PUBLIC_PROJECTS.md).
+
+## Upstream WALDO foundation
 
 WALDO is a command-line tool for building auditable AI training datasets and
 models. It connects a Git-governed corpus index, content-addressed Parquet
