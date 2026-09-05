@@ -105,6 +105,23 @@ symlink and `PATH` change. Run `hash -r` or start a new login shell when that
 happens. The explicit `/usr/bin/python3.11 -m pip` form always bypasses that
 shell lookup.
 
+When installing nightly TorchTitan, its wheel comes from the PyTorch nightly
+index but several dependencies come from PyPI. Using only `--index-url` hides
+PyPI and produces misleading `ResolutionImpossible` errors for packages such
+as `grain`, `torch-checkpointing`, and `tyro`. Keep the nightly index as the
+primary index, add PyPI as an extra index, and pin the intended nightly build:
+
+```console
+python3 -m pip install --user --pre \
+  'torchtitan==VERSION_FROM_THE_NIGHTLY_INDEX' \
+  --index-url https://download.pytorch.org/whl/nightly/cu130 \
+  --extra-index-url https://pypi.org/simple
+```
+
+Replace `VERSION_FROM_THE_NIGHTLY_INDEX` with the complete version shown by
+pip, including its `+cu130` suffix. Pinning matters because pip otherwise
+considers packages from both indexes and may select the stable PyPI release.
+
 Verify locally and through non-interactive SSH before starting WALDO:
 
 ```console

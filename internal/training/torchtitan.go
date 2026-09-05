@@ -373,10 +373,18 @@ TorchTitan requires Python 3.11 or newer.
 %s
 
 If python3 still reports an older cached interpreter, run `+"`hash -r`"+` or
-start a new login shell. Install PyTorch and TorchTitan with `+"`python3 -m pip`"+`
-using the commands for this GPU from:
+start a new login shell. Install PyTorch with `+"`python3 -m pip`"+` using the
+command for this GPU from:
   https://pytorch.org/get-started/locally/
+
+Then install TorchTitan using:
   https://github.com/pytorch/torchtitan#installation
+
+For a nightly TorchTitan build, keep the PyTorch nightly index and add
+`+"`--extra-index-url https://pypi.org/simple`"+`. The extra index is required
+for general Python dependencies such as grain, torch-checkpointing, and tyro.
+Pin the desired TorchTitan nightly version so pip cannot select the stable
+PyPI build instead.
 
 Verify before retrying WALDO:
   python3 -c 'import torch, torchtitan; print(torch.__version__, torch.cuda.is_available(), torch.cuda.device_count(), torch.distributed.is_nccl_available())'`, distribution, prerequisite)
