@@ -86,6 +86,25 @@ Run the PyTorch-selector and TorchTitan installation commands with
 The exact PyTorch command is intentionally not copied into this guide because
 it depends on the current supported Python, CUDA, and GPU combination.
 
+To install for the current user without a virtual environment on Rocky Linux,
+use Python 3.11 explicitly:
+
+```console
+sudo dnf install -y python3.11 python3.11-pip openssh-clients openssh-server
+mkdir -p "$HOME/.local/bin"
+ln -sfn /usr/bin/python3.11 "$HOME/.local/bin/python3"
+export PATH="$HOME/.local/bin:$PATH"
+hash -r
+python3 --version
+python3 -m pip install --user --upgrade pip setuptools wheel
+```
+
+`python3 --version` must report 3.11 or newer before installing PyTorch or
+TorchTitan. Bash can retain the previous `/usr/bin/python3` lookup after the
+symlink and `PATH` change. Run `hash -r` or start a new login shell when that
+happens. The explicit `/usr/bin/python3.11 -m pip` form always bypasses that
+shell lookup.
+
 Verify locally and through non-interactive SSH before starting WALDO:
 
 ```console

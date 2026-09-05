@@ -53,6 +53,15 @@ func TestTorchTitanResolverFailsClosed(t *testing.T) {
 	}
 }
 
+func TestTorchTitanInstallGuidanceExplainsPythonResolution(t *testing.T) {
+	guidance := torchTitanInstallGuidance()
+	for _, expected := range []string{"Python 3.11", "hash -r", "python3 -m pip", "torch.cuda.is_available()", "torch.distributed.is_nccl_available()"} {
+		if !strings.Contains(guidance, expected) {
+			t.Fatalf("installation guidance omits %q: %s", expected, guidance)
+		}
+	}
+}
+
 func TestTorchTitanBackendLaunchesTorchrunThroughSharedProtocol(t *testing.T) {
 	worker := filepath.Join(t.TempDir(), "fake-python")
 	script := `#!/bin/sh

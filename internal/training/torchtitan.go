@@ -212,7 +212,7 @@ func (resolver TorchTitanResolver) Resolve(ctx context.Context, request ResolveR
 		if detail != "" {
 			detail = ": " + detail
 		}
-		return Selection{}, fmt.Errorf("no usable TorchTitan runtime found; install a matching TorchTitan and PyTorch build from https://github.com/pytorch/torchtitan#installation%s", detail)
+		return Selection{}, fmt.Errorf("no usable TorchTitan runtime found%s\n%s", detail, torchTitanInstallGuidance())
 	}
 	backend := backendForCluster(python, facts, resolver.Cluster, false)
 	nodes, localProcs := backend.Nodes, backend.LocalProcs
@@ -337,7 +337,7 @@ func InspectTorchTitanHost(ctx context.Context) (TorchTitanHost, error) {
 		if detail != "" {
 			detail = ": " + detail
 		}
-		return TorchTitanHost{}, fmt.Errorf("no usable TorchTitan runtime found; install a matching PyTorch and TorchTitan environment, then verify `python3 -c 'import torch, torchtitan; print(torch.__version__, torch.cuda.is_available())'`; see https://pytorch.org/get-started/locally/ and https://github.com/pytorch/torchtitan#installation%s", detail)
+		return TorchTitanHost{}, fmt.Errorf("no usable TorchTitan runtime found%s\n%s", detail, torchTitanInstallGuidance())
 	}
 	host := TorchTitanHost{
 		Python: python, PythonVersion: facts.PythonVersion, TorchVersion: facts.TorchVersion,
@@ -349,6 +349,37 @@ func InspectTorchTitanHost(ctx context.Context) (TorchTitanHost, error) {
 		})
 	}
 	return host, nil
+}
+
+func torchTitanInstallGuidance() string {
+	distribution := "Linux"
+	if data, err := os.ReadFile("/etc/os-release"); err == nil {
+		distribution = linuxDistribution(data)
+	}
+	prerequisite := "Install Python 3.11 or newer and pip using this host's package manager."
+	lower := strings.ToLower(distribution)
+	if strings.Contains(lower, "rocky") || strings.Contains(lower, "rhel") || strings.Contains(lower, "red hat") || strings.Contains(lower, "alma") || strings.Contains(lower, "centos") || strings.Contains(lower, "fedora") {
+		prerequisite = `Rocky/RHEL/Fedora user installation:
+  sudo dnf install -y python3.11 python3.11-pip openssh-clients openssh-server
+  mkdir -p "$HOME/.local/bin"
+  ln -sfn /usr/bin/python3.11 "$HOME/.local/bin/python3"
+  export PATH="$HOME/.local/bin:$PATH"
+  hash -r
+  python3 --version`
+	}
+	return fmt.Sprintf(`detected distribution: %s
+TorchTitan requires Python 3.11 or newer.
+
+%s
+
+If python3 still reports an older cached interpreter, run `+"`hash -r`"+` or
+start a new login shell. Install PyTorch and TorchTitan with `+"`python3 -m pip`"+`
+using the commands for this GPU from:
+  https://pytorch.org/get-started/locally/
+  https://github.com/pytorch/torchtitan#installation
+
+Verify before retrying WALDO:
+  python3 -c 'import torch, torchtitan; print(torch.__version__, torch.cuda.is_available(), torch.cuda.device_count(), torch.distributed.is_nccl_available())'`, distribution, prerequisite)
 }
 
 func resolveSecondaryTorchTitan(ctx context.Context, cluster Cluster) (TorchTitan, error) {
