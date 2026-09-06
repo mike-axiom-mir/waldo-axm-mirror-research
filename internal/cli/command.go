@@ -162,6 +162,12 @@ func newShardCommand(state *cobraState) *cobra.Command {
 
 func newLookasideCommand(state *cobraState) *cobra.Command {
 	command := group("lookaside", "Inspect and maintain content-addressed objects", "")
+	cache := group("cache", "Inspect and clean the local verified-object cache", "Cache cleanup protects objects referenced by running or resumable model runs unless --all is explicitly selected.")
+	cache.AddCommand(
+		leaf(state, "status", "Show cache size, limit, and protected objects", "Reports the configured cache and download-scratch locations plus objects protected by running or resumable model runs.", cobra.NoArgs, runLookasideStatus),
+		leaf(state, "clean", "Remove unused cached objects", "Removes verified cache objects not referenced by running or resumable model runs. --all also removes protected objects and may force future training resumes to download them again.", cobra.NoArgs, runLookasideCacheClean,
+			booleanFlag("all", "also remove objects needed by running or resumable model runs")),
+	)
 	command.AddCommand(
 		leaf(state, "login", "Verify and store S3 credentials in ~/.waldo", "Requires a configured s3:// lookaside. Prompts interactively for an S3 access key and hidden secret key. WALDO writes, lists, inspects, reads, and deletes a tiny probe object beneath the configured prefix before storing bucket-scoped credentials in ~/.waldo/credentials with mode 0600. Credentials are never written to WALDO configuration, output, manifests, or command history.", cobra.NoArgs, runLookasideLogin),
 		leaf(state, "logout", "Remove stored S3 credentials", "", cobra.NoArgs, runLookasideLogout),
@@ -171,6 +177,7 @@ func newLookasideCommand(state *cobraState) *cobra.Command {
 		leaf(state, "verify", "Scrub leftover objects against their hashes", "", cobra.NoArgs, runLookasideVerify),
 		unavailable("mirror", "Copy verified objects to another lookaside"),
 		leaf(state, "rm <sha256>...", "Remove explicitly named lookaside objects", "Every object name must be a complete 64-character lowercase SHA-256.", cobra.MinimumNArgs(1), runLookasideRemove),
+		cache,
 	)
 	return command
 }

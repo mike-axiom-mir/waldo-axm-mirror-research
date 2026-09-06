@@ -951,6 +951,37 @@ func TestComposeMaterializesAndReleasesOneStageAtATime(t *testing.T) {
 	}
 }
 
+func TestComposeRetainsMaterializedStageAfterInterruption(t *testing.T) {
+	root := t.TempDir()
+	compose := validCompose()
+	materialized := preparedFixture(t, compose.Stages[0])
+	planned, err := PlanStage(compose.Stages[0], materialized.BOM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	releases := 0
+	backend := backendFunc(func(context.Context, training.Request) (training.Observation, error) {
+		return training.Observation{}, context.Canceled
+	})
+	builder := Builder{
+		Root: root, NewID: func() (string, error) { return "retain0001", nil },
+		Resolver: training.ResolverFunc(func(context.Context, training.ResolveRequest) (training.Selection, error) {
+			return testSelection(backend), nil
+		}),
+		StagePreparer: func(context.Context, PreparedStage) (PreparedStage, error) { return materialized, nil },
+		StageReleaser: func(PreparedStage) error {
+			releases++
+			return nil
+		},
+	}
+	if _, err := builder.Compose(context.Background(), "retain", compose, []PreparedStage{planned}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Compose() error = %v", err)
+	}
+	if releases != 0 {
+		t.Fatalf("interrupted compose released its materialized stage %d time(s)", releases)
+	}
+}
+
 func TestFailedNewComposeRemainsListed(t *testing.T) {
 	root := t.TempDir()
 	compose := validCompose()

@@ -1167,15 +1167,7 @@ func runModelComposeTrainingWithHandoff(context Context, name, path string, clus
 	builder.StagePreparer = func(execution stdcontext.Context, planned model.PreparedStage) (model.PreparedStage, error) {
 		stageContext := context
 		stageContext.Execution = execution
-		prepared, err := materializeModelStage(stageContext, planned.Stage, planned.BOM, cache, stderr, boolOption(context, "audit"))
-		if err == nil {
-			return prepared, nil
-		}
-		_, purgeErr := cache.PurgeUsed()
-		if purgeErr != nil {
-			return model.PreparedStage{}, errors.Join(err, fmt.Errorf("purge incomplete stage materialization: %w", purgeErr))
-		}
-		return model.PreparedStage{}, err
+		return materializeModelStage(stageContext, planned.Stage, planned.BOM, cache, stderr, boolOption(context, "audit"))
 	}
 	builder.StageReleaser = func(model.PreparedStage) error {
 		_, err := cache.PurgeUsed()

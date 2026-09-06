@@ -8,9 +8,12 @@ package cli
 import (
 	"fmt"
 	"io"
+	"sort"
+	"strings"
 
 	"github.com/openwaldo/waldo/internal/config"
 	"github.com/openwaldo/waldo/internal/lookaside"
+	"github.com/openwaldo/waldo/internal/model"
 )
 
 func runLookasideStatus(context Context, _ []string, stdout, _ io.Writer) error {
@@ -26,6 +29,14 @@ func runLookasideStatus(context Context, _ []string, stdout, _ io.Writer) error 
 	if err != nil {
 		return err
 	}
+	protected, owners, err := protectedCacheObjects(configuration)
+	if err != nil {
+		return err
+	}
+	protectedStats, err := cache.StatsFor(protected)
+	if err != nil {
+		return err
+	}
 	if context.JSON {
 		return writeJSON(stdout, struct {
 			Cache       string                     `json:"cache"`
@@ -35,13 +46,21 @@ func runLookasideStatus(context Context, _ []string, stdout, _ io.Writer) error 
 			Publish     *config.Publish            `json:"publish,omitempty"`
 			Credentials *lookasideCredentialStatus `json:"credentials,omitempty"`
 			Stats       lookaside.Stats            `json:"stats"`
-		}{Cache: cache.Root(), Scratch: cache.Scratch(), MaxBytes: cache.MaxBytes(), Mirrors: cache.Mirrors(), Publish: configuration.Lookaside.Publish, Credentials: credentialStatus(configuration.Lookaside.Publish), Stats: stats})
+			Protected   lookaside.Stats            `json:"protected"`
+			Owners      []string                   `json:"protected_models,omitempty"`
+		}{Cache: cache.Root(), Scratch: cache.Scratch(), MaxBytes: cache.MaxBytes(), Mirrors: cache.Mirrors(), Publish: configuration.Lookaside.Publish, Credentials: credentialStatus(configuration.Lookaside.Publish), Stats: stats, Protected: protectedStats, Owners: owners})
 	}
 	fmt.Fprintf(stdout, "lookaside cache    %s\n", cache.Root())
 	fmt.Fprintf(stdout, "  limit          %s\n", humanBytes(cache.MaxBytes()))
 	fmt.Fprintf(stdout, "lookaside scratch  %s\n", cache.Scratch())
 	fmt.Fprintf(stdout, "  objects        %s\n", humanInteger(stats.Objects))
 	fmt.Fprintf(stdout, "  bytes          %s\n", humanBytes(stats.Bytes))
+	fmt.Fprintf(stdout, "  protected      %s objects, %s", humanInteger(protectedStats.Objects), humanBytes(protectedStats.Bytes))
+	if len(owners) > 0 {
+		fmt.Fprintf(stdout, " (%s)\n", joinHuman(owners))
+	} else {
+		fmt.Fprintln(stdout)
+	}
 	if stats.Other > 0 {
 		fmt.Fprintf(stdout, "  other files    %s\n", humanInteger(stats.Other))
 	}
@@ -77,6 +96,89 @@ func runLookasideStatus(context Context, _ []string, stdout, _ io.Writer) error 
 		}
 	}
 	return nil
+}
+
+func runLookasideCacheClean(context Context, _ []string, stdout, _ io.Writer) error {
+	cache, err := lookaside.DefaultCache()
+	if err != nil {
+		return err
+	}
+	configuration, err := config.Load()
+	if err != nil {
+		return err
+	}
+	protected, owners, err := protectedCacheObjects(configuration)
+	if err != nil {
+		return err
+	}
+	all := boolOption(context, "all")
+	if all {
+		protected = nil
+	}
+	result, err := cache.Clean(protected)
+	if err != nil {
+		return err
+	}
+	if context.JSON {
+		return writeJSON(stdout, struct {
+			Cache           string                `json:"cache"`
+			All             bool                  `json:"all"`
+			ProtectedModels []string              `json:"protected_models,omitempty"`
+			Result          lookaside.CleanResult `json:"result"`
+		}{Cache: cache.Root(), All: all, ProtectedModels: owners, Result: result})
+	}
+	fmt.Fprintf(stdout, "cleaned lookaside cache %s: removed %s objects (%s)\n", cache.Root(), humanInteger(result.Removed.Objects), humanBytes(result.Removed.Bytes))
+	if result.Protected.Objects > 0 {
+		fmt.Fprintf(stdout, "protected %s objects (%s) needed by %s; use --all to remove them\n", humanInteger(result.Protected.Objects), humanBytes(result.Protected.Bytes), joinHuman(owners))
+	} else if all && len(owners) > 0 && result.Removed.Objects > 0 {
+		fmt.Fprintf(stdout, "warning: removed cached objects without protecting running or resumable models: %s\n", joinHuman(owners))
+	}
+	return nil
+}
+
+func protectedCacheObjects(configuration config.Config) (map[string]bool, []string, error) {
+	root, err := config.EffectiveModelRoot(configuration)
+	if err != nil {
+		return nil, nil, err
+	}
+	listings, err := model.List(root, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	protected := map[string]bool{}
+	ownerSet := map[string]bool{}
+	for _, listing := range listings {
+		inspection, err := model.Inspect(root, listing.Name)
+		if err != nil {
+			return nil, nil, err
+		}
+		for index, run := range inspection.Runs {
+			resumableFailure := run.State == model.RunFailed && index == len(inspection.Runs)-1 && model.HasRecoverableFinalizationFailure(inspection)
+			if run.State != model.RunRunning && run.State != model.RunInterrupted && !resumableFailure {
+				continue
+			}
+			if index >= len(inspection.RunBOMs) {
+				continue
+			}
+			for _, shard := range inspection.RunBOMs[index].CorpusBOM.Shards {
+				protected[shard.SHA256] = true
+			}
+			ownerSet[listing.Name] = true
+		}
+	}
+	owners := make([]string, 0, len(ownerSet))
+	for name := range ownerSet {
+		owners = append(owners, name)
+	}
+	sort.Strings(owners)
+	return protected, owners, nil
+}
+
+func joinHuman(values []string) string {
+	if len(values) == 0 {
+		return "no models"
+	}
+	return strings.Join(values, ", ")
 }
 
 func runLookasideVerify(context Context, _ []string, stdout, _ io.Writer) error {

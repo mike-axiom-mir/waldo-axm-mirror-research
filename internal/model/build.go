@@ -1238,7 +1238,7 @@ func (builder Builder) Compose(ctx context.Context, name string, compose Compose
 		}
 		_, trainErr := stageBuilder.Train(ctx, name, stage)
 		var releaseErr error
-		if builder.StageReleaser != nil {
+		if trainErr == nil && builder.StageReleaser != nil {
 			releaseErr = builder.StageReleaser(stage)
 		}
 		if trainErr != nil {
@@ -1246,9 +1246,6 @@ func (builder Builder) Compose(ctx context.Context, name string, compose Compose
 				builder.report(Progress{Phase: "compose", Message: fmt.Sprintf("retained transaction %s; repeat the exact command to resume", transactionID[:12])})
 			} else {
 				finishFailedCompose(workspace)
-			}
-			if releaseErr != nil {
-				return Inspection{}, errors.Join(trainErr, fmt.Errorf("release stage %s materialized objects: %w", stage.Stage.Name, releaseErr))
 			}
 			return Inspection{}, trainErr
 		}

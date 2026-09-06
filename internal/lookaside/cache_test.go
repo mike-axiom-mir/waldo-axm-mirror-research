@@ -141,6 +141,43 @@ func TestPurgeUsedRemovesSuccessfulFetches(t *testing.T) {
 	}
 }
 
+func TestCleanPreservesExplicitlyProtectedObjects(t *testing.T) {
+	root := t.TempDir()
+	cache, err := NewCache(root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	protectedDigest := digestOf("protected")
+	removedDigest := digestOf("removed")
+	for digest, content := range map[string]string{protectedDigest: "protected", removedDigest: "removed"} {
+		path, err := cache.Path(digest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result, err := cache.Clean(map[string]bool{protectedDigest: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Removed.Objects != 1 || result.Protected.Objects != 1 {
+		t.Fatalf("Clean() = %+v", result)
+	}
+	protectedPath, _ := cache.Path(protectedDigest)
+	if _, err := os.Stat(protectedPath); err != nil {
+		t.Fatalf("protected object was removed: %v", err)
+	}
+	removedPath, _ := cache.Path(removedDigest)
+	if _, err := os.Stat(removedPath); !os.IsNotExist(err) {
+		t.Fatalf("unprotected object remains: %v", err)
+	}
+}
+
 func TestConfiguredCachePurgesSuccessfulObjectAndCleansScratch(t *testing.T) {
 	root, scratch := t.TempDir(), t.TempDir()
 	content := "retained verified object"

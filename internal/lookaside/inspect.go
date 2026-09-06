@@ -24,6 +24,11 @@ type ScrubResult struct {
 	Corrupt  []Issue `json:"corrupt,omitempty"`
 }
 
+type CleanResult struct {
+	Removed   Stats `json:"removed"`
+	Protected Stats `json:"protected"`
+}
+
 type Issue struct {
 	Path  string `json:"path"`
 	Error string `json:"error"`
@@ -41,6 +46,53 @@ func (cache *Cache) Stats() (Stats, error) {
 		return nil
 	})
 	return result, err
+}
+
+// StatsFor reports cached objects whose content hashes are in the supplied
+// set. Non-object files are intentionally excluded.
+func (cache *Cache) StatsFor(digests map[string]bool) (Stats, error) {
+	var result Stats
+	err := cache.walk(func(_ string, digest string, info fs.FileInfo) error {
+		if digest != "" && digests[digest] {
+			result.Objects++
+			result.Bytes += info.Size()
+		}
+		return nil
+	})
+	return result, err
+}
+
+// Clean removes cached content-addressed objects except hashes explicitly
+// protected by an active or resumable consumer. It never removes unrelated
+// files from the cache root.
+func (cache *Cache) Clean(protected map[string]bool) (CleanResult, error) {
+	var result CleanResult
+	var removals []string
+	err := cache.walk(func(path, digest string, info fs.FileInfo) error {
+		if digest == "" {
+			return nil
+		}
+		if protected[digest] {
+			result.Protected.Objects++
+			result.Protected.Bytes += info.Size()
+			return nil
+		}
+		removals = append(removals, path)
+		result.Removed.Objects++
+		result.Removed.Bytes += info.Size()
+		return nil
+	})
+	if err != nil {
+		return CleanResult{}, err
+	}
+	for _, path := range removals {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return CleanResult{}, err
+		}
+		_ = os.Remove(filepath.Dir(path))
+		_ = os.Remove(filepath.Dir(filepath.Dir(path)))
+	}
+	return result, nil
 }
 
 // Scrub reads every content-addressed cache object and verifies that its bytes

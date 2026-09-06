@@ -156,10 +156,18 @@ checks the persisted BOM and hashes each exported file.
 
 ```bash
 waldo lookaside status
+waldo lookaside cache status
+waldo lookaside cache clean
 waldo lookaside list
 waldo lookaside verify
 waldo lookaside rm --help
 ```
+
+`lookaside cache clean` removes unused verified objects while protecting those
+referenced by running or resumable model runs. `--all` also removes protected
+objects and can make a later resume download them again. The original
+`lookaside status` command remains available as a compatibility alias for
+`lookaside cache status`.
 
 `waldo lookaside mirror` is reserved but not implemented.
 

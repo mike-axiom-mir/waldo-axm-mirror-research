@@ -24,6 +24,12 @@ while an operation is active and across a failure or interruption. After a
 successful operation commits, WALDO removes every cache object that operation
 used. `lookaside.cache.max-size` bounds recovery objects left by incomplete
 operations; it is not a post-success retention target.
+Multi-stage composes materialize only the stage about to run. A successful
+stage releases its objects before the next stage is materialized; a failed or
+interrupted stage retains its verified objects for retry. Operators can inspect
+or reclaim this storage with `waldo lookaside cache status` and
+`waldo lookaside cache clean`; cleanup protects running and resumable runs
+unless `--all` is explicitly selected.
 `model.backend` defaults to `auto`. On macOS it selects MLX and requires Apple
 Silicon. On Linux it probes Python environments in deterministic order,
 preferring an installed TorchTitan and then an installed PyTorch. It never
