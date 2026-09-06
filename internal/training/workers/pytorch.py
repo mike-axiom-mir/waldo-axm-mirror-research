@@ -21,7 +21,7 @@ import torch.nn.functional as functional
 
 PROTOCOL_SCHEMA = 1
 WORKER_REVISION = "builtin-pytorch-worker-schema-1-r7"
-TORCHTITAN_REVISION = "builtin-torchtitan-worker-schema-1-r10"
+TORCHTITAN_REVISION = "builtin-torchtitan-worker-schema-1-r11"
 IS_PRIMARY = True
 
 
@@ -287,6 +287,10 @@ class Trainer:
             local_rank = int(os.environ["LOCAL_RANK"])
             self.device = torch.device(f"cuda:{local_rank}")
             torch.cuda.set_device(self.device)
+            # ParallelDims uses the PyTorch fake process-group backend for
+            # singleton mesh axes. Importing its registration module is part
+            # of TorchTitan's normal runtime initialization contract.
+            import torch.testing._internal.distributed.fake_pg  # noqa: F401
             from torchtitan.distributed import ParallelDims
 
             parallel_arguments = dict(

@@ -71,6 +71,7 @@ func TestTorchTitanInstallGuidanceExplainsPythonResolution(t *testing.T) {
 func TestTorchTitanWorkerAdaptsParallelDimsAPI(t *testing.T) {
 	source := string(pyTorchWorker)
 	for _, expected := range []string{
+		`torch.testing._internal.distributed.fake_pg`,
 		`inspect.signature(ParallelDims).parameters`,
 		`if "etp" in`,
 		`ParallelDims(**parallel_arguments)`,

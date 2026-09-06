@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	TorchTitanRevision           = "builtin-torchtitan-worker-schema-1-r10"
+	TorchTitanRevision           = "builtin-torchtitan-worker-schema-1-r11"
 	recommendedTorchVersion      = "2.15.0.dev20260905+cu130"
 	recommendedTorchTitanVersion = "0.3.0"
 	recommendedTorchIndex        = "https://download.pytorch.org/whl/nightly/cu130"
@@ -327,6 +327,7 @@ import json
 import platform
 import torch
 import torchtitan
+import torch.testing._internal.distributed.fake_pg
 from torch.distributed._composable.fsdp import fully_shard
 from torch.distributed.checkpoint.state_dict import get_model_state_dict, StateDictOptions
 from torchtitan.distributed import ParallelDims
