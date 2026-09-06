@@ -1002,6 +1002,61 @@ func TestComposeResumesDurableTransactionAfterInterruption(t *testing.T) {
 	}
 }
 
+func TestComposeRecoversRunningRunAfterTransactionPersistenceFailure(t *testing.T) {
+	root := t.TempDir()
+	compose := validCompose()
+	stage := preparedFixture(t, compose.Stages[0])
+	ids := 0
+	builder := Builder{Root: root, ComposeName: "conversation.yaml", NewID: func() (string, error) {
+		ids++
+		return "diskfull0001", nil
+	}, Resolver: training.FakeResolver()}
+	if _, err := builder.Compose(context.Background(), "conversation", compose, []PreparedStage{stage}); err != nil {
+		t.Fatal(err)
+	}
+
+	inspection, err := Inspect(root, "conversation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	position := len(inspection.Runs) - 1
+	run := inspection.Runs[position]
+	pin := inspection.Model.Runs[position]
+	run.State = RunRunning
+	run.Finished = ""
+	run.Error = ""
+	run.Observation = nil
+	run.Progress = nil
+	run.Attempts[len(run.Attempts)-1].State = RunRunning
+	run.Attempts[len(run.Attempts)-1].Finished = ""
+	run.Attempts[len(run.Attempts)-1].Error = ""
+	modelPath := filepath.Join(root, "conversation")
+	runDirectory := filepath.Join(modelPath, "runs", runDirectoryName(pin))
+	if err := persistRunAndPin(modelPath, runDirectory, &inspection.Model, pin, run, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+
+	lock, err := lockComposeTransaction(filepath.Join(root, ".waldo-compose", "conversation.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := builder.CheckComposeTarget("conversation", compose); err == nil || !strings.Contains(err.Error(), "active running compose") {
+		t.Fatalf("active compose check = %v", err)
+	}
+	unlockComposeTransaction(lock)
+	if err := builder.CheckComposeTarget("conversation", compose); err != nil {
+		t.Fatalf("abandoned compose check = %v", err)
+	}
+
+	completed, err := builder.Compose(context.Background(), "conversation", compose, []PreparedStage{stage})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ids != 1 || len(completed.Runs) != 1 || completed.Runs[0].State != RunComplete || len(completed.Runs[0].Attempts) != 2 {
+		t.Fatalf("recovered compose: ids %d runs %+v", ids, completed.Runs)
+	}
+}
+
 func TestComposeResumesWhenAppendingToExistingModel(t *testing.T) {
 	root := t.TempDir()
 	compose := validCompose()

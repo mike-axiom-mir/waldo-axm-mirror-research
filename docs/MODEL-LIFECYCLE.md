@@ -436,10 +436,11 @@ stage is cleared; interrupted work is retained.
   update choice. New revision is the default for architecture/base changes and
   whenever the working compose matches an archived compose. Archived model
   composes are never edited.
-- `model continue <name>` is valid only when `.waldo-compose` retains an
-  interrupted transaction for that model. It loads the latest archived compose
-  (falling back to legacy `COMPOSE.json`) and enters the normal transaction and
-  verified-checkpoint resume path.
+- `model continue <name>` normally requires an interrupted transaction. It also
+  recovers a run left marked `running` when a failure such as a full filesystem
+  prevented WALDO from persisting the terminal state and transaction. WALDO
+  first verifies that no process owns the compose lock, then loads the latest
+  archived compose and enters the normal verified-checkpoint resume path.
 - Advisor sessions append schema-1 JSONL records to `advisor/CHAT.jsonl`.
   Advisor-started builds enqueue provider analysis at checkpoint boundaries;
   provider latency does not block training. Completed assessments are persisted

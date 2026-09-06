@@ -17,10 +17,11 @@ are immutable. Both working and archived revisions put the four-digit ordinal
 first so files remain ordered even when contributors choose different compose
 names.
 
-`waldo model continue <name>` is authorized only by a retained durable compose
-transaction. It loads the latest archived compose, with legacy `COMPOSE.json`
-as a fallback, and uses the existing verified-checkpoint resume path. It does
-not repeat completed or failed training.
+`waldo model continue <name>` is authorized by a retained durable compose
+transaction or an abandoned `running` state whose compose lock is no longer
+owned. It loads the latest archived compose, with legacy `COMPOSE.json` as a
+fallback, and uses the existing verified-checkpoint resume path. It does not
+repeat completed or terminal failed training.
 
 Advisor turns and checkpoint assessments are append-only schema-1 JSONL beneath
 `advisor/CHAT.jsonl`. Advisor-started training queues assessments at checkpoint
@@ -33,6 +34,7 @@ with compact run and compose history.
 - Compose evolution and AI recommendations remain auditable with the model.
 - A numeric prefix gives deterministic human ordering without changing model
   or run BOM identities.
-- Interruption recovery remains fail-closed around the retained transaction.
+- Interruption recovery remains fail-closed around the transaction or the
+  unowned per-model lock used to prove an abandoned `running` state.
 - Monitoring may coalesce checkpoints when the provider is slower than
   training, and provider failure never fails the build.

@@ -849,6 +849,16 @@ func (builder Builder) CheckComposeTarget(name string, compose Compose) error {
 	if err != nil {
 		return err
 	}
+	if len(target.Runs) > 0 && target.Runs[len(target.Runs)-1].State == RunRunning {
+		active, err := composeLockHeld(filepath.Join(builder.Root, ".waldo-compose", name+".lock"))
+		if err != nil {
+			return err
+		}
+		if active {
+			return fmt.Errorf("model %q has an active running compose; wait for it to finish", target.Model.Name)
+		}
+		return validateComposeCompatibility(target, compose)
+	}
 	return validateComposeTarget(target, compose)
 }
 
@@ -859,6 +869,10 @@ func validateComposeTarget(target Inspection, compose Compose) error {
 			return fmt.Errorf("model %q has an unfinished %s run; resume that training before starting another compose", target.Model.Name, state)
 		}
 	}
+	return validateComposeCompatibility(target, compose)
+}
+
+func validateComposeCompatibility(target Inspection, compose Compose) error {
 	architectureHash, err := canonicalHash(compose.Architecture)
 	if err != nil {
 		return err
@@ -1068,7 +1082,18 @@ func (builder Builder) Compose(ctx context.Context, name string, compose Compose
 			if inspectErr != nil {
 				return Inspection{}, inspectErr
 			}
-			if err := validateComposeTarget(target, compose); err != nil {
+			recoveredAbandoned := false
+			if len(target.Runs) > 0 && target.Runs[len(target.Runs)-1].State == RunRunning {
+				if err := recoverAbandonedComposeRun(builder, &target); err != nil {
+					return Inspection{}, err
+				}
+				recoveredAbandoned = true
+			}
+			validate := validateComposeTarget
+			if recoveredAbandoned {
+				validate = validateComposeCompatibility
+			}
+			if err := validate(target, compose); err != nil {
 				return Inspection{}, err
 			}
 			transaction.ModelID = target.Model.ID
@@ -1333,6 +1358,24 @@ func lockComposeTransaction(path string) (*os.File, error) {
 		return nil, fmt.Errorf("another process owns this compose; wait for it to finish")
 	}
 	return file, nil
+}
+
+func composeLockHeld(path string) (bool, error) {
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return false, err
+	}
+	defer file.Close()
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
+			return true, nil
+		}
+		return false, err
+	}
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_UN); err != nil {
+		return false, err
+	}
+	return false, nil
 }
 
 func unlockComposeTransaction(file *os.File) {

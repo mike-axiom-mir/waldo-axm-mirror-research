@@ -202,7 +202,7 @@ func newModelCommand(state *cobraState) *cobra.Command {
 			textFlag("rendezvous", "", "primary host:port the nodes rendezvous on (required when --nodes > 1)"),
 			textFlag("rendezvous-id", "", "run label naming the shared plan path the secondaries consume; must match on every node (required when --nodes > 1)"),
 			booleanFlag("audit", "audit shard structure, attestations, and declared totals before training")),
-		leaf(state, "continue <name>", "Resume an interrupted compose build", "Loads the model's latest numbered compose and resumes its retained transaction from the newest verified checkpoint. Completed, failed, and untrained models are rejected.", cobra.ExactArgs(1), runModelContinue),
+		leaf(state, "continue <name>", "Resume an interrupted compose build", "Loads the model's latest numbered compose and resumes its retained transaction from the newest verified checkpoint. A stale running state left when a process could not persist its terminal status is recovered after confirming that no process owns the compose lock. Completed, failed, and untrained models are rejected.", cobra.ExactArgs(1), runModelContinue),
 		leaf(state, "train-worker", "Join a multi-node training run as a secondary node", "Internal worker used by the hostfile launcher. Manual --nodes, --node-rank, and rendezvous flags remain available for compatibility. The worker authors no model records; global rank 0 owns the corpus stream, run BOM, checkpoints, and terminal artifacts.", cobra.NoArgs, runModelTrainWorker,
 			integerFlag("nodes", 2, "total nodes in the run (>= 2)"),
 			integerFlag("node-rank", 1, "this node's rank (1..nodes-1)"),

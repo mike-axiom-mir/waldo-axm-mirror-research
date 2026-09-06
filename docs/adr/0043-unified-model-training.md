@@ -29,7 +29,8 @@ ordinal so interruption resumes the same stage without replaying earlier runs.
 Direct index training still requires an existing architecture. `--epochs`
 applies only to direct training because compose stage budgets are declared in
 the file. `--audit` applies to both forms. `model continue` remains the explicit
-name-only convenience for a retained interrupted compose transaction.
+name-only convenience for an interrupted transaction or an abandoned
+`running` state whose compose lock is unowned.
 
 ## Consequences
 
