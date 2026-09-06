@@ -8,7 +8,7 @@ package cli
 import (
 	"bufio"
 	"bytes"
-	"context"
+	stdcontext "context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -878,7 +878,7 @@ func runSecondaryStreamPlans(commandContext Context, cluster training.Cluster, s
 	return runSecondaryStreamPlansWithRunner(commandContext, cluster, scratch, input, training.RunSecondaryTorchTitan, stdout, stderr)
 }
 
-func runSecondaryStreamPlansWithRunner(commandContext Context, cluster training.Cluster, scratch string, input io.Reader, run func(context.Context, training.Cluster, training.Request) error, stdout, stderr io.Writer) error {
+func runSecondaryStreamPlansWithRunner(commandContext Context, cluster training.Cluster, scratch string, input io.Reader, run func(stdcontext.Context, training.Cluster, training.Request) error, stdout, stderr io.Writer) error {
 	decoder := json.NewDecoder(input)
 	lastRunID := ""
 	for {
@@ -957,7 +957,7 @@ func secondaryStreamRequest(plan model.MultiNodePlan, scratch string) (training.
 	}, nil
 }
 
-func awaitMultiNodePlan(ctx context.Context, modelRoot, rendezvousID string, wait time.Duration, skipRunID string, progress io.Writer) (model.MultiNodePlan, error) {
+func awaitMultiNodePlan(ctx stdcontext.Context, modelRoot, rendezvousID string, wait time.Duration, skipRunID string, progress io.Writer) (model.MultiNodePlan, error) {
 	path := model.MultiNodePlanPath(modelRoot, rendezvousID)
 	const poll = time.Second
 	deadline := time.Now().Add(wait)
@@ -1158,11 +1158,28 @@ func runModelComposeTrainingWithHandoff(context Context, name, path string, clus
 	}
 	prepared := make([]model.PreparedStage, 0, len(compose.Stages))
 	for _, stage := range compose.Stages {
-		resolved, err := prepareModelStage(context, stage, corpusTargets[stage.Name], cache, stderr, boolOption(context, "audit"))
+		resolved, err := planModelStage(context, stage, corpusTargets[stage.Name], cache, stderr)
 		if err != nil {
 			return err
 		}
 		prepared = append(prepared, resolved)
+	}
+	builder.StagePreparer = func(execution stdcontext.Context, planned model.PreparedStage) (model.PreparedStage, error) {
+		stageContext := context
+		stageContext.Execution = execution
+		prepared, err := materializeModelStage(stageContext, planned.Stage, planned.BOM, cache, stderr, boolOption(context, "audit"))
+		if err == nil {
+			return prepared, nil
+		}
+		_, purgeErr := cache.PurgeUsed()
+		if purgeErr != nil {
+			return model.PreparedStage{}, errors.Join(err, fmt.Errorf("purge incomplete stage materialization: %w", purgeErr))
+		}
+		return model.PreparedStage{}, err
+	}
+	builder.StageReleaser = func(model.PreparedStage) error {
+		_, err := cache.PurgeUsed()
+		return err
 	}
 	result, err := builder.Compose(context.Execution, name, compose, prepared)
 	if err != nil {
@@ -1180,7 +1197,7 @@ func runModelComposeTrainingWithHandoff(context Context, name, path string, clus
 	return writeModelMutationResult(context, stdout, result, "trained")
 }
 
-func sanityCheckComposeCorpora(execution context.Context, compose model.Compose, progress io.Writer) (map[string][]waldoindex.Target, error) {
+func sanityCheckComposeCorpora(execution stdcontext.Context, compose model.Compose, progress io.Writer) (map[string][]waldoindex.Target, error) {
 	rootTargets, err := resolveIndexArgumentsWithWarningPolicy(execution, []string{""}, progress, true)
 	if err != nil {
 		return nil, fmt.Errorf("compose corpus sanity check: resolve selected index: %w", err)
@@ -1572,7 +1589,7 @@ func runOneShotChat(context Context, opened inference.Opened, interaction model.
 	return markdownOutput.Finish()
 }
 
-func runInteractiveChat(ctx context.Context, opened inference.Opened, interaction model.Interaction, options inference.Options, stdout io.Writer) error {
+func runInteractiveChat(ctx stdcontext.Context, opened inference.Opened, interaction model.Interaction, options inference.Options, stdout io.Writer) error {
 	fmt.Fprintf(stdout, "OpenWALDO model %s\n", opened.Description.Model)
 	fmt.Fprintf(stdout, "Backend: %s\n", strings.ToUpper(opened.Description.Backend))
 	fmt.Fprintf(stdout, "Context: %d tokens\n", opened.Description.ContextTokens)
@@ -1738,7 +1755,7 @@ func configuredModelBuilderForCluster(commandContext Context, progress io.Writer
 	}}
 	backend := config.EffectiveModelBackend(configuration)
 	resolver := training.NewEnvironmentResolverForCluster(backend, cluster)
-	builder.Resolver = training.ResolverFunc(func(execution context.Context, request training.ResolveRequest) (training.Selection, error) {
+	builder.Resolver = training.ResolverFunc(func(execution stdcontext.Context, request training.ResolveRequest) (training.Selection, error) {
 		selection, err := resolver.Resolve(execution, request)
 		if err != nil {
 			if commandContext.JSON {
@@ -1844,6 +1861,14 @@ func prepareDefaultTrainingStage(context Context, inspection model.Inspection, p
 }
 
 func prepareModelStage(context Context, stage model.Stage, targets []waldoindex.Target, cache *lookaside.Cache, progress io.Writer, audit bool) (model.PreparedStage, error) {
+	planned, err := planModelStage(context, stage, targets, cache, progress)
+	if err != nil {
+		return model.PreparedStage{}, err
+	}
+	return materializeModelStage(context, planned.Stage, planned.BOM, cache, progress, audit)
+}
+
+func planModelStage(context Context, stage model.Stage, targets []waldoindex.Target, cache *lookaside.Cache, progress io.Writer) (model.PreparedStage, error) {
 	policy, err := corpus.NewLicensePolicy(nil, nil)
 	if err != nil {
 		return model.PreparedStage{}, err
@@ -1861,7 +1886,7 @@ func prepareModelStage(context Context, stage model.Stage, targets []waldoindex.
 		return model.PreparedStage{}, fmt.Errorf("stage %s filtered corpus BOM: %w", stage.Name, err)
 	}
 	emitUnassessedFilterWarning(progress, stage.Name, bom)
-	return materializeModelStage(context, stage, bom, cache, progress, audit)
+	return model.PlanStage(stage, bom)
 }
 
 func emitUnassessedFilterWarning(output io.Writer, stageName string, bom corpus.BOM) {

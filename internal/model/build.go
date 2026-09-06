@@ -23,6 +23,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/openwaldo/waldo/internal/corpus"
 	"github.com/openwaldo/waldo/internal/training"
 )
 
@@ -44,6 +45,10 @@ type Builder struct {
 	Progress     func(Progress)
 	ComposeName  string
 	MultiNode    MultiNodeHandoff
+	// StagePreparer materializes a planned stage immediately before it runs.
+	// StageReleaser releases those local objects after the stage commits.
+	StagePreparer func(context.Context, PreparedStage) (PreparedStage, error)
+	StageReleaser func(PreparedStage) error
 }
 
 type MultiNodeHandoff struct {
@@ -1043,6 +1048,12 @@ func (builder Builder) Compose(ctx context.Context, name string, compose Compose
 		if !reflect.DeepEqual(stages[index].Stage, compose.Stages[index]) {
 			return Inspection{}, fmt.Errorf("prepared stage %d does not match model compose", index+1)
 		}
+		if _, err := PlanStage(stages[index].Stage, stages[index].BOM); err != nil {
+			return Inspection{}, err
+		}
+		if len(stages[index].Inputs) == 0 && builder.StagePreparer == nil {
+			return Inspection{}, fmt.Errorf("stage %s has no materialized shard inputs", stages[index].Stage.Name)
+		}
 	}
 	if err := os.MkdirAll(builder.Root, 0o755); err != nil {
 		return Inspection{}, err
@@ -1214,18 +1225,35 @@ func (builder Builder) Compose(ctx context.Context, name string, compose Compose
 				return Inspection{}, fmt.Errorf("compose stage %s ended %s and cannot be resumed", stage.Stage.Name, staged.Runs[runIndex].State)
 			}
 		}
+		if len(stage.Inputs) == 0 {
+			stage, err = builder.StagePreparer(ctx, stage)
+			if err != nil {
+				return Inspection{}, err
+			}
+		}
 		stageBuilder := builder
 		if stageBuilder.MultiNode.RendezvousID != "" {
 			stageBuilder.MultiNode.StageOrdinal = index + 1
 			stageBuilder.MultiNode.StageCount = len(stages)
 		}
-		if _, err := stageBuilder.Train(ctx, name, stage); err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		_, trainErr := stageBuilder.Train(ctx, name, stage)
+		var releaseErr error
+		if builder.StageReleaser != nil {
+			releaseErr = builder.StageReleaser(stage)
+		}
+		if trainErr != nil {
+			if errors.Is(trainErr, context.Canceled) || errors.Is(trainErr, context.DeadlineExceeded) {
 				builder.report(Progress{Phase: "compose", Message: fmt.Sprintf("retained transaction %s; repeat the exact command to resume", transactionID[:12])})
 			} else {
 				finishFailedCompose(workspace)
 			}
-			return Inspection{}, err
+			if releaseErr != nil {
+				return Inspection{}, errors.Join(trainErr, fmt.Errorf("release stage %s materialized objects: %w", stage.Stage.Name, releaseErr))
+			}
+			return Inspection{}, trainErr
+		}
+		if releaseErr != nil {
+			return Inspection{}, fmt.Errorf("release stage %s materialized objects: %w", stage.Stage.Name, releaseErr)
 		}
 	}
 	staged, err = Inspect(builder.Root, name)
@@ -1443,10 +1471,23 @@ func validateStagedComposeRun(inspection Inspection, index int, prepared Prepare
 	if prepared.Stage.Conversation != nil {
 		conversation = *prepared.Stage.Conversation
 	}
-	if bom.Stage != prepared.Stage.Name || bom.StageType != prepared.Stage.Type || bom.Objective != prepared.Stage.Objective || !reflect.DeepEqual(bom.Conversation, conversation) || bom.CorpusBOMSHA256 != corpusHash || !equivalentTrainingParameters(bom.Parameters, parameters) {
+	corpusMatches := bom.CorpusBOMSHA256 == corpusHash || equivalentPlannedCorpusBOM(bom.CorpusBOM, prepared.BOM)
+	if bom.Stage != prepared.Stage.Name || bom.StageType != prepared.Stage.Type || bom.Objective != prepared.Stage.Objective || !reflect.DeepEqual(bom.Conversation, conversation) || !corpusMatches || !equivalentTrainingParameters(bom.Parameters, parameters) {
 		return fmt.Errorf("run %d immutable facts do not match stage %s", index+1, prepared.Stage.Name)
 	}
 	return nil
+}
+
+func equivalentPlannedCorpusBOM(left, right corpus.BOM) bool {
+	left.Shards = append([]corpus.ShardPin(nil), left.Shards...)
+	right.Shards = append([]corpus.ShardPin(nil), right.Shards...)
+	for index := range left.Shards {
+		left.Shards[index].Attestation = nil
+	}
+	for index := range right.Shards {
+		right.Shards[index].Attestation = nil
+	}
+	return reflect.DeepEqual(left, right)
 }
 
 func equivalentTrainingParameters(left, right training.ResolvedParameters) bool {

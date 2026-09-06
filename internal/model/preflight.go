@@ -17,14 +17,52 @@ import (
 	"github.com/openwaldo/waldo/internal/training"
 )
 
-// PreparedStage is the model-domain boundary for an already resolved and
-// verified corpus selection. The CLI/corpus layers own index and lookaside
-// access; the model lifecycle receives only an immutable BOM and local,
-// content-addressed inputs.
+// PreparedStage is the model-domain boundary for a resolved corpus selection.
+// A compose may initially carry only its immutable BOM; the CLI/corpus layer
+// attaches verified local, content-addressed inputs immediately before use.
 type PreparedStage struct {
 	Stage  Stage
 	BOM    corpus.BOM
 	Inputs []training.Input
+}
+
+// PlanStage validates a stage and its immutable corpus BOM without requiring
+// the shard objects to be present locally. Compose uses this boundary so all
+// stages can be checked up front while materializing only the stage that is
+// about to run.
+func PlanStage(stage Stage, bom corpus.BOM) (PreparedStage, error) {
+	seen := make(map[string]bool, len(bom.Shards))
+	inputs := make([]training.Input, 0, len(bom.Shards))
+	for _, selected := range bom.Shards {
+		if seen[selected.SHA256] {
+			continue
+		}
+		seen[selected.SHA256] = true
+		inputs = append(inputs, training.Input{
+			Path: "planned:" + selected.SHA256, SHA256: selected.SHA256,
+			Bytes: selected.Bytes, Records: selected.Docs,
+			Corpus: plannedCorpusGroup(selected.Manifest, bom.Paths), RecordFilter: bom.RecordFilter,
+		})
+	}
+	planned, err := PrepareStage(stage, bom, inputs)
+	if err != nil {
+		return PreparedStage{}, err
+	}
+	planned.Inputs = nil
+	return planned, nil
+}
+
+func plannedCorpusGroup(manifest string, selections []string) string {
+	manifest = strings.TrimSuffix(strings.TrimSuffix(strings.TrimSpace(manifest), ".yaml"), ".json")
+	best := ""
+	for _, selection := range selections {
+		selection = strings.TrimSuffix(strings.TrimSpace(selection), "/")
+		logical := strings.TrimSuffix(strings.TrimSuffix(selection, ".yaml"), ".json")
+		if (manifest == logical || strings.HasPrefix(manifest, logical+"/")) && len(logical) > len(best) {
+			best = selection
+		}
+	}
+	return best
 }
 
 func PrepareStage(stage Stage, bom corpus.BOM, inputs []training.Input) (PreparedStage, error) {

@@ -903,6 +903,54 @@ func TestComposeAppendsToCompatibleModelAndRejectsDifferentArchitecture(t *testi
 	}
 }
 
+func TestComposeMaterializesAndReleasesOneStageAtATime(t *testing.T) {
+	root := t.TempDir()
+	compose := validCompose()
+	compose.Stages = append(compose.Stages, testStage("post-train"))
+	materialized := map[string]PreparedStage{}
+	plans := make([]PreparedStage, 0, len(compose.Stages))
+	for _, stage := range compose.Stages {
+		prepared := preparedFixture(t, stage)
+		materialized[stage.Name] = prepared
+		planned, err := PlanStage(stage, prepared.BOM)
+		if err != nil {
+			t.Fatal(err)
+		}
+		plans = append(plans, planned)
+	}
+	var events []string
+	nextID := 0
+	builder := Builder{
+		Root: root, Resolver: training.FakeResolver(),
+		NewID: func() (string, error) {
+			nextID++
+			return fmt.Sprintf("lazy%04d", nextID), nil
+		},
+		StagePreparer: func(_ context.Context, planned PreparedStage) (PreparedStage, error) {
+			events = append(events, "prepare:"+planned.Stage.Name)
+			if planned.Stage.Name == "post-train" {
+				inspection, err := Inspect(root, "lazy")
+				if err != nil || len(inspection.Runs) != 1 || inspection.Runs[0].State != RunComplete {
+					t.Fatalf("second stage prepared before first committed: inspection=%+v err=%v", inspection, err)
+				}
+			}
+			return materialized[planned.Stage.Name], nil
+		},
+		StageReleaser: func(prepared PreparedStage) error {
+			events = append(events, "release:"+prepared.Stage.Name)
+			return nil
+		},
+	}
+	completed, err := builder.Compose(context.Background(), "lazy", compose, plans)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"prepare:pretrain", "release:pretrain", "prepare:post-train", "release:post-train"}
+	if !reflect.DeepEqual(events, want) || len(completed.Runs) != 2 {
+		t.Fatalf("stage lifecycle events = %v, runs = %d; want %v, 2", events, len(completed.Runs), want)
+	}
+}
+
 func TestFailedNewComposeRemainsListed(t *testing.T) {
 	root := t.TempDir()
 	compose := validCompose()
