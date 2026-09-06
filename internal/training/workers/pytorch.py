@@ -21,7 +21,7 @@ import torch.nn.functional as functional
 
 PROTOCOL_SCHEMA = 1
 WORKER_REVISION = "builtin-pytorch-worker-schema-1-r7"
-TORCHTITAN_REVISION = "builtin-torchtitan-worker-schema-1-r12"
+TORCHTITAN_REVISION = "builtin-torchtitan-worker-schema-1-r13"
 IS_PRIMARY = True
 
 
@@ -307,6 +307,11 @@ class Trainer:
             # the installed constructor declares it.
             if "etp" in inspect.signature(ParallelDims).parameters:
                 parallel_arguments["etp"] = 1
+            if "spmd_backend" in inspect.signature(ParallelDims).parameters:
+                # WALDO uses composable fully_shard directly and therefore
+                # needs TorchTitan's established FSDP mesh axis rather than
+                # its newer SPMD typechecking layout.
+                parallel_arguments["spmd_backend"] = "partial_dtensor"
             self.parallel_dims = ParallelDims(**parallel_arguments)
             self.parallel_dims.build_mesh()
         else:

@@ -74,6 +74,7 @@ func TestTorchTitanWorkerAdaptsParallelDimsAPI(t *testing.T) {
 		`from torch.testing._internal.distributed import fake_pg`,
 		`inspect.signature(ParallelDims).parameters`,
 		`if "etp" in`,
+		`parallel_arguments["spmd_backend"] = "partial_dtensor"`,
 		`ParallelDims(**parallel_arguments)`,
 	} {
 		if !strings.Contains(source, expected) {
