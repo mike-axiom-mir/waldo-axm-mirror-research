@@ -68,6 +68,47 @@ func TestTorchTitanInstallGuidanceExplainsPythonResolution(t *testing.T) {
 	}
 }
 
+func TestValidateTorchTitanHostConfiguration(t *testing.T) {
+	ready := TorchTitanHost{
+		MemlockSoftBytes:  -1,
+		NetworkInterfaces: []HostInterface{{Name: "ens10f1", State: "up", HasAddress: true}},
+		RDMADevices:       []RDMADevice{{Name: "mlx5_0", Active: true}},
+	}
+	cluster := Cluster{Interface: "ens10f1", HCA: "mlx5_0"}
+	if err := ValidateTorchTitanHostConfiguration(ready, cluster); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name string
+		host TorchTitanHost
+		want string
+	}{
+		{"missing interface", TorchTitanHost{MemlockSoftBytes: -1, RDMADevices: ready.RDMADevices}, "interface \"ens10f1\" does not exist"},
+		{"down interface", TorchTitanHost{MemlockSoftBytes: -1, NetworkInterfaces: []HostInterface{{Name: "ens10f1", State: "down", HasAddress: true}}, RDMADevices: ready.RDMADevices}, "interface \"ens10f1\" is not up"},
+		{"unaddressed interface", TorchTitanHost{MemlockSoftBytes: -1, NetworkInterfaces: []HostInterface{{Name: "ens10f1", State: "up"}}, RDMADevices: ready.RDMADevices}, "interface \"ens10f1\" has no IP address"},
+		{"missing HCA", TorchTitanHost{MemlockSoftBytes: -1, NetworkInterfaces: ready.NetworkInterfaces}, "HCA \"mlx5_0\" does not exist"},
+		{"inactive HCA", TorchTitanHost{MemlockSoftBytes: -1, NetworkInterfaces: ready.NetworkInterfaces, RDMADevices: []RDMADevice{{Name: "mlx5_0"}}}, "HCA \"mlx5_0\" has no active port"},
+		{"low memlock", TorchTitanHost{MemlockSoftBytes: 8 << 20, NetworkInterfaces: ready.NetworkInterfaces, RDMADevices: ready.RDMADevices}, "unlimited memlock soft limit"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := ValidateTorchTitanHostConfiguration(test.host, cluster)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestTorchTitanProbeCollectsNetworkAndRDMASanityFacts(t *testing.T) {
+	for _, expected := range []string{"resource.RLIMIT_MEMLOCK", `Path("/sys/class/net")`, `Path("/sys/class/infiniband")`, `"has_address"`, `"memlock_soft_bytes"`, `"network_interfaces"`, `"rdma_devices"`} {
+		if !strings.Contains(torchTitanProbeProgram, expected) {
+			t.Fatalf("TorchTitan probe omits %q", expected)
+		}
+	}
+}
+
 func TestTorchTitanWorkerAdaptsParallelDimsAPI(t *testing.T) {
 	source := string(pyTorchWorker)
 	for _, expected := range []string{

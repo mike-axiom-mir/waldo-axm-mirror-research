@@ -84,6 +84,17 @@ type trainingHostfile struct {
 }
 
 var inspectHostfileTorchTitan = training.InspectTorchTitanHost
+var listenHostfileRendezvous = func(address string) (io.Closer, error) {
+	return listenTrainingRendezvous(address)
+}
+var dialTrainingRendezvous = func(ctx context.Context, address string) error {
+	dialer := net.Dialer{Timeout: 5 * time.Second}
+	connection, err := dialer.DialContext(ctx, "tcp", address)
+	if err != nil {
+		return err
+	}
+	return connection.Close()
+}
 
 func loadTrainingHostfile(path string) (trainingHostfile, error) {
 	file, err := os.Open(path)
@@ -173,6 +184,16 @@ func startHostfileSession(ctx context.Context, hostfile trainingHostfile, cluste
 		cancel()
 		return nil, fmt.Errorf("rank 0 TorchTitan preflight: %w", err)
 	}
+	if err := training.ValidateTorchTitanHostConfiguration(local, cluster); err != nil {
+		cancel()
+		return nil, fmt.Errorf("rank 0 TorchTitan preflight: %w", err)
+	}
+	rendezvousListener, err := listenHostfileRendezvous(cluster.Rendezvous)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("rank 0 rendezvous preflight: %w", err)
+	}
+	defer rendezvousListener.Close()
 	session.pythonDir = filepath.Dir(local.Python)
 	fmt.Fprintf(output, "multi-host preflight  rank 0 ready: %s\n", torchTitanHostSummary(local))
 	for rank, host := range hostfile.Hosts[1:] {
@@ -191,7 +212,15 @@ func startHostfileSession(ctx context.Context, hostfile trainingHostfile, cluste
 			session.abort()
 			return nil, torchTitanHostMismatchError(host, err)
 		}
+		if err := training.ValidateTorchTitanHostConfiguration(remote, cluster); err != nil {
+			session.abort()
+			return nil, fmt.Errorf("host %s TorchTitan preflight: %w", host, err)
+		}
 		fmt.Fprintf(output, "multi-host preflight  %s ready: %s\n", host, torchTitanHostSummary(remote))
+	}
+	if err := rendezvousListener.Close(); err != nil {
+		session.abort()
+		return nil, fmt.Errorf("close rank 0 rendezvous preflight listener: %w", err)
 	}
 	for rank, host := range hostfile.Hosts[1:] {
 		worker, err := session.startWorker(host, rank+1)
@@ -202,6 +231,34 @@ func startHostfileSession(ctx context.Context, hostfile trainingHostfile, cluste
 		session.workers = append(session.workers, worker)
 	}
 	return session, nil
+}
+
+func listenTrainingRendezvous(address string) (net.Listener, error) {
+	_, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, err
+	}
+	listener, err := net.Listen("tcp", net.JoinHostPort("", port))
+	if err != nil {
+		return nil, fmt.Errorf("port %s is unavailable: %w", port, err)
+	}
+	go func() {
+		for {
+			connection, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			_ = connection.Close()
+		}
+	}()
+	return listener, nil
+}
+
+func checkTrainingRendezvous(ctx context.Context, address string) error {
+	if err := dialTrainingRendezvous(ctx, address); err != nil {
+		return fmt.Errorf("cannot reach rank 0 at %s: %w; verify name resolution, routing, and firewall rules", address, err)
+	}
+	return nil
 }
 
 func torchTitanHostMismatchError(host string, mismatch error) error {
@@ -263,7 +320,7 @@ func (session *hostfileSession) probeHost(host string, rank int) (training.Torch
 	var stdout, stderr strings.Builder
 	command.Stdout, command.Stderr = &stdout, &stderr
 	if err := command.Run(); err != nil {
-		return training.TorchTitanHost{}, fmt.Errorf("host %s is not ready for TorchTitan\nrun the installation block below on host %s, then retry the training command:%s\nremote preflight command: %w", host, host, commandOutput(stderr.String()), err)
+		return training.TorchTitanHost{}, fmt.Errorf("host %s is not ready for TorchTitan%s\ncorrect the reported condition on host %s, then retry the training command: %w", host, commandOutput(stderr.String()), host, err)
 	}
 	var capabilities training.TorchTitanHost
 	if err := json.Unmarshal([]byte(stdout.String()), &capabilities); err != nil {

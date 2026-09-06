@@ -794,7 +794,13 @@ func runModelTrainWorker(commandContext Context, _ []string, stdout, stderr io.W
 	if err != nil {
 		return fmt.Errorf("secondary training preflight: %w", err)
 	}
+	if err := training.ValidateTorchTitanHostConfiguration(capabilities, cluster); err != nil {
+		return fmt.Errorf("secondary training preflight: %w", err)
+	}
 	if boolOption(commandContext, "check") {
+		if err := checkTrainingRendezvous(commandContext.Execution, cluster.Rendezvous); err != nil {
+			return fmt.Errorf("secondary training preflight: %w", err)
+		}
 		return writeJSON(stdout, capabilities)
 	}
 	if boolOption(commandContext, "plan-stdin") {

@@ -207,14 +207,31 @@ type torchTitanProbe struct {
 	TorchVersion      string             `json:"torch_version"`
 	TorchTitanVersion string             `json:"torchtitan_version"`
 	Devices           []torchTitanDevice `json:"devices"`
+	MemlockSoftBytes  int64              `json:"memlock_soft_bytes"`
+	NetworkInterfaces []HostInterface    `json:"network_interfaces"`
+	RDMADevices       []RDMADevice       `json:"rdma_devices"`
+}
+
+type HostInterface struct {
+	Name       string `json:"name"`
+	State      string `json:"state"`
+	HasAddress bool   `json:"has_address"`
+}
+
+type RDMADevice struct {
+	Name   string `json:"name"`
+	Active bool   `json:"active"`
 }
 
 type TorchTitanHost struct {
-	Python            string        `json:"python"`
-	PythonVersion     string        `json:"python_version"`
-	TorchVersion      string        `json:"torch_version"`
-	TorchTitanVersion string        `json:"torchtitan_version"`
-	Accelerators      []Accelerator `json:"accelerators"`
+	Python            string          `json:"python"`
+	PythonVersion     string          `json:"python_version"`
+	TorchVersion      string          `json:"torch_version"`
+	TorchTitanVersion string          `json:"torchtitan_version"`
+	Accelerators      []Accelerator   `json:"accelerators"`
+	MemlockSoftBytes  int64           `json:"memlock_soft_bytes"`
+	NetworkInterfaces []HostInterface `json:"network_interfaces"`
+	RDMADevices       []RDMADevice    `json:"rdma_devices"`
 }
 
 type TorchTitanResolver struct {
@@ -323,8 +340,13 @@ func validateTorchArchitecture(raw json.RawMessage, label string) error {
 
 const torchTitanProbeProgram = `
 import importlib.metadata
+import fcntl
 import json
 import platform
+import resource
+import socket
+import struct
+from pathlib import Path
 import torch
 import torchtitan
 import torch.testing._internal.distributed.fake_pg
@@ -341,11 +363,54 @@ for index in range(torch.cuda.device_count()):
     value = torch.tensor([1.0], device=f"cuda:{index}")
     torch.sum(value).item()
     devices.append({"manufacturer": manufacturer, "model": properties.name, "memory_bytes": properties.total_memory})
+
+def read_text(path, default="unknown"):
+    try:
+        return path.read_text().strip()
+    except OSError:
+        return default
+
+network_interfaces = []
+network_root = Path("/sys/class/net")
+ipv6_interfaces = set()
+try:
+    ipv6_interfaces = {line.split()[5] for line in Path("/proc/net/if_inet6").read_text().splitlines()}
+except OSError:
+    pass
+
+def has_ipv4_address(name):
+    try:
+        request = struct.pack("256s", name.encode()[:15])
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as descriptor:
+            fcntl.ioctl(descriptor.fileno(), 0x8915, request)  # SIOCGIFADDR
+        return True
+    except OSError:
+        return False
+
+if network_root.is_dir():
+    for path in sorted(network_root.iterdir(), key=lambda value: value.name):
+        network_interfaces.append({
+            "name": path.name,
+            "state": read_text(path / "operstate"),
+            "has_address": has_ipv4_address(path.name) or path.name in ipv6_interfaces,
+        })
+
+rdma_devices = []
+rdma_root = Path("/sys/class/infiniband")
+if rdma_root.is_dir():
+    for path in sorted(rdma_root.iterdir(), key=lambda value: value.name):
+        active = any(read_text(port / "state").startswith("4:") for port in (path / "ports").glob("*"))
+        rdma_devices.append({"name": path.name, "active": active})
+
+memlock_soft, _ = resource.getrlimit(resource.RLIMIT_MEMLOCK)
 print(json.dumps({
     "python_version": platform.python_version(),
     "torch_version": torch.__version__,
     "torchtitan_version": importlib.metadata.version("torchtitan"),
     "devices": devices,
+    "memlock_soft_bytes": memlock_soft,
+    "network_interfaces": network_interfaces,
+    "rdma_devices": rdma_devices,
 }))
 `
 
@@ -412,7 +477,8 @@ func InspectTorchTitanHost(ctx context.Context) (TorchTitanHost, error) {
 	}
 	host := TorchTitanHost{
 		Python: python, PythonVersion: facts.PythonVersion, TorchVersion: facts.TorchVersion,
-		TorchTitanVersion: facts.TorchTitanVersion,
+		TorchTitanVersion: facts.TorchTitanVersion, MemlockSoftBytes: facts.MemlockSoftBytes,
+		NetworkInterfaces: facts.NetworkInterfaces, RDMADevices: facts.RDMADevices,
 	}
 	for _, device := range facts.Devices {
 		host.Accelerators = append(host.Accelerators, Accelerator{
@@ -420,6 +486,51 @@ func InspectTorchTitanHost(ctx context.Context) (TorchTitanHost, error) {
 		})
 	}
 	return host, nil
+}
+
+// ValidateTorchTitanHostConfiguration checks host-local settings that would
+// otherwise fail only when the distributed process group starts.
+func ValidateTorchTitanHostConfiguration(host TorchTitanHost, cluster Cluster) error {
+	if cluster.Interface != "" {
+		found := false
+		for _, candidate := range host.NetworkInterfaces {
+			if candidate.Name != cluster.Interface {
+				continue
+			}
+			found = true
+			if candidate.State != "up" && candidate.State != "unknown" {
+				return fmt.Errorf("configured NCCL interface %q is not up (state %s)", cluster.Interface, candidate.State)
+			}
+			if !candidate.HasAddress {
+				return fmt.Errorf("configured NCCL interface %q has no IP address", cluster.Interface)
+			}
+			break
+		}
+		if !found {
+			return fmt.Errorf("configured NCCL interface %q does not exist", cluster.Interface)
+		}
+	}
+	if cluster.HCA == "" {
+		return nil
+	}
+	found := false
+	for _, device := range host.RDMADevices {
+		if device.Name != cluster.HCA {
+			continue
+		}
+		found = true
+		if !device.Active {
+			return fmt.Errorf("configured RDMA HCA %q has no active port", cluster.HCA)
+		}
+		break
+	}
+	if !found {
+		return fmt.Errorf("configured RDMA HCA %q does not exist", cluster.HCA)
+	}
+	if host.MemlockSoftBytes != -1 {
+		return fmt.Errorf("configured RDMA HCA %q requires an unlimited memlock soft limit; current limit is %d bytes; configure /etc/security/limits.d/90-waldo-rdma.conf for both '*' and 'root', then log out and reconnect", cluster.HCA, host.MemlockSoftBytes)
+	}
+	return nil
 }
 
 func torchTitanInstallGuidance() string {

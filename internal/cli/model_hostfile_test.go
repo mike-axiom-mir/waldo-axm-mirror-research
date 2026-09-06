@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -91,7 +92,7 @@ func TestProbeHostNamesMissingRuntimeInstallationTarget(t *testing.T) {
 	if err == nil {
 		t.Fatal("missing remote runtime unexpectedly passed")
 	}
-	for _, expected := range []string{"host reno-gpu-02 is not ready", "run the installation block below on host reno-gpu-02", "TorchTitan runtime is unavailable"} {
+	for _, expected := range []string{"host reno-gpu-02 is not ready", "correct the reported condition on host reno-gpu-02", "TorchTitan runtime is unavailable"} {
 		if !strings.Contains(err.Error(), expected) {
 			t.Fatalf("preflight error %q omits %q", err, expected)
 		}
@@ -164,7 +165,12 @@ esac
 	previous := inspectHostfileTorchTitan
 	inspectHostfileTorchTitan = func(context.Context) (training.TorchTitanHost, error) { return capabilities, nil }
 	t.Cleanup(func() { inspectHostfileTorchTitan = previous })
-	cluster := training.Cluster{Nodes: 2, Rendezvous: "train-0:29500", RendezvousID: "session-test"}
+	previousListener := listenHostfileRendezvous
+	listenHostfileRendezvous = func(string) (io.Closer, error) {
+		return io.NopCloser(strings.NewReader("")), nil
+	}
+	t.Cleanup(func() { listenHostfileRendezvous = previousListener })
+	cluster := training.Cluster{Nodes: 2, Rendezvous: "127.0.0.1:0", RendezvousID: "session-test"}
 	var output bytes.Buffer
 	session, err := startHostfileSession(context.Background(), trainingHostfile{Hosts: []string{"train-0", "train-1"}}, cluster, &output)
 	if err != nil {
@@ -188,6 +194,28 @@ esac
 		if !strings.Contains(output.String(), expected) {
 			t.Fatalf("preflight output %q omits %q", output.String(), expected)
 		}
+	}
+}
+
+func TestTrainingRendezvousReachability(t *testing.T) {
+	previous := dialTrainingRendezvous
+	t.Cleanup(func() { dialTrainingRendezvous = previous })
+	dialTrainingRendezvous = func(_ context.Context, address string) error {
+		if address != "train-0:29500" {
+			t.Fatalf("rendezvous address = %q", address)
+		}
+		return nil
+	}
+	if err := checkTrainingRendezvous(context.Background(), "train-0:29500"); err != nil {
+		t.Fatal(err)
+	}
+
+	dialTrainingRendezvous = func(context.Context, string) error {
+		return errors.New("no route to host")
+	}
+	err := checkTrainingRendezvous(context.Background(), "train-0:29500")
+	if err == nil || !strings.Contains(err.Error(), "verify name resolution, routing, and firewall rules") {
+		t.Fatalf("closed rendezvous error = %v", err)
 	}
 }
 

@@ -201,8 +201,11 @@ waldo model train my-model /path/to/compose.yaml \
 ```
 
 WALDO performs all host and runtime checks before corpus materialization. It
-then launches and supervises every secondary, relays their output with host
-labels, and publishes each compose stage directly over the launcher channel.
+checks SSH access, homogeneous runtime and GPU topology, the configured NCCL
+interface and RDMA HCA, the effective locked-memory limit, rank 0's rendezvous
+port, and remote reachability of that port. It then launches and supervises
+every secondary, relays their output with host labels, and publishes each
+compose stage directly over the launcher channel.
 
 ## Failure behavior
 
