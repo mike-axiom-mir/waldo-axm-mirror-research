@@ -136,7 +136,7 @@ printf '%s\n' '{"kind":"complete","schema":1,"observation":{"simulated":false,"s
 	}
 	backend := TorchTitan{
 		Python: worker, LocalProcs: 1, Nodes: 4, NodeRank: 0,
-		Rendezvous: "primary:29500",
+		Rendezvous: "primary:29500", Interface: "eth0",
 	}
 	if _, err := backend.Run(context.Background(), Request{
 		RunID: "run", Stage: "pretrain", Objective: "causal-language-modeling",
@@ -147,6 +147,49 @@ printf '%s\n' '{"kind":"complete","schema":1,"observation":{"simulated":false,"s
 		}),
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestTorchTitanSelectsRendezvousRouteAndDisablesUnconfiguredRDMA(t *testing.T) {
+	previous := selectRendezvousInterface
+	selectRendezvousInterface = func(address string) (string, error) {
+		if address != "primary:29500" {
+			t.Fatalf("rendezvous address = %q", address)
+		}
+		return "route0", nil
+	}
+	defer func() { selectRendezvousInterface = previous }()
+	backend := TorchTitan{Nodes: 2, Rendezvous: "primary:29500"}
+	environment, err := backend.environment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	interfaceName := environmentSetting(environment, "NCCL_SOCKET_IFNAME")
+	if interfaceName == "" {
+		t.Fatal("NCCL socket interface was not derived from the rendezvous route")
+	}
+	if interfaceName != "route0" {
+		t.Fatalf("derived NCCL interface = %q, want route0", interfaceName)
+	}
+	if value := environmentSetting(environment, "NCCL_IB_DISABLE"); value != "1" {
+		t.Fatalf("NCCL_IB_DISABLE = %q, want 1", value)
+	}
+}
+
+func TestTorchTitanHonorsExplicitNCCLTransport(t *testing.T) {
+	backend := TorchTitan{Nodes: 2, Rendezvous: "unresolved.invalid:29500", Interface: "eth9", HCA: "mlx5_4"}
+	environment, err := backend.environment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{
+		"NCCL_SOCKET_IFNAME": "eth9",
+		"NCCL_IB_HCA":        "mlx5_4",
+		"NCCL_IB_DISABLE":    "0",
+	} {
+		if got := environmentSetting(environment, name); got != want {
+			t.Fatalf("%s = %q, want %q", name, got, want)
+		}
 	}
 }
 
@@ -208,7 +251,7 @@ exit 0
 	}
 	backend := TorchTitan{
 		Python: worker, LocalProcs: 1, Nodes: 2, NodeRank: 1,
-		Rendezvous: "primary:29500", Secondary: true,
+		Rendezvous: "primary:29500", Interface: "eth0", Secondary: true,
 	}
 	observation, err := backend.Run(context.Background(), Request{
 		ArtifactDirectory: t.TempDir(), ArtifactPrefix: "artifacts",

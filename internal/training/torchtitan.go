@@ -27,6 +27,8 @@ const (
 	recommendedTorchIndex        = "https://download.pytorch.org/whl/nightly/cu130"
 )
 
+var selectRendezvousInterface = rendezvousInterface
+
 type TorchTitan struct {
 	Python     string
 	Version    string
@@ -88,8 +90,21 @@ func (backend TorchTitan) Run(ctx context.Context, request Request) (Observation
 	if err := worker.Close(); err != nil {
 		return Observation{}, err
 	}
+	environment, err := backend.environment()
+	if err != nil {
+		return Observation{}, err
+	}
+	if backend.Nodes > 1 && request.Report != nil {
+		transport := fmt.Sprintf("NCCL socket transport via %s", environmentSetting(environment, "NCCL_SOCKET_IFNAME"))
+		if backend.HCA == "" {
+			transport += " (RDMA disabled; configure model.nccl.hca to enable it)"
+		} else {
+			transport += fmt.Sprintf(" with RDMA HCA %s", backend.HCA)
+		}
+		request.Report(Event{Kind: "log", Message: transport})
+	}
 	command := exec.CommandContext(ctx, backend.Python, backend.launchArguments(workerPath, request)...)
-	command.Env = backend.environment()
+	command.Env = environment
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	configureGracefulCancellation(command)
 	if backend.Secondary {
@@ -118,15 +133,67 @@ func (backend TorchTitan) launchArguments(workerPath string, request Request) []
 	)
 }
 
-func (backend TorchTitan) environment() []string {
+func (backend TorchTitan) environment() ([]string, error) {
 	environment := append(os.Environ(), "PYTHONUNBUFFERED=1")
-	if backend.Interface != "" {
-		environment = append(environment, "NCCL_SOCKET_IFNAME="+backend.Interface)
+	interfaceName := backend.Interface
+	if interfaceName == "" && backend.Nodes > 1 {
+		var err error
+		interfaceName, err = selectRendezvousInterface(backend.Rendezvous)
+		if err != nil {
+			return nil, fmt.Errorf("select NCCL interface for rendezvous %s: %w", backend.Rendezvous, err)
+		}
+	}
+	if interfaceName != "" {
+		environment = append(environment, "NCCL_SOCKET_IFNAME="+interfaceName)
 	}
 	if backend.HCA != "" {
 		environment = append(environment, "NCCL_IB_HCA="+backend.HCA, "NCCL_IB_DISABLE=0")
+	} else {
+		// RDMA must be explicitly selected. NCCL can otherwise prefer an HCA
+		// that is present but not routable between the training hosts.
+		environment = append(environment, "NCCL_IB_DISABLE=1")
 	}
-	return environment
+	return environment, nil
+}
+
+func rendezvousInterface(address string) (string, error) {
+	connection, err := net.Dial("udp", address)
+	if err != nil {
+		return "", err
+	}
+	local, ok := connection.LocalAddr().(*net.UDPAddr)
+	_ = connection.Close()
+	if !ok {
+		return "", fmt.Errorf("local route has address type %T", connection.LocalAddr())
+	}
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return "", err
+	}
+	for _, candidate := range interfaces {
+		addresses, err := candidate.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, candidateAddress := range addresses {
+			ip, _, err := net.ParseCIDR(candidateAddress.String())
+			if err == nil && ip.Equal(local.IP) {
+				return candidate.Name, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("no interface owns routed local address %s", local.IP)
+}
+
+func environmentSetting(environment []string, name string) string {
+	prefix := name + "="
+	value := ""
+	for _, item := range environment {
+		if strings.HasPrefix(item, prefix) {
+			value = strings.TrimPrefix(item, prefix)
+		}
+	}
+	return value
 }
 
 type torchTitanDevice struct {
