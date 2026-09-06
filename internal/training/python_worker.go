@@ -72,6 +72,15 @@ func terminateWorkerGroup(command *exec.Cmd) string {
 	return "killed"
 }
 
+func stopWorkerCommand(command *exec.Cmd) string {
+	if command.Cancel != nil {
+		if err := command.Cancel(); err == nil || errors.Is(err, os.ErrProcessDone) || errors.Is(err, syscall.ESRCH) {
+			return "terminated"
+		}
+	}
+	return terminateWorkerGroup(command)
+}
+
 func writeStoppedByWorkerExit(err error) bool {
 	return errors.Is(err, os.ErrClosed) || errors.Is(err, io.ErrClosedPipe) || errors.Is(err, syscall.EPIPE)
 }
@@ -152,8 +161,7 @@ func runWorkerCommand(ctx context.Context, label string, command *exec.Cmd, requ
 			err = fmt.Errorf("%s worker exited without a completion observation", label)
 		}
 		if err != nil && command.Process != nil {
-			terminateWorkerGroup(command)
-			_ = command.Process.Kill()
+			stopWorkerCommand(command)
 		}
 		result <- workerResult{observation: observation, err: err}
 	}()

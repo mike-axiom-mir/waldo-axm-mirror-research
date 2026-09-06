@@ -130,6 +130,50 @@ func TestGracefulCancellationForcesUnresponsiveLauncherDown(t *testing.T) {
 	}
 }
 
+func TestWorkerErrorGracefullyStopsLauncherRanks(t *testing.T) {
+	directory := t.TempDir()
+	launcher := filepath.Join(directory, "launcher")
+	pidPath := filepath.Join(directory, "rank.pid")
+	markerPath := filepath.Join(directory, "stopped")
+	script := `#!/bin/sh
+sleep 30 &
+rank=$!
+printf '%s' "$rank" > "$1"
+trap 'kill "$rank" 2>/dev/null; wait "$rank" 2>/dev/null; printf stopped > "$2"; exit 0' TERM
+printf '%s\n' '{"kind":"error","schema":1,"error":"synthetic backend failure"}'
+wait "$rank"
+`
+	if err := os.WriteFile(launcher, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.CommandContext(context.Background(), launcher, pidPath, markerPath)
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	configureGracefulCancellation(command)
+	_, err := runWorkerCommand(context.Background(), "test", command, Request{
+		ArtifactDirectory: directory,
+		Records: recordSourceFunc(func(_ context.Context, consume func(Record) error) error {
+			return consume(Record{ID: "one", Text: "hello"})
+		}),
+	})
+	if err == nil || !strings.Contains(err.Error(), "synthetic backend failure") {
+		t.Fatalf("worker error = %v", err)
+	}
+	if _, err := os.Stat(markerPath); err != nil {
+		t.Fatalf("launcher did not reap its rank after backend failure: %v", err)
+	}
+	contents, err := os.ReadFile(pidPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rankPID int
+	if _, err := fmt.Sscanf(string(contents), "%d", &rankPID); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Kill(rankPID, 0); !errors.Is(err, syscall.ESRCH) {
+		t.Fatalf("launcher rank %d remains after backend failure: %v", rankPID, err)
+	}
+}
+
 func TestWorkerTargetStopsUpstreamRecordStream(t *testing.T) {
 	command := exec.Command(os.Args[0], "-test.run=TestWorkerTargetHelper")
 	command.Env = append(os.Environ(), "WALDO_WORKER_TARGET_HELPER=1")
