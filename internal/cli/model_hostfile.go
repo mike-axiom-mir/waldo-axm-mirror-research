@@ -146,6 +146,8 @@ type hostfileSession struct {
 	publishMu    sync.Mutex
 }
 
+const hostfileWorkerExitGrace = 10 * time.Second
+
 func startHostfileSession(ctx context.Context, hostfile trainingHostfile, cluster training.Cluster, output io.Writer) (*hostfileSession, error) {
 	binary, err := os.Executable()
 	if err != nil {
@@ -221,7 +223,19 @@ func fileSHA256(path string) (string, error) {
 
 func (session *hostfileSession) sshCommand(arguments ...string) *exec.Cmd {
 	base := []string{"-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "--"}
-	return exec.CommandContext(session.ctx, "ssh", append(base, arguments...)...)
+	command := exec.CommandContext(session.ctx, "ssh", append(base, arguments...)...)
+	command.Cancel = func() error {
+		if command.Process == nil {
+			return os.ErrProcessDone
+		}
+		err := command.Process.Signal(syscall.SIGTERM)
+		if errors.Is(err, os.ErrProcessDone) || errors.Is(err, syscall.ESRCH) {
+			return os.ErrProcessDone
+		}
+		return err
+	}
+	command.WaitDelay = hostfileWorkerExitGrace
+	return command
 }
 
 func (session *hostfileSession) stageBinary(host string) error {
@@ -371,9 +385,6 @@ func (session *hostfileSession) abort() {
 	session.cancel()
 	for _, worker := range session.workers {
 		_ = worker.stdin.Close()
-		if worker.command.Process != nil {
-			_ = syscall.Kill(-worker.command.Process.Pid, syscall.SIGKILL)
-		}
 	}
 }
 

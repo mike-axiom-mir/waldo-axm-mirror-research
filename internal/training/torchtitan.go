@@ -91,9 +91,7 @@ func (backend TorchTitan) Run(ctx context.Context, request Request) (Observation
 	command := exec.CommandContext(ctx, backend.Python, backend.launchArguments(workerPath, request)...)
 	command.Env = backend.environment()
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	command.Cancel = func() error {
-		return syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
-	}
+	configureGracefulCancellation(command)
 	if backend.Secondary {
 		return runWorkerStreamJoin(ctx, "TorchTitan", command, request)
 	}

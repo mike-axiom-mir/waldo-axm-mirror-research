@@ -45,6 +45,91 @@ func TestWorkerCancellationHelper(t *testing.T) {
 	time.Sleep(time.Hour)
 }
 
+func TestGracefulCancellationLetsLauncherReapWorker(t *testing.T) {
+	directory := t.TempDir()
+	launcher := filepath.Join(directory, "launcher")
+	pidPath := filepath.Join(directory, "worker.pid")
+	markerPath := filepath.Join(directory, "stopped")
+	script := `#!/bin/sh
+sleep 30 &
+worker=$!
+printf '%s' "$worker" > "$1"
+trap 'kill "$worker" 2>/dev/null; wait "$worker" 2>/dev/null; printf stopped > "$2"; exit 0' TERM
+wait "$worker"
+`
+	if err := os.WriteFile(launcher, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	command := exec.CommandContext(ctx, launcher, pidPath, markerPath)
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	configureGracefulCancellation(command)
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	var workerPID int
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		contents, err := os.ReadFile(pidPath)
+		if err == nil {
+			if _, err := fmt.Sscanf(string(contents), "%d", &workerPID); err == nil {
+				break
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if workerPID == 0 {
+		cancel()
+		_ = command.Wait()
+		t.Fatal("launcher did not record its worker PID")
+	}
+	cancel()
+	_ = command.Wait()
+	if _, err := os.Stat(markerPath); err != nil {
+		t.Fatalf("launcher did not handle SIGTERM: %v", err)
+	}
+	if err := syscall.Kill(workerPID, 0); !errors.Is(err, syscall.ESRCH) {
+		t.Fatalf("launcher worker %d remains after cancellation: %v", workerPID, err)
+	}
+}
+
+func TestGracefulCancellationForcesUnresponsiveLauncherDown(t *testing.T) {
+	previous := workerExitDrain
+	workerExitDrain = 100 * time.Millisecond
+	defer func() { workerExitDrain = previous }()
+	directory := t.TempDir()
+	launcher := filepath.Join(directory, "launcher")
+	ready := filepath.Join(directory, "ready")
+	if err := os.WriteFile(launcher, []byte("#!/bin/sh\ntrap '' TERM\nprintf ready > \"$1\"\nsleep 30\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	command := exec.CommandContext(ctx, launcher, ready)
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	configureGracefulCancellation(command)
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(ready); err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := os.Stat(ready); err != nil {
+		cancel()
+		_ = command.Wait()
+		t.Fatalf("launcher did not become ready: %v", err)
+	}
+	started := time.Now()
+	cancel()
+	_ = command.Wait()
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("unresponsive launcher cancellation took %v", elapsed)
+	}
+}
+
 func TestWorkerTargetStopsUpstreamRecordStream(t *testing.T) {
 	command := exec.Command(os.Args[0], "-test.run=TestWorkerTargetHelper")
 	command.Env = append(os.Environ(), "WALDO_WORKER_TARGET_HELPER=1")

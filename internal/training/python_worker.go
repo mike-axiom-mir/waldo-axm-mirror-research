@@ -19,6 +19,38 @@ import (
 
 var workerExitDrain = 5 * time.Second
 
+// configureGracefulCancellation gives launchers such as torchrun an
+// opportunity to forward termination to their worker processes. Killing the
+// launcher immediately can orphan ranks because they use their own process
+// groups.
+func configureGracefulCancellation(command *exec.Cmd) {
+	command.Cancel = func() error {
+		if command.Process == nil {
+			return os.ErrProcessDone
+		}
+		pid := command.Process.Pid
+		err := command.Process.Signal(syscall.SIGTERM)
+		if errors.Is(err, os.ErrProcessDone) || errors.Is(err, syscall.ESRCH) {
+			return os.ErrProcessDone
+		}
+		if err != nil {
+			return err
+		}
+		deadline := time.Now().Add(workerExitDrain)
+		for time.Now().Before(deadline) {
+			if err := syscall.Kill(pid, 0); errors.Is(err, syscall.ESRCH) {
+				return nil
+			}
+			time.Sleep(25 * time.Millisecond)
+		}
+		if err := syscall.Kill(-pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+			return err
+		}
+		return nil
+	}
+	command.WaitDelay = workerExitDrain
+}
+
 func awaitProcessExit(command *exec.Cmd) error {
 	state, err := command.Process.Wait()
 	if err != nil {

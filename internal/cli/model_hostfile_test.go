@@ -215,3 +215,16 @@ func TestHostfileRemoteInvocationSelectsRankZeroPythonDirectory(t *testing.T) {
 		t.Fatalf("remote invocation = %q", invocation)
 	}
 }
+
+func TestHostfileSSHUsesGracefulBoundedCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	session := hostfileSession{ctx: ctx}
+	command := session.sshCommand("worker", "true")
+	if command.Cancel == nil {
+		t.Fatal("SSH command has no graceful cancellation function")
+	}
+	if command.WaitDelay != hostfileWorkerExitGrace {
+		t.Fatalf("SSH wait delay = %v, want %v", command.WaitDelay, hostfileWorkerExitGrace)
+	}
+}
