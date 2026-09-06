@@ -54,11 +54,14 @@ func TestTorchTitanResolverFailsClosed(t *testing.T) {
 }
 
 func TestTorchTitanInstallGuidanceExplainsPythonResolution(t *testing.T) {
-	guidance := torchTitanInstallGuidance()
-	for _, expected := range []string{"Python 3.11", "hash -r", "python3 -m pip install --user --upgrade torchtitan", "only when a required capability is unavailable", "--extra-index-url https://pypi.org/simple", "Pin the desired TorchTitan nightly version", "torch.cuda.is_available()", "torch.distributed.is_nccl_available()"} {
+	guidance := torchTitanInstallGuidanceForDistribution("Rocky Linux 9")
+	for _, expected := range []string{"Copy and run this installation block", "python3.11-pip", "hash -r", recommendedTorchVersion, recommendedTorchIndex, recommendedTorchTitanVersion, "torch.cuda.is_available()", "torch.distributed.is_nccl_available()"} {
 		if !strings.Contains(guidance, expected) {
 			t.Fatalf("installation guidance omits %q: %s", expected, guidance)
 		}
+	}
+	if strings.Contains(guidance, "openssh") {
+		t.Fatalf("installation guidance must not install SSH packages: %s", guidance)
 	}
 }
 

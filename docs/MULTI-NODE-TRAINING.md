@@ -44,7 +44,7 @@ rely on WALDO to reconcile them; preflight rejects mismatches.
    instructions, then reboot if the installer requires it. Confirm every GPU
    is visible with `nvidia-smi`. See the
    [NVIDIA driver installation guide](https://docs.nvidia.com/datacenter/tesla/driver-installation-guide/).
-2. Install Python 3, `venv`, `pip`, and an SSH server using the Linux
+2. Install Python 3, `venv`, and `pip` using the Linux
    distribution's package manager. Create the Python environment at the same
    absolute path on every host. Activate that environment on rank 0 before
    running WALDO. The launcher prepends rank 0's selected Python directory to
@@ -68,7 +68,7 @@ For example, the Python setup on Ubuntu or Debian starts with:
 
 ```console
 sudo apt-get update
-sudo apt-get install -y python3 python3-venv python3-pip openssh-server
+sudo apt-get install -y python3 python3-venv python3-pip
 sudo python3 -m venv /opt/waldo-python
 sudo /opt/waldo-python/bin/python -m pip install --upgrade pip
 ```
@@ -76,7 +76,7 @@ sudo /opt/waldo-python/bin/python -m pip install --upgrade pip
 On Rocky Linux, RHEL, or Fedora it starts with:
 
 ```console
-sudo dnf install -y python3 python3-pip openssh-server
+sudo dnf install -y python3 python3-pip
 sudo python3 -m venv /opt/waldo-python
 sudo /opt/waldo-python/bin/python -m pip install --upgrade pip
 ```
@@ -86,29 +86,22 @@ Run the PyTorch-selector and TorchTitan installation commands with
 The exact PyTorch command is intentionally not copied into this guide because
 it depends on the current supported Python, CUDA, and GPU combination.
 
-Use the stable TorchTitan package unless WALDO identifies a capability that
-requires a nightly build:
-
-```console
-python3 -m pip install --user --upgrade torchtitan
-```
-
-PyTorch and TorchTitan are separate installations: install the CUDA-enabled
-PyTorch wheel selected for the host first, then install TorchTitan from PyPI.
-This keeps normal Python dependencies on PyPI and avoids nightly dependency
-resolution unless it is actually needed.
-
 To install for the current user without a virtual environment on Rocky Linux,
-use Python 3.11 explicitly:
+use this complete, tested installation block:
 
 ```console
-sudo dnf install -y python3.11 python3.11-pip openssh-clients openssh-server
+sudo dnf install -y python3.11 python3.11-pip
 mkdir -p "$HOME/.local/bin"
 ln -sfn /usr/bin/python3.11 "$HOME/.local/bin/python3"
 export PATH="$HOME/.local/bin:$PATH"
 hash -r
 python3 --version
 python3 -m pip install --user --upgrade pip setuptools wheel
+python3 -m pip install --user \
+  'torch==2.15.0.dev20260905+cu130' \
+  --index-url https://download.pytorch.org/whl/nightly/cu130
+python3 -m pip install --user 'torchtitan==0.3.0'
+python3 -c 'import torch, torchtitan; print(torch.__version__, torchtitan.__version__, torch.cuda.is_available(), torch.cuda.device_count(), torch.distributed.is_nccl_available())'
 ```
 
 `python3 --version` must report 3.11 or newer before installing PyTorch or
@@ -116,23 +109,6 @@ TorchTitan. Bash can retain the previous `/usr/bin/python3` lookup after the
 symlink and `PATH` change. Run `hash -r` or start a new login shell when that
 happens. The explicit `/usr/bin/python3.11 -m pip` form always bypasses that
 shell lookup.
-
-When intentionally installing nightly TorchTitan, its wheel comes from the PyTorch nightly
-index but several dependencies come from PyPI. Using only `--index-url` hides
-PyPI and produces misleading `ResolutionImpossible` errors for packages such
-as `grain`, `torch-checkpointing`, and `tyro`. Keep the nightly index as the
-primary index, add PyPI as an extra index, and pin the intended nightly build:
-
-```console
-python3 -m pip install --user --pre \
-  'torchtitan==VERSION_FROM_THE_NIGHTLY_INDEX' \
-  --index-url https://download.pytorch.org/whl/nightly/cu130 \
-  --extra-index-url https://pypi.org/simple
-```
-
-Replace `VERSION_FROM_THE_NIGHTLY_INDEX` with the complete version shown by
-pip, including its `+cu130` suffix. Pinning matters because pip otherwise
-considers packages from both indexes and may select the stable PyPI release.
 
 Verify locally and through non-interactive SSH before starting WALDO:
 

@@ -20,7 +20,12 @@ import (
 	"time"
 )
 
-const TorchTitanRevision = "builtin-torchtitan-worker-schema-1-r9"
+const (
+	TorchTitanRevision           = "builtin-torchtitan-worker-schema-1-r9"
+	recommendedTorchVersion      = "2.15.0.dev20260905+cu130"
+	recommendedTorchTitanVersion = "0.3.0"
+	recommendedTorchIndex        = "https://download.pytorch.org/whl/nightly/cu130"
+)
 
 type TorchTitan struct {
 	Python     string
@@ -356,42 +361,32 @@ func torchTitanInstallGuidance() string {
 	if data, err := os.ReadFile("/etc/os-release"); err == nil {
 		distribution = linuxDistribution(data)
 	}
-	prerequisite := "Install Python 3.11 or newer and pip using this host's package manager."
+	return torchTitanInstallGuidanceForDistribution(distribution)
+}
+
+func torchTitanInstallGuidanceForDistribution(distribution string) string {
+	prerequisite := `# Install Python 3.11 or newer and pip using this host's package manager.
+# Then ensure python3 resolves to that interpreter.`
 	lower := strings.ToLower(distribution)
 	if strings.Contains(lower, "rocky") || strings.Contains(lower, "rhel") || strings.Contains(lower, "red hat") || strings.Contains(lower, "alma") || strings.Contains(lower, "centos") || strings.Contains(lower, "fedora") {
-		prerequisite = `Rocky/RHEL/Fedora user installation:
-  sudo dnf install -y python3.11 python3.11-pip openssh-clients openssh-server
-  mkdir -p "$HOME/.local/bin"
-  ln -sfn /usr/bin/python3.11 "$HOME/.local/bin/python3"
-  export PATH="$HOME/.local/bin:$PATH"
-  hash -r
-  python3 --version`
+		prerequisite = `sudo dnf install -y python3.11 python3.11-pip
+mkdir -p "$HOME/.local/bin"
+ln -sfn /usr/bin/python3.11 "$HOME/.local/bin/python3"
+export PATH="$HOME/.local/bin:$PATH"
+hash -r`
 	}
 	return fmt.Sprintf(`detected distribution: %s
-TorchTitan requires Python 3.11 or newer.
+TorchTitan runtime is unavailable. Copy and run this installation block as your normal user:
 
 %s
+python3 --version
+python3 -m pip install --user --upgrade pip setuptools wheel
+python3 -m pip install --user 'torch==%s' --index-url %s
+python3 -m pip install --user 'torchtitan==%s'
+python3 -c 'import torch, torchtitan; print(torch.__version__, torchtitan.__version__, torch.cuda.is_available(), torch.cuda.device_count(), torch.distributed.is_nccl_available())'
 
-If python3 still reports an older cached interpreter, run `+"`hash -r`"+` or
-start a new login shell. Install PyTorch with `+"`python3 -m pip`"+` using the
-command for this GPU from:
-  https://pytorch.org/get-started/locally/
-
-Then install TorchTitan using:
-  https://github.com/pytorch/torchtitan#installation
-
-The recommended stable installation is:
-  python3 -m pip install --user --upgrade torchtitan
-
-Use a nightly TorchTitan build only when a required capability is unavailable
-in the stable release. Keep the PyTorch nightly index and add
-`+"`--extra-index-url https://pypi.org/simple`"+`. The extra index is required
-for general Python dependencies such as grain, torch-checkpointing, and tyro.
-Pin the desired TorchTitan nightly version so pip cannot select the stable
-PyPI build instead.
-
-Verify before retrying WALDO:
-  python3 -c 'import torch, torchtitan; print(torch.__version__, torch.cuda.is_available(), torch.cuda.device_count(), torch.distributed.is_nccl_available())'`, distribution, prerequisite)
+Python must be 3.11 or newer. If python3 still reports an older interpreter,
+run `+"`hash -r`"+` or start a new login shell, then repeat the block.`, distribution, prerequisite, recommendedTorchVersion, recommendedTorchIndex, recommendedTorchTitanVersion)
 }
 
 func resolveSecondaryTorchTitan(ctx context.Context, cluster Cluster) (TorchTitan, error) {
