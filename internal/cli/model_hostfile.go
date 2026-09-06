@@ -187,7 +187,7 @@ func startHostfileSession(ctx context.Context, hostfile trainingHostfile, cluste
 		}
 		if err := compareTorchTitanHosts(local, remote); err != nil {
 			session.abort()
-			return nil, fmt.Errorf("host %s is incompatible with rank 0: %w", host, err)
+			return nil, torchTitanHostMismatchError(host, err)
 		}
 		fmt.Fprintf(output, "multi-host preflight  %s ready: %s\n", host, torchTitanHostSummary(remote))
 	}
@@ -200,6 +200,10 @@ func startHostfileSession(ctx context.Context, hostfile trainingHostfile, cluste
 		session.workers = append(session.workers, worker)
 	}
 	return session, nil
+}
+
+func torchTitanHostMismatchError(host string, mismatch error) error {
+	return fmt.Errorf("host %s is incompatible with rank 0: %w\n\ninstall the tested Python runtime on host %s, then retry:\n%s", host, mismatch, host, training.TorchTitanPythonInstallScript())
 }
 
 func fileSHA256(path string) (string, error) {
@@ -245,7 +249,7 @@ func (session *hostfileSession) probeHost(host string, rank int) (training.Torch
 	var stdout, stderr strings.Builder
 	command.Stdout, command.Stderr = &stdout, &stderr
 	if err := command.Run(); err != nil {
-		return training.TorchTitanHost{}, fmt.Errorf("TorchTitan preflight on %s: %w%s", host, err, commandOutput(stderr.String()))
+		return training.TorchTitanHost{}, fmt.Errorf("host %s is not ready for TorchTitan\nrun the installation block below on host %s, then retry the training command:%s\nremote preflight command: %w", host, host, commandOutput(stderr.String()), err)
 	}
 	var capabilities training.TorchTitanHost
 	if err := json.Unmarshal([]byte(stdout.String()), &capabilities); err != nil {

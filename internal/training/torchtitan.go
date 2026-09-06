@@ -379,14 +379,20 @@ hash -r`
 TorchTitan runtime is unavailable. Copy and run this installation block as your normal user:
 
 %s
-python3 --version
+%s
+
+Python must be 3.11 or newer. If python3 still reports an older interpreter,
+run `+"`hash -r`"+` or start a new login shell, then repeat the block.`, distribution, prerequisite, TorchTitanPythonInstallScript())
+}
+
+// TorchTitanPythonInstallScript returns the tested user-local Python runtime
+// installation and verification commands used by hostfile preflight errors.
+func TorchTitanPythonInstallScript() string {
+	return fmt.Sprintf(`python3 --version
 python3 -m pip install --user --upgrade pip setuptools wheel
 python3 -m pip install --user 'torch==%s' --index-url %s
 python3 -m pip install --user 'torchtitan==%s'
-python3 -c 'import torch, torchtitan; print(torch.__version__, torchtitan.__version__, torch.cuda.is_available(), torch.cuda.device_count(), torch.distributed.is_nccl_available())'
-
-Python must be 3.11 or newer. If python3 still reports an older interpreter,
-run `+"`hash -r`"+` or start a new login shell, then repeat the block.`, distribution, prerequisite, recommendedTorchVersion, recommendedTorchIndex, recommendedTorchTitanVersion)
+python3 -c 'import torch, torchtitan; print(torch.__version__, torchtitan.__version__, torch.cuda.is_available(), torch.cuda.device_count(), torch.distributed.is_nccl_available())'`, recommendedTorchVersion, recommendedTorchIndex, recommendedTorchTitanVersion)
 }
 
 func resolveSecondaryTorchTitan(ctx context.Context, cluster Cluster) (TorchTitan, error) {

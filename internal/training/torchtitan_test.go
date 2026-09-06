@@ -63,6 +63,9 @@ func TestTorchTitanInstallGuidanceExplainsPythonResolution(t *testing.T) {
 	if strings.Contains(guidance, "openssh") {
 		t.Fatalf("installation guidance must not install SSH packages: %s", guidance)
 	}
+	if strings.Count(guidance, "python3 --version") != 1 {
+		t.Fatalf("installation guidance should contain one Python version check: %s", guidance)
+	}
 }
 
 func TestTorchTitanBackendLaunchesTorchrunThroughSharedProtocol(t *testing.T) {

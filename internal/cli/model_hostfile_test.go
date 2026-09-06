@@ -67,6 +67,37 @@ func TestCompareTorchTitanHosts(t *testing.T) {
 	}
 }
 
+func TestTorchTitanHostMismatchNamesInstallationTarget(t *testing.T) {
+	err := torchTitanHostMismatchError("reno-gpu-02", io.ErrUnexpectedEOF)
+	for _, expected := range []string{"host reno-gpu-02 is incompatible", "install the tested Python runtime on host reno-gpu-02", "torchtitan=="} {
+		if !strings.Contains(err.Error(), expected) {
+			t.Fatalf("mismatch error %q omits %q", err, expected)
+		}
+	}
+}
+
+func TestProbeHostNamesMissingRuntimeInstallationTarget(t *testing.T) {
+	bin := t.TempDir()
+	ssh := filepath.Join(bin, "ssh")
+	if err := os.WriteFile(ssh, []byte("#!/bin/sh\nprintf '%s\\n' 'TorchTitan runtime is unavailable. Copy and run this installation block:' >&2\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	session := hostfileSession{
+		ctx: context.Background(), remoteBinary: "/tmp/waldo", pythonDir: "/usr/bin",
+		cluster: training.Cluster{Nodes: 2, Rendezvous: "train-0:29500", RendezvousID: "test"},
+	}
+	_, err := session.probeHost("reno-gpu-02", 1)
+	if err == nil {
+		t.Fatal("missing remote runtime unexpectedly passed")
+	}
+	for _, expected := range []string{"host reno-gpu-02 is not ready", "run the installation block below on host reno-gpu-02", "TorchTitan runtime is unavailable"} {
+		if !strings.Contains(err.Error(), expected) {
+			t.Fatalf("preflight error %q omits %q", err, expected)
+		}
+	}
+}
+
 func TestRunSecondaryStreamPlansNeedsNoCorpusData(t *testing.T) {
 	parameters, err := training.ResolveParameters(training.Parameters{Steps: 1, BatchSize: 1, SequenceLength: 8, LearningRate: 0.001})
 	if err != nil {
