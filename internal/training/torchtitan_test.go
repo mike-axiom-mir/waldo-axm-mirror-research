@@ -68,6 +68,19 @@ func TestTorchTitanInstallGuidanceExplainsPythonResolution(t *testing.T) {
 	}
 }
 
+func TestTorchTitanWorkerAdaptsParallelDimsAPI(t *testing.T) {
+	source := string(pyTorchWorker)
+	for _, expected := range []string{
+		`inspect.signature(ParallelDims).parameters`,
+		`if "etp" in`,
+		`ParallelDims(**parallel_arguments)`,
+	} {
+		if !strings.Contains(source, expected) {
+			t.Fatalf("TorchTitan worker omits ParallelDims compatibility logic %q", expected)
+		}
+	}
+}
+
 func TestTorchTitanBackendLaunchesTorchrunThroughSharedProtocol(t *testing.T) {
 	worker := filepath.Join(t.TempDir(), "fake-python")
 	script := `#!/bin/sh

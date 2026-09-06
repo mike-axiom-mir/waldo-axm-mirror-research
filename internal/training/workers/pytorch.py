@@ -4,6 +4,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import hashlib
+import inspect
 import json
 import math
 import os
@@ -20,7 +21,7 @@ import torch.nn.functional as functional
 
 PROTOCOL_SCHEMA = 1
 WORKER_REVISION = "builtin-pytorch-worker-schema-1-r7"
-TORCHTITAN_REVISION = "builtin-torchtitan-worker-schema-1-r9"
+TORCHTITAN_REVISION = "builtin-torchtitan-worker-schema-1-r10"
 IS_PRIMARY = True
 
 
@@ -288,16 +289,21 @@ class Trainer:
             torch.cuda.set_device(self.device)
             from torchtitan.distributed import ParallelDims
 
-            self.parallel_dims = ParallelDims(
+            parallel_arguments = dict(
                 dp_replicate=1,
                 dp_shard=self.world_size,
                 cp=1,
                 tp=1,
                 pp=1,
                 ep=1,
-                etp=1,
                 world_size=self.world_size,
             )
+            # TorchTitan development releases exposed an experimental `etp`
+            # dimension; the stable 0.3 API removed it. Supply it only when
+            # the installed constructor declares it.
+            if "etp" in inspect.signature(ParallelDims).parameters:
+                parallel_arguments["etp"] = 1
+            self.parallel_dims = ParallelDims(**parallel_arguments)
             self.parallel_dims.build_mesh()
         else:
             self.device = torch.device(device_name)
