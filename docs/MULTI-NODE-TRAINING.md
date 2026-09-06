@@ -86,6 +86,18 @@ Run the PyTorch-selector and TorchTitan installation commands with
 The exact PyTorch command is intentionally not copied into this guide because
 it depends on the current supported Python, CUDA, and GPU combination.
 
+Use the stable TorchTitan package unless WALDO identifies a capability that
+requires a nightly build:
+
+```console
+python3 -m pip install --user --upgrade torchtitan
+```
+
+PyTorch and TorchTitan are separate installations: install the CUDA-enabled
+PyTorch wheel selected for the host first, then install TorchTitan from PyPI.
+This keeps normal Python dependencies on PyPI and avoids nightly dependency
+resolution unless it is actually needed.
+
 To install for the current user without a virtual environment on Rocky Linux,
 use Python 3.11 explicitly:
 
@@ -105,7 +117,7 @@ symlink and `PATH` change. Run `hash -r` or start a new login shell when that
 happens. The explicit `/usr/bin/python3.11 -m pip` form always bypasses that
 shell lookup.
 
-When installing nightly TorchTitan, its wheel comes from the PyTorch nightly
+When intentionally installing nightly TorchTitan, its wheel comes from the PyTorch nightly
 index but several dependencies come from PyPI. Using only `--index-url` hides
 PyPI and produces misleading `ResolutionImpossible` errors for packages such
 as `grain`, `torch-checkpointing`, and `tyro`. Keep the nightly index as the

@@ -380,7 +380,11 @@ command for this GPU from:
 Then install TorchTitan using:
   https://github.com/pytorch/torchtitan#installation
 
-For a nightly TorchTitan build, keep the PyTorch nightly index and add
+The recommended stable installation is:
+  python3 -m pip install --user --upgrade torchtitan
+
+Use a nightly TorchTitan build only when a required capability is unavailable
+in the stable release. Keep the PyTorch nightly index and add
 `+"`--extra-index-url https://pypi.org/simple`"+`. The extra index is required
 for general Python dependencies such as grain, torch-checkpointing, and tyro.
 Pin the desired TorchTitan nightly version so pip cannot select the stable
