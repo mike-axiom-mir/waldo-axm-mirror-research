@@ -151,8 +151,39 @@ waldo config set model.nccl.interface ib0
 waldo config set model.nccl.hca mlx5_0
 ```
 
-The HCA setting is only appropriate for InfiniBand or RoCE. Allow the selected
-rendezvous port and NCCL peer traffic through every firewall.
+The HCA setting is only appropriate for InfiniBand or RoCE. Before enabling it,
+give every user on every training host an unlimited locked-memory allowance:
+
+```console
+sudo tee /etc/security/limits.d/90-waldo-rdma.conf >/dev/null <<'EOF'
+* soft memlock unlimited
+* hard memlock unlimited
+root soft memlock unlimited
+root hard memlock unlimited
+EOF
+```
+
+The explicit `root` entries are required because the `*` entries do not apply
+to the root user. Log out completely and reconnect so PAM creates a session
+with the new limits. Verify both the local and remote SSH sessions before
+starting training:
+
+```console
+ulimit -l
+ssh train-1 'ulimit -l'
+```
+
+Both commands must print `unlimited`. A low limit, such as the common 8 MiB
+default, prevents NCCL's verbs transport from registering GPU communication
+buffers and can fail with `ibv_reg_mr_iova2 failed with error Cannot allocate
+memory` during communicator setup or an all-reduce.
+
+Services and containers may not read PAM limits. Set
+`LimitMEMLOCK=infinity` for a systemd service or `--ulimit
+memlock=-1:-1` for a container instead.
+
+Allow the selected rendezvous port and NCCL peer traffic through every
+firewall.
 
 ## Start a run
 
