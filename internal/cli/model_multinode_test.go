@@ -97,6 +97,18 @@ func TestConfigNCCLKeysRoundTrip(t *testing.T) {
 	}
 }
 
+func TestValidateDistributedBatchSize(t *testing.T) {
+	if err := validateDistributedBatchSize("stage pretrain", 16, 4); err != nil {
+		t.Fatal(err)
+	}
+	for _, batch := range []int64{2, 10} {
+		err := validateDistributedBatchSize("stage pretrain", batch, 4)
+		if err == nil || !strings.Contains(err.Error(), "stage pretrain global batch size") {
+			t.Fatalf("batch %d error = %v", batch, err)
+		}
+	}
+}
+
 func seedMultiNodeCorpus(t *testing.T) corpus.BOM {
 	t.Helper()
 	root := t.TempDir()

@@ -7,6 +7,7 @@ package training
 
 import (
 	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -26,5 +27,31 @@ func TestPyTorchWorkerEvaluatesArtifactAtLiveEvaluationPrecision(t *testing.T) {
 		if match[1] != matches[0][1] {
 			t.Fatalf("held-out evaluations disagree on compute precision: %q vs %q", matches[0][0], match[0])
 		}
+	}
+}
+
+func TestTorchTitanWorkerPartitionsGlobalBatchAcrossRanks(t *testing.T) {
+	source := string(pyTorchWorker)
+	for _, expected := range []string{
+		`self.batch_size = self.global_batch_size // self.world_size`,
+		`owner = self.sequence_number % self.world_size`,
+		`if owner == self.rank:`,
+		`if self.sequence_number % self.global_batch_size == 0:`,
+		`torch.distributed.all_reduce(global_valid_tokens`,
+		`torch.distributed.all_reduce(global_loss_sum`,
+		`torch.distributed.all_gather_object(states, local)`,
+		`distinct sequences on each of`,
+	} {
+		if !strings.Contains(source, expected) {
+			t.Fatalf("TorchTitan worker omits distributed batch behavior %q", expected)
+		}
+	}
+}
+
+func TestTorchTitanWorkerKeepsSingleNodeBatchSemantics(t *testing.T) {
+	source := string(pyTorchWorker)
+	if !strings.Contains(source, `else:
+            self.batch_size = self.global_batch_size`) {
+		t.Fatal("PyTorch worker no longer preserves the declared batch on a single process")
 	}
 }

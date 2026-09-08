@@ -21,7 +21,7 @@ import torch.nn.functional as functional
 
 PROTOCOL_SCHEMA = 1
 WORKER_REVISION = "builtin-pytorch-worker-schema-1-r7"
-TORCHTITAN_REVISION = "builtin-torchtitan-worker-schema-1-r13"
+TORCHTITAN_REVISION = "builtin-torchtitan-worker-schema-1-r14"
 IS_PRIMARY = True
 
 
@@ -317,7 +317,15 @@ class Trainer:
         else:
             self.device = torch.device(device_name)
         self.sequence_length = self.parameters["sequence_length"]
-        self.batch_size = self.parameters["batch_size"]
+        self.global_batch_size = self.parameters["batch_size"]
+        if self.distributed:
+            if self.global_batch_size < self.world_size or self.global_batch_size % self.world_size != 0:
+                raise ValueError(
+                    f"global batch size {self.global_batch_size} must be divisible by distributed world size {self.world_size}"
+                )
+            self.batch_size = self.global_batch_size // self.world_size
+        else:
+            self.batch_size = self.global_batch_size
         self.target_steps = self.parameters["steps"]
         self.step_number = 0
         self.replay_steps = 0
@@ -326,6 +334,7 @@ class Trainer:
         self.loss_buffer = []
         self.corpus_buffer = []
         self.batch = []
+        self.sequence_number = 0
         self.consumed_by_corpus = {}
         self.checkpoints = []
         self.evaluations = []
@@ -392,6 +401,17 @@ class Trainer:
         )
         if self.resume is not None:
             self.restore_checkpoint()
+        if self.distributed:
+            emit(
+                "event",
+                event={
+                    "kind": "log",
+                    "message": (
+                        f"global batch {self.global_batch_size} partitioned into "
+                        f"{self.batch_size} distinct sequences on each of {self.world_size} ranks"
+                    ),
+                },
+            )
 
     def forward_logits(self, model, tokens, mixed_precision=True):
         enabled = mixed_precision and self.parameter_dtype != torch.float32
@@ -460,9 +480,24 @@ class Trainer:
         for corpus, supervised in zip(target_corpora or [], target_mask):
             if supervised:
                 corpus_counts[corpus] = corpus_counts.get(corpus, 0) + 1
-        self.batch.append((padded, mask, corpus_counts))
-        if len(self.batch) >= self.batch_size:
-            self.train_batch()
+        if self.distributed:
+            owner = self.sequence_number % self.world_size
+            self.sequence_number += 1
+            if owner == self.rank:
+                self.batch.append((padded, mask, corpus_counts))
+            # Every rank observes every sequence. Enter the optimizer step only
+            # at a complete global-batch boundary so FSDP collectives remain in
+            # identical order while each rank computes a distinct local slice.
+            if self.sequence_number % self.global_batch_size == 0:
+                if len(self.batch) != self.batch_size:
+                    raise ValueError(
+                        f"rank {self.rank} assembled {len(self.batch)} sequences; expected {self.batch_size}"
+                    )
+                self.train_batch()
+        else:
+            self.batch.append((padded, mask, corpus_counts))
+            if len(self.batch) >= self.batch_size:
+                self.train_batch()
 
     def train_batch(self):
         if not self.batch or self.step_number >= self.target_steps:
@@ -483,12 +518,27 @@ class Trainer:
         self.optimizer.zero_grad(set_to_none=True)
         logits = self.forward_logits(self.model, inputs)
         losses = functional.cross_entropy(logits.float().reshape(-1, logits.shape[-1]), targets.reshape(-1), reduction="none")
-        loss = (losses.reshape_as(mask) * mask).sum() / mask.sum()
+        loss_sum = (losses.reshape_as(mask) * mask).sum()
+        local_valid_tokens = mask.sum()
+        if self.distributed:
+            global_valid_tokens = local_valid_tokens.detach().clone()
+            torch.distributed.all_reduce(global_valid_tokens, op=torch.distributed.ReduceOp.SUM)
+            # FSDP averages gradients across ranks. Scale each local loss so
+            # that the averaged gradient equals the global token-weighted mean.
+            loss = loss_sum * self.world_size / global_valid_tokens
+        else:
+            global_valid_tokens = local_valid_tokens
+            loss = loss_sum / global_valid_tokens
         loss.backward()
         self.optimizer.step()
         self.synchronize()
-        loss_value = float(loss.detach().cpu().item())
-        valid_tokens = int(mask.sum().detach().cpu().item())
+        if self.distributed:
+            global_loss_sum = loss_sum.detach().clone()
+            torch.distributed.all_reduce(global_loss_sum, op=torch.distributed.ReduceOp.SUM)
+        else:
+            global_loss_sum = loss_sum.detach()
+        loss_value = float((global_loss_sum / global_valid_tokens).cpu().item())
+        valid_tokens = int(global_valid_tokens.cpu().item())
         self.step_number = next_step
         self.consumed_tokens += valid_tokens
         for item in self.batch:
@@ -558,7 +608,20 @@ class Trainer:
         if self.distributed:
             torch.distributed.barrier()
 
+    def gather_consumption(self):
+        local = dict(self.consumed_by_corpus)
+        if not self.distributed:
+            return local, [local]
+        states = [None for _ in range(self.world_size)]
+        torch.distributed.all_gather_object(states, local)
+        total = {}
+        for state in states:
+            for corpus, count in state.items():
+                total[corpus] = total.get(corpus, 0) + count
+        return total, states
+
     def save_checkpoint(self):
+        consumption, consumption_states = self.gather_consumption()
         name = f"checkpoints/step-{self.step_number:08d}"
         path = os.path.join(self.artifact_directory, *name.split("/"))
         temporary = None
@@ -594,7 +657,14 @@ class Trainer:
             random_states = [random_state]
             optimizer_state = self.optimizer.state_dict()
         if IS_PRIMARY:
-            torch.save({"optimizer": optimizer_state, "random_states": random_states}, runtime_path)
+            torch.save(
+                {
+                    "optimizer": optimizer_state,
+                    "random_states": random_states,
+                    "consumption_states": consumption_states,
+                },
+                runtime_path,
+            )
             write_json(
                 state_path,
                 {
@@ -606,7 +676,7 @@ class Trainer:
                     "architecture_sha256": self.begin["architecture_sha256"],
                     "step": self.step_number,
                     "consumed_tokens": self.consumed_tokens,
-                    "consumption": self.consumed_by_corpus,
+                    "consumption": consumption,
                     "world_size": self.world_size,
                 },
             )
@@ -674,7 +744,10 @@ class Trainer:
             torch.cuda.set_rng_state(random_state["cuda"], self.device)
         self.step_number = self.resume["step"]
         self.consumed_tokens = self.resume["tokens"]
-        self.consumed_by_corpus = state.get("consumption", {})
+        if self.distributed:
+            self.consumed_by_corpus = runtime["consumption_states"][self.rank]
+        else:
+            self.consumed_by_corpus = state.get("consumption", {})
         self.replay_steps = self.resume["step"]
         self.checkpoints = [self.resume["checkpoint"]]
 
@@ -725,8 +798,16 @@ class Trainer:
         if self.step_number < self.target_steps and len(self.token_buffer) > 1:
             target_mask = self.loss_buffer[1 : self.sequence_length + 1]
             self.add_sequence(self.token_buffer[: self.sequence_length + 1], target_mask, self.corpus_buffer[1 : self.sequence_length + 1])
-        if self.step_number < self.target_steps and self.batch:
-            self.train_batch()
+        if self.step_number < self.target_steps:
+            if self.distributed:
+                pending = [None for _ in range(self.world_size)]
+                torch.distributed.all_gather_object(pending, len(self.batch))
+                if min(pending) > 0:
+                    self.train_batch()
+                else:
+                    self.batch = []
+            elif self.batch:
+                self.train_batch()
         if self.step_number != self.target_steps:
             raise ValueError(
                 f"canonical stream produced only {self.step_number} training steps; profile requires {self.target_steps}"
@@ -739,6 +820,8 @@ class Trainer:
             not self.evaluations or self.evaluations[-1]["step"] != self.step_number
         ):
             self.record_evaluation(self.final_loss)
+
+        final_consumption, _ = self.gather_consumption()
 
         weights_name = "model.safetensors"
         weights_path = os.path.join(self.artifact_directory, weights_name)
@@ -827,7 +910,7 @@ class Trainer:
                 "artifacts": outputs,
                 "consumption": [
                     {"corpus": corpus, "token_targets": targets}
-                    for corpus, targets in sorted(self.consumed_by_corpus.items())
+                    for corpus, targets in sorted(final_consumption.items())
                 ],
             },
         )

@@ -420,7 +420,7 @@ must use one representation or the other, never both.
 | `tokens` | one training budget | positive integer | Fixed pretraining target budget. WALDO rounds it up to a complete optimizer step and persists the derived step count. Cannot be combined with `epochs` or `steps`. |
 | `epochs` | one training budget | `1..1000000` | Complete deterministic passes over every selected canonical record. When `steps` is omitted, WALDO derives the exact optimizer-step count after filtering and held-out selection. |
 | `steps` | legacy/fixed-step budget | positive integer | Explicit optimizer steps and learning-rate schedule length. Retained for existing composes and exact fixed-step experiments; it may be combined with `epochs` as a repetition limit. |
-| `batch_size` | yes | positive integer | Number of packed sequences in each optimizer step. |
+| `batch_size` | yes | positive integer | Global number of packed sequences in each optimizer step. Multi-GPU training partitions these sequences across ranks, so the value must be at least and evenly divisible by the aggregate GPU count. |
 | `sequence_length` | yes | positive integer, at most `context_tokens` | Number of predicted token targets per packed sequence. |
 | `learning_rate` | yes | finite positive number | Peak AdamW learning rate. |
 | `seed` | no | default `0` | Controls deterministic shuffling, evaluation selection, initialization, and training randomness. Reference composes set it explicitly. |

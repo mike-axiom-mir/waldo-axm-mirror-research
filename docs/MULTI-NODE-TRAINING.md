@@ -137,9 +137,12 @@ launcher-managed local scratch.
 
 Rank 0 resolves, verifies, filters, orders, and tokenizes the corpus. It sends
 compact token frames and masks through the NCCL process group; raw Parquet
-objects are not copied to secondary hosts. Every rank participates in the
-globally FSDP2-sharded model step. The compose `batch_size` remains one logical
-batch and is not multiplied by the host count.
+objects are not copied to secondary hosts. WALDO deterministically assigns a
+different slice of each global batch to every rank, and every rank participates
+in the globally FSDP2-sharded model step. The compose `batch_size` remains one
+logical global batch and is not multiplied by the host count. It must be at
+least and evenly divisible by the aggregate GPU count. For example, a global
+batch of 64 gives each rank 16 distinct sequences in a four-GPU run.
 
 ## Network configuration
 

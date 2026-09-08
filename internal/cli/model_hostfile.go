@@ -68,6 +68,7 @@ func runModelTrainHostfile(commandContext Context, args []string, path string, s
 	if err != nil {
 		return err
 	}
+	cluster = session.cluster
 	commandContext.Execution = session.ctx
 	handoff := &model.MultiNodeHandoff{
 		RendezvousID: cluster.RendezvousID, Nodes: cluster.Nodes,
@@ -188,6 +189,8 @@ func startHostfileSession(ctx context.Context, hostfile trainingHostfile, cluste
 		cancel()
 		return nil, fmt.Errorf("rank 0 TorchTitan preflight: %w", err)
 	}
+	cluster.WorldSize = cluster.Nodes * len(local.Accelerators)
+	session.cluster = cluster
 	rendezvousListener, err := listenHostfileRendezvous(cluster.Rendezvous)
 	if err != nil {
 		cancel()

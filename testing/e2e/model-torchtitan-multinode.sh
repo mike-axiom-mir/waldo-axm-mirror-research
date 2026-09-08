@@ -157,7 +157,7 @@ stages:
       - core/e2e/torchtitan
     parameters:
       steps: 2
-      batch_size: 1
+      batch_size: 2
       sequence_length: 64
       learning_rate: 0.001
       seed: 7
@@ -168,7 +168,7 @@ stages:
       - core/e2e/torchtitan
     parameters:
       steps: 2
-      batch_size: 1
+      batch_size: 2
       sequence_length: 64
       learning_rate: 0.0005
       seed: 8

@@ -15,10 +15,12 @@ a homogeneous runtime, GPU count, and accelerator topology before materializing
 data. Manual node-rank and rendezvous flags remain a compatibility interface.
 
 Rank zero alone reads and tokenizes WALDO's deterministic worker stream and
-broadcasts compact token frames through NCCL. Secondary hosts do not need the
-index, corpus objects, lookaside credentials, shared model storage, or NFS.
-FSDP2 shards model state. Rank zero commits checkpoints, terminal Safetensors,
-and observations.
+broadcasts compact token frames through NCCL. Each rank deterministically
+selects a different slice of the declared global batch; losses, token counts,
+and corpus consumption are aggregated across ranks. Secondary hosts do not
+need the index, corpus objects, lookaside credentials, shared model storage,
+or NFS. FSDP2 shards model state. Rank zero commits checkpoints, terminal
+Safetensors, and observations.
 
 Multi-node interrupted runs cannot currently resume. They must be restarted
 with the same topology and a fresh run.

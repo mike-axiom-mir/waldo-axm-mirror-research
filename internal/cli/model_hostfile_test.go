@@ -176,6 +176,9 @@ esac
 	if err != nil {
 		t.Fatal(err)
 	}
+	if session.cluster.WorldSize != 2 {
+		t.Fatalf("discovered world size = %d, want 2", session.cluster.WorldSize)
+	}
 	evaluation := training.EvaluationSet{Selection: "lowest-sha256-v1", SHA256: strings.Repeat("a", 64)}
 	if err := session.publish(model.MultiNodePlan{
 		Kind: model.MultiNodePlanKind, Schema: model.MultiNodePlanSchema,

@@ -143,7 +143,7 @@ printf '%s\n' '{"kind":"complete","schema":1,"observation":{"simulated":false,"s
 	if err := os.WriteFile(worker, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	parameters, err := ResolveParameters(Parameters{Steps: 1, BatchSize: 1, SequenceLength: 8, LearningRate: 0.001, Seed: 1})
+	parameters, err := ResolveParameters(Parameters{Steps: 1, BatchSize: 2, SequenceLength: 8, LearningRate: 0.001, Seed: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +186,7 @@ printf '%s\n' '{"kind":"complete","schema":1,"observation":{"simulated":false,"s
 	if err := os.WriteFile(worker, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	parameters, err := ResolveParameters(Parameters{Steps: 1, BatchSize: 1, SequenceLength: 8, LearningRate: 0.001, Seed: 1})
+	parameters, err := ResolveParameters(Parameters{Steps: 1, BatchSize: 4, SequenceLength: 8, LearningRate: 0.001, Seed: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,6 +229,18 @@ func TestTorchTitanSelectsRendezvousRouteAndDisablesUnconfiguredRDMA(t *testing.
 	}
 	if value := environmentSetting(environment, "NCCL_IB_DISABLE"); value != "1" {
 		t.Fatalf("NCCL_IB_DISABLE = %q, want 1", value)
+	}
+}
+
+func TestTorchTitanRejectsGlobalBatchThatCannotBePartitioned(t *testing.T) {
+	parameters, err := ResolveParameters(Parameters{Steps: 1, BatchSize: 6, SequenceLength: 8, LearningRate: 0.001, Seed: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := TorchTitan{Python: "unused", LocalProcs: 2, Nodes: 2, Rendezvous: "primary:29500"}
+	_, err = backend.Run(context.Background(), Request{Parameters: parameters})
+	if err == nil || !strings.Contains(err.Error(), "global batch size 6 must be at least and divisible by world size 4") {
+		t.Fatalf("batch partition error = %v", err)
 	}
 }
 
@@ -301,7 +313,7 @@ exit 0
 	if err := os.WriteFile(worker, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	parameters, err := ResolveParameters(Parameters{Steps: 1, BatchSize: 1, SequenceLength: 8, LearningRate: 0.001, Seed: 1})
+	parameters, err := ResolveParameters(Parameters{Steps: 1, BatchSize: 2, SequenceLength: 8, LearningRate: 0.001, Seed: 1})
 	if err != nil {
 		t.Fatal(err)
 	}

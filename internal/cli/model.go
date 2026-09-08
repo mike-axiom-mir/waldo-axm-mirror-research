@@ -658,6 +658,9 @@ func runModelTrainWithCluster(context Context, args []string, cluster training.C
 	if batch < 1 || batch > 1_000_000 {
 		return fmt.Errorf("--batch-size must be an integer in 1..1000000")
 	}
+	if err := validateDistributedBatchSize("training", batch, cluster.WorldSize); err != nil {
+		return err
+	}
 	learningRate := float64Option(context, "learning-rate")
 	if learningRate <= 0 || math.IsNaN(learningRate) || learningRate > 1 {
 		return fmt.Errorf("--learning-rate must be a positive number no greater than 1")
@@ -1113,6 +1116,11 @@ func runModelComposeTrainingWithHandoff(context Context, name, path string, clus
 	if err != nil {
 		return err
 	}
+	for _, stage := range compose.Stages {
+		if err := validateDistributedBatchSize("stage "+stage.Name, stage.Parameters.BatchSize, cluster.WorldSize); err != nil {
+			return err
+		}
+	}
 	if err := builder.CheckComposeTarget(name, compose); err != nil {
 		return err
 	}
@@ -1193,6 +1201,16 @@ func runModelComposeTrainingWithHandoff(context Context, name, path string, clus
 		}{Compose: composePath, Result: result})
 	}
 	return writeModelMutationResult(context, stdout, result, "trained")
+}
+
+func validateDistributedBatchSize(label string, batchSize int64, worldSize int) error {
+	if worldSize <= 1 {
+		return nil
+	}
+	if batchSize < int64(worldSize) || batchSize%int64(worldSize) != 0 {
+		return fmt.Errorf("%s global batch size %d must be at least and divisible by distributed world size %d", label, batchSize, worldSize)
+	}
+	return nil
 }
 
 func sanityCheckComposeCorpora(execution stdcontext.Context, compose model.Compose, progress io.Writer) (map[string][]waldoindex.Target, error) {

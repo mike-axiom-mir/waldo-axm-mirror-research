@@ -36,6 +36,7 @@ type pythonPackage struct {
 type Cluster struct {
 	Nodes        int
 	NodeRank     int
+	WorldSize    int
 	Rendezvous   string
 	RendezvousID string
 	Interface    string
