@@ -52,7 +52,10 @@ func ExportNative(materialized Materialized, destination string, force bool) ([]
 			return nil, fmt.Errorf("export path collision at %s", relative)
 		}
 		seenPaths[relative] = true
-		destinationPath := filepath.Join(abs, filepath.FromSlash(relative))
+		destinationPath, err := SafeExportFilePath(abs, relative, true)
+		if err != nil {
+			return nil, err
+		}
 		existing := false
 		if info, statErr := os.Stat(destinationPath); statErr == nil && !info.IsDir() {
 			if verifyErr := lookaside.VerifyFile(destinationPath, object.Shard.SHA256, object.Shard.Bytes); verifyErr == nil {
@@ -102,7 +105,10 @@ func ExportJSONL(materialized Materialized, destination string, force bool) ([]E
 			return nil, fmt.Errorf("export path collision at %s", relative)
 		}
 		seenPaths[relative] = true
-		destinationPath := filepath.Join(abs, filepath.FromSlash(relative))
+		destinationPath, err := SafeExportFilePath(abs, relative, true)
+		if err != nil {
+			return nil, err
+		}
 		digest, bytes, existing, err := convertJSONL(object.Path, destinationPath, object.Shard.Docs, object.Shard.Tokens, force)
 		if err != nil {
 			return nil, err

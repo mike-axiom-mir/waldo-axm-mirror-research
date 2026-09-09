@@ -97,6 +97,9 @@ func LoadCorpusExport(location string) (CorpusExport, string, error) {
 	if info.IsDir() {
 		path = filepath.Join(location, "EXPORT.json")
 	}
+	if _, err := corpus.SafeExportFilePath(filepath.Dir(path), filepath.Base(path), false); err != nil {
+		return CorpusExport{}, "", fmt.Errorf("load export document %s: %w", path, err)
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return CorpusExport{}, "", err
@@ -172,7 +175,10 @@ func VerifyCorpusExport(location string) (CorpusExport, ExportVerification, erro
 	root := filepath.Dir(path)
 	report := ExportVerification{Path: path}
 	for _, file := range document.Files {
-		filePath := filepath.Join(root, filepath.FromSlash(file.Path))
+		filePath, err := corpus.SafeExportFilePath(root, file.Path, false)
+		if err != nil {
+			return CorpusExport{}, ExportVerification{}, fmt.Errorf("verify export file %s: %w", file.Path, err)
+		}
 		if err := lookaside.VerifyFile(filePath, file.SHA256, file.Bytes); err != nil {
 			return CorpusExport{}, ExportVerification{}, fmt.Errorf("verify export file %s: %w", file.Path, err)
 		}

@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -65,6 +66,78 @@ func TestVerifyCorpusExportHashesFiles(t *testing.T) {
 	}
 	if _, _, err := VerifyCorpusExport(destination); err == nil {
 		t.Fatal("expected corrupt export failure")
+	}
+}
+
+func TestVerifyCorpusExportRejectsSymlinkedData(t *testing.T) {
+	content := []byte("native object")
+	digestArray := sha256.Sum256(content)
+	digest := hex.EncodeToString(digestArray[:])
+	document := exportFixture(digest, int64(len(content)))
+
+	for _, test := range []struct {
+		name string
+		link func(t *testing.T, destination, outside, relative string)
+	}{
+		{
+			name: "file",
+			link: func(t *testing.T, destination, outside, relative string) {
+				t.Helper()
+				external := filepath.Join(outside, "object.parquet")
+				if err := os.WriteFile(external, content, 0o644); err != nil {
+					t.Fatal(err)
+				}
+				path := filepath.Join(destination, filepath.FromSlash(relative))
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(external, path); err != nil {
+					t.Skipf("symlink unavailable: %v", err)
+				}
+			},
+		},
+		{
+			name: "parent directory",
+			link: func(t *testing.T, destination, outside, relative string) {
+				t.Helper()
+				external := filepath.Join(outside, filepath.FromSlash(strings.TrimPrefix(relative, "data/")))
+				if err := os.MkdirAll(filepath.Dir(external), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(external, content, 0o644); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(outside, filepath.Join(destination, "data")); err != nil {
+					t.Skipf("symlink unavailable: %v", err)
+				}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			destination := t.TempDir()
+			if err := WriteCorpusExport(destination, document); err != nil {
+				t.Fatal(err)
+			}
+			test.link(t, destination, t.TempDir(), document.Files[0].Path)
+			if _, _, err := VerifyCorpusExport(destination); err == nil || !strings.Contains(err.Error(), "symlink") {
+				t.Fatalf("VerifyCorpusExport() error = %v, want symlink rejection", err)
+			}
+		})
+	}
+}
+
+func TestLoadCorpusExportRejectsSymlinkedDocument(t *testing.T) {
+	external := t.TempDir()
+	document := exportFixture("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", 4)
+	if err := WriteCorpusExport(external, document); err != nil {
+		t.Fatal(err)
+	}
+	destination := t.TempDir()
+	if err := os.Symlink(filepath.Join(external, "EXPORT.json"), filepath.Join(destination, "EXPORT.json")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if _, _, err := LoadCorpusExport(destination); err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("LoadCorpusExport() error = %v, want symlink rejection", err)
 	}
 }
 

@@ -68,6 +68,37 @@ func TestExportNativeCopiesAndResumesVerifiedFiles(t *testing.T) {
 	}
 }
 
+func TestExportNativeRejectsSymlinkedDestinationParent(t *testing.T) {
+	content := []byte("parquet-shaped fixture")
+	digestArray := sha256.Sum256(content)
+	digest := hex.EncodeToString(digestArray[:])
+	cacheObject := filepath.Join(t.TempDir(), "cached")
+	if err := os.WriteFile(cacheObject, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	shard := ShardPin{
+		Manifest: "books/books.json", SHA256: digest, Format: "parquet",
+		License: "CC0-1.0", Docs: 1, Tokens: 2, Bytes: int64(len(content)),
+	}
+	materialized := Materialized{Objects: []MaterializedObject{{Shard: shard, Path: cacheObject}}}
+	destination := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(destination, "data")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	if _, err := ExportNative(materialized, destination, false); err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("ExportNative() error = %v, want symlink rejection", err)
+	}
+	entries, err := os.ReadDir(outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("export wrote outside its destination: %v", entries)
+	}
+}
+
 func TestExportJSONLConvertsValidatesAndResumes(t *testing.T) {
 	text := "canonical export"
 	var native bytes.Buffer
@@ -122,5 +153,46 @@ func TestExportJSONLConvertsValidatesAndResumes(t *testing.T) {
 	materialized.Objects[0].Shard.Tokens++
 	if _, err := ExportJSONL(materialized, t.TempDir(), false); err == nil || !strings.Contains(err.Error(), "manifest declares") {
 		t.Fatalf("declared totals error = %v", err)
+	}
+}
+
+func TestExportJSONLRejectsSymlinkedDestinationParent(t *testing.T) {
+	text := "canonical export"
+	var native bytes.Buffer
+	writer := parquet.NewGenericWriter[nativeshard.Row](&native)
+	if _, err := writer.Write([]nativeshard.Row{{
+		SHA256: record.TextHash(text), Kind: record.KindPretrain, Text: text,
+		Source: "fixture", License: "CC0-1.0", Tokens: 2,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	digestArray := sha256.Sum256(native.Bytes())
+	digest := hex.EncodeToString(digestArray[:])
+	cacheObject := filepath.Join(t.TempDir(), "cached")
+	if err := os.WriteFile(cacheObject, native.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	materialized := Materialized{Objects: []MaterializedObject{{
+		Shard: ShardPin{Manifest: "books/books.json", SHA256: digest, Format: "parquet", License: "CC0-1.0", Docs: 1, Tokens: 2, Bytes: int64(native.Len())},
+		Path:  cacheObject,
+	}}}
+	destination := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(destination, "data")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	if _, err := ExportJSONL(materialized, destination, false); err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("ExportJSONL() error = %v, want symlink rejection", err)
+	}
+	entries, err := os.ReadDir(outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("JSONL export wrote outside its destination: %v", entries)
 	}
 }
