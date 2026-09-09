@@ -93,7 +93,7 @@ if [ "$mode" = "recipe" ]; then
     'set -eu' \
     "[ \"\$WALDO_INGEST_RECIPE\" = \"\$1\" ] || { echo \"recipe env mismatch: \$WALDO_INGEST_RECIPE != \$1\" >&2; exit 1; }" \
     "fetch_real=\$(CDPATH='' cd -- \"\$WALDO_FETCH_DIR\" && pwd -P)" \
-    "[ \"\$(pwd -P)\" = \"\$fetch_real\" ] || { echo \"recipe cwd mismatch: \$(pwd -P) != \"\$fetch_real\" >&2; exit 1; }" > "$path_check"
+    "[ \"\$(pwd -P)\" = \"\$fetch_real\" ] || { echo \"recipe cwd mismatch: \$(pwd -P) != \$fetch_real\" >&2; exit 1; }" > "$path_check"
   chmod 755 "$path_check"
   PATH="$path_bin:$PATH"
   export PATH
