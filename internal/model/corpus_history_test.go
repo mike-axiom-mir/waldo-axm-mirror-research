@@ -73,7 +73,7 @@ func TestSkipCompletedStagesNeverPartiallyRewritesAStage(t *testing.T) {
 	compose.Stages[0].Corpora = NewCorpusSelections([]string{"example", "science/new"})
 	current := preparedFixture(t, compose.Stages[0])
 	historical := current
-	historical.BOM.Paths = []string{"example"}
+	current.BOM.Paths = []string{"example", "science/new"}
 	inspection := completedStageInspection(t, historical, RunComplete)
 
 	filtered, remaining, skipped, err := SkipCompletedStages(compose, []PreparedStage{current}, inspection)
