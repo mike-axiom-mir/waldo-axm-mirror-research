@@ -134,7 +134,7 @@ if [ -n "${WALDO_E2E_AWS_REGION:-}" ]; then
 fi
 
 destination="$index_root/core/e2e/tiny"
-common_arguments="--title Tiny-E2E-Corpus --description Disposable-ingestion-smoke-test --license CC0-1.0 --source https://example.invalid/waldo-e2e --source-category public-dataset"
+common_arguments="--title Tiny-E2E-Corpus --description Disposable-ingestion-smoke-test --license CC0-1.0 --source https://example.invalid/waldo-e2e --source-category public-dataset --language en"
 
 if [ "$mode" = "recipe" ]; then
   retired="$recipe_root/retired.yaml"
@@ -328,8 +328,8 @@ if find "$scratch" -type f -print 2>/dev/null | grep . >/dev/null 2>&1; then
   exit 1
 fi
 cache_count=$(find "$cache" -type f -print 2>/dev/null | wc -l | tr -d ' ')
-if [ "$cache_count" -ne 1 ]; then
-  echo "verified cache contains $cache_count objects, want 1 retained object" >&2
+if [ "$cache_count" -ne 0 ]; then
+  echo "successful verification/export left $cache_count verified cache objects behind" >&2
   exit 1
 fi
 
