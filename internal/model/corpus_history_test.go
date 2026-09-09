@@ -7,50 +7,185 @@ package model
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/openwaldo/waldo/internal/corpus"
+	"github.com/openwaldo/waldo/internal/training"
 )
 
-func TestSkipCompletedCorporaFiltersCompletedPathsAndWeights(t *testing.T) {
+func TestSkipCompletedStagesReusesOnlyExactStageWork(t *testing.T) {
 	compose := validCompose()
-	compose.Stages[0].Corpora = NewCorpusSelections([]string{"core/books", "science/new", "post-train/dialogue"})
-	compose.Stages[0].Parameters.CorpusWeights = map[string]uint64{"core/books": 3, "science/new": 2, "post-train/dialogue": 1}
-	compose.Stages = append(compose.Stages, Stage{
-		Name: "fine-tune", Type: "fine-tuning", Objective: "causal-language-modeling",
-		Corpora: NewCorpusSelections([]string{"post-train/dialogue"}), Parameters: testStage("unused").Parameters,
-	})
-	inspection := Inspection{
-		Model: ModelRecord{Runs: []RunPin{
-			{State: RunComplete},
-			{State: RunFailed},
-		}},
-		RunBOMs: []RunBOM{
-			{CorpusBOM: corpus.BOM{Paths: []string{"core/books.yaml", "post-train/dialogue"}}},
-			{CorpusBOM: corpus.BOM{Paths: []string{"science/new"}}},
-		},
-	}
+	prepared := preparedFixture(t, compose.Stages[0])
+	inspection := completedStageInspection(t, prepared, RunComplete)
 
-	filtered, skipped := SkipCompletedCorpora(compose, inspection)
-	if !reflect.DeepEqual(skipped, []SkippedCorpus{{Stage: "pretrain", Path: "core/books"}, {Stage: "pretrain", Path: "post-train/dialogue"}, {Stage: "fine-tune", Path: "post-train/dialogue"}}) {
+	filtered, remaining, skipped, err := SkipCompletedStages(compose, []PreparedStage{prepared}, inspection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(skipped, []SkippedCorpus{{Stage: "pretrain", Path: "example"}}) {
 		t.Fatalf("skipped = %+v", skipped)
 	}
-	if len(filtered.Stages) != 1 || !reflect.DeepEqual(CorpusPaths(filtered.Stages[0].Corpora), []string{"science/new"}) || !reflect.DeepEqual(filtered.Stages[0].Parameters.CorpusWeights, map[string]uint64{"science/new": 2}) {
-		t.Fatalf("filtered compose = %+v", filtered)
+	if len(filtered.Stages) != 0 || len(remaining) != 0 {
+		t.Fatalf("filtered = %+v, prepared = %+v", filtered, remaining)
 	}
-	if len(compose.Stages) != 2 || len(compose.Stages[0].Corpora) != 3 || len(compose.Stages[0].Parameters.CorpusWeights) != 3 {
+	if len(compose.Stages) != 1 || len(compose.Stages[0].Corpora) != 1 {
 		t.Fatal("input compose was mutated")
 	}
 }
 
-func TestSkipCompletedCorporaCanProduceNoWork(t *testing.T) {
+func TestSkipCompletedStagesKeepsChangedCorpusAtSamePath(t *testing.T) {
 	compose := validCompose()
-	inspection := Inspection{
-		Model:   ModelRecord{Runs: []RunPin{{State: RunComplete}}},
-		RunBOMs: []RunBOM{{CorpusBOM: corpus.BOM{Paths: []string{"example.json"}}}},
+	historical := preparedFixture(t, compose.Stages[0])
+	inspection := completedStageInspection(t, historical, RunComplete)
+	current := historical
+	current.BOM.Manifests = append([]corpus.ManifestPin(nil), historical.BOM.Manifests...)
+	current.BOM.Manifests[0].SHA256 = strings.Repeat("c", 64)
+
+	filtered, remaining, skipped, err := SkipCompletedStages(compose, []PreparedStage{current}, inspection)
+	if err != nil {
+		t.Fatal(err)
 	}
-	filtered, skipped := SkipCompletedCorpora(compose, inspection)
-	if len(filtered.Stages) != 0 || len(skipped) != 1 || skipped[0].Path != "example" {
-		t.Fatalf("filtered = %+v, skipped = %+v", filtered, skipped)
+	if len(filtered.Stages) != 1 || len(remaining) != 1 || len(skipped) != 0 {
+		t.Fatalf("changed corpus was skipped: filtered = %+v, prepared = %+v, skipped = %+v", filtered, remaining, skipped)
+	}
+}
+
+func TestSkipCompletedStagesKeepsChangedParameters(t *testing.T) {
+	compose := validCompose()
+	historical := preparedFixture(t, compose.Stages[0])
+	inspection := completedStageInspection(t, historical, RunComplete)
+	compose.Stages[0].Parameters.LearningRate = 0.002
+	current := historical
+	current.Stage = compose.Stages[0]
+
+	filtered, remaining, skipped, err := SkipCompletedStages(compose, []PreparedStage{current}, inspection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(filtered.Stages) != 1 || len(remaining) != 1 || len(skipped) != 0 {
+		t.Fatalf("changed parameters were skipped: filtered = %+v, prepared = %+v, skipped = %+v", filtered, remaining, skipped)
+	}
+}
+
+func TestSkipCompletedStagesNeverPartiallyRewritesAStage(t *testing.T) {
+	compose := validCompose()
+	compose.Stages[0].Corpora = NewCorpusSelections([]string{"example", "science/new"})
+	current := preparedFixture(t, compose.Stages[0])
+	historical := current
+	historical.BOM.Paths = []string{"example"}
+	inspection := completedStageInspection(t, historical, RunComplete)
+
+	filtered, remaining, skipped, err := SkipCompletedStages(compose, []PreparedStage{current}, inspection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(filtered.Stages) != 1 || len(remaining) != 1 || len(skipped) != 0 || !reflect.DeepEqual(CorpusPaths(filtered.Stages[0].Corpora), []string{"example", "science/new"}) {
+		t.Fatalf("stage was partially rewritten: filtered = %+v, prepared = %+v, skipped = %+v", filtered, remaining, skipped)
+	}
+}
+
+func TestSkipCompletedStagesIgnoresFailedRuns(t *testing.T) {
+	compose := validCompose()
+	prepared := preparedFixture(t, compose.Stages[0])
+	inspection := completedStageInspection(t, prepared, RunFailed)
+
+	filtered, remaining, skipped, err := SkipCompletedStages(compose, []PreparedStage{prepared}, inspection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(filtered.Stages) != 1 || len(remaining) != 1 || len(skipped) != 0 {
+		t.Fatalf("failed run was reused: filtered = %+v, prepared = %+v, skipped = %+v", filtered, remaining, skipped)
+	}
+}
+
+func TestSkipCompletedStagesDoesNotReuseWorkBehindNewerWeights(t *testing.T) {
+	compose := validCompose()
+	requested := preparedFixture(t, compose.Stages[0])
+	newerStage := testStage("fine-tune")
+	newer := preparedFixture(t, newerStage)
+	first := completedStageInspection(t, requested, RunComplete)
+	second := completedStageInspection(t, newer, RunComplete)
+	inspection := Inspection{
+		Model:   ModelRecord{Runs: append(first.Model.Runs, second.Model.Runs...)},
+		RunBOMs: append(first.RunBOMs, second.RunBOMs...),
+	}
+
+	filtered, remaining, skipped, err := SkipCompletedStages(compose, []PreparedStage{requested}, inspection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(filtered.Stages) != 1 || len(remaining) != 1 || len(skipped) != 0 {
+		t.Fatalf("historical work behind newer weights was reused: filtered = %+v, prepared = %+v, skipped = %+v", filtered, remaining, skipped)
+	}
+}
+
+func TestSkipCompletedStagesReusesCurrentSuffixAsComposePrefix(t *testing.T) {
+	oldStage := testStage("old")
+	currentStage := testStage("current")
+	nextStage := testStage("next")
+	old := preparedFixture(t, oldStage)
+	current := preparedFixture(t, currentStage)
+	next := preparedFixture(t, nextStage)
+	oldInspection := completedStageInspection(t, old, RunComplete)
+	currentInspection := completedStageInspection(t, current, RunComplete)
+	inspection := Inspection{
+		Model:   ModelRecord{Runs: append(oldInspection.Model.Runs, currentInspection.Model.Runs...)},
+		RunBOMs: append(oldInspection.RunBOMs, currentInspection.RunBOMs...),
+	}
+	compose := validCompose()
+	compose.Stages = []Stage{currentStage, nextStage}
+
+	filtered, remaining, skipped, err := SkipCompletedStages(compose, []PreparedStage{current, next}, inspection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(filtered.Stages) != 1 || filtered.Stages[0].Name != "next" || len(remaining) != 1 || remaining[0].Stage.Name != "next" || !reflect.DeepEqual(skipped, []SkippedCorpus{{Stage: "current", Path: "example"}}) {
+		t.Fatalf("current suffix was not reused as compose prefix: filtered = %+v, prepared = %+v, skipped = %+v", filtered, remaining, skipped)
+	}
+}
+
+func TestSkipCompletedStagesMatchesEpochDerivedParameters(t *testing.T) {
+	compose := validCompose()
+	compose.Stages[0].Parameters.Steps = 0
+	compose.Stages[0].Parameters.Epochs = 2
+	prepared := preparedFixture(t, compose.Stages[0])
+	inspection := completedStageInspection(t, prepared, RunComplete)
+
+	filtered, remaining, skipped, err := SkipCompletedStages(compose, []PreparedStage{prepared}, inspection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(filtered.Stages) != 0 || len(remaining) != 0 || len(skipped) != 1 {
+		t.Fatalf("exact epoch-derived work was not reused: filtered = %+v, prepared = %+v, skipped = %+v", filtered, remaining, skipped)
+	}
+}
+
+func completedStageInspection(t *testing.T, prepared PreparedStage, state RunState) Inspection {
+	t.Helper()
+	corpusHash, err := hashJSON(prepared.BOM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parameters, err := prepared.Stage.ResolvePlanningParameters()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.Stage.Parameters.Steps == 0 && prepared.Stage.Parameters.Tokens == 0 {
+		parameters, err = prepared.Stage.ResolveParametersForSteps(4)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	conversation := training.ConversationTransform{}
+	if prepared.Stage.Conversation != nil {
+		conversation = *prepared.Stage.Conversation
+	}
+	return Inspection{
+		Model: ModelRecord{Runs: []RunPin{{Stage: prepared.Stage.Name, State: state}}},
+		RunBOMs: []RunBOM{{
+			Stage: prepared.Stage.Name, StageType: prepared.Stage.Type, Objective: prepared.Stage.Objective,
+			Conversation: conversation, CorpusBOMSHA256: corpusHash, CorpusBOM: prepared.BOM, Parameters: parameters,
+		}},
 	}
 }
