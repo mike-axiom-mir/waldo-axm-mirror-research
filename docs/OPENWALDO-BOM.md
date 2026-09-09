@@ -78,8 +78,10 @@ waldo index verify /path/to/export
 ```
 
 `index verify` validates identities, references, policy, totals, safe file paths,
-native/interchange relationships, and then hashes every exported file. It is
-offline and does not require the original index or lookaside.
+native/interchange relationships, and then hashes every exported file. Export
+documents and data files must be regular files, and path components beneath the
+export root must not be symlinks. It is offline and does not require the original
+index or lookaside.
 
 This proves internal consistency and possession of the exported bytes. It does
 not re-fetch upstream sources, make a legal judgment about license assertions,
