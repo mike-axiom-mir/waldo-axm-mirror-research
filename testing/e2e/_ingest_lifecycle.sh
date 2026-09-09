@@ -93,7 +93,7 @@ if [ "$mode" = "recipe" ]; then
     'set -eu' \
     "[ \"\$WALDO_INGEST_RECIPE\" = \"\$1\" ] || { echo \"recipe env mismatch: \$WALDO_INGEST_RECIPE != \$1\" >&2; exit 1; }" \
     "fetch_real=\$(CDPATH='' cd -- \"\$WALDO_FETCH_DIR\" && pwd -P)" \
-    "[ \"\$(pwd -P)\" = \"\$fetch_real\" ] || { echo \"recipe cwd mismatch: \$(pwd -P) != \$fetch_real\" >&2; exit 1; }" > "$path_check"
+    "[ \"\$(pwd -P)\" = \"\$fetch_real\" ] || { echo \"recipe cwd mismatch: \$(pwd -P) != \"\$fetch_real\" >&2; exit 1; }" > "$path_check"
   chmod 755 "$path_check"
   PATH="$path_bin:$PATH"
   export PATH
@@ -328,8 +328,8 @@ if find "$scratch" -type f -print 2>/dev/null | grep . >/dev/null 2>&1; then
   exit 1
 fi
 cache_count=$(find "$cache" -type f -print 2>/dev/null | wc -l | tr -d ' ')
-if [ "$cache_count" -ne 1 ]; then
-  echo "verified cache contains $cache_count objects, want 1 retained object" >&2
+if [ "$cache_count" -ne 0 ]; then
+  echo "successful verification/export left $cache_count verified cache objects behind" >&2
   exit 1
 fi
 
