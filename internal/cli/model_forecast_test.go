@@ -16,12 +16,14 @@ import (
 	"github.com/openwaldo/waldo/internal/model"
 )
 
-func TestApproximateDurationUsesHoursUntilOneHundred(t *testing.T) {
+func TestApproximateDurationKeepsShortForecastsDistinct(t *testing.T) {
 	for _, test := range []struct {
 		seconds int64
 		want    string
 	}{
-		{seconds: 30 * 60, want: "under 1 hour"},
+		{seconds: 1, want: "1 second"},
+		{seconds: 21, want: "21 seconds"},
+		{seconds: 30 * 60, want: "30 minutes"},
 		{seconds: 60 * 60, want: "1 hour"},
 		{seconds: 99 * 60 * 60, want: "99 hours"},
 		{seconds: 100 * 60 * 60, want: "4 days"},
@@ -91,28 +93,20 @@ func TestModelForecastAcceptsConfiguredMultipleIndexPaths(t *testing.T) {
 
 func TestWriteModelForecastUsesApprovedCompactColumns(t *testing.T) {
 	report := model.ResourceForecast{ApproximateParameters: 9_543_210, PlannedTokens: 1_048_576_000, Configurations: []model.HardwareConfiguration{
-		{Manufacturer: "Apple", Accelerator: "M4 Max 40-core GPU", GPUs: 1, Nodes: 1, MemoryPerGPUBytes: 128 << 30, ApproximateSeconds: 48 * 24 * 60 * 60},
-		{Manufacturer: "NVIDIA", Accelerator: "H100 SXM", GPUs: 8, Nodes: 1, MemoryPerGPUBytes: 80 << 30, ApproximateSeconds: 44 * 60 * 60},
+		{Manufacturer: "Apple", Accelerator: "M4 Max 40-core GPU", GPUs: 1, Nodes: 1, RequiredPerGPUBytes: 14 << 30, MemoryPerGPUBytes: 128 << 30, ApproximateSeconds: 48 * 24 * 60 * 60, EstimateSource: "catalog"},
+		{Manufacturer: "NVIDIA", Accelerator: "H100 SXM", GPUs: 8, Nodes: 1, RequiredPerGPUBytes: 12 << 30, MemoryPerGPUBytes: 80 << 30, ApproximateSeconds: 44 * 60 * 60, EstimateSource: "observed-runs", ObservedRuns: 3},
 	}}
 	var output bytes.Buffer
 	writeModelForecast(&output, report)
-	lines := strings.Split(strings.TrimSpace(output.String()), "\n")
-	if len(lines) != 6 {
-		t.Fatalf("output = %q", output.String())
+	if strings.Index(output.String(), "H100 SXM") > strings.Index(output.String(), "M4 Max 40-core GPU") {
+		t.Fatalf("faster topology was not presented first:\n%s", output.String())
 	}
-	for lineNumber, want := range []string{"GPUS", "1", "8"} {
-		lineNumber += 3
-		fields := strings.Fields(lines[lineNumber])
-		if len(fields) == 0 || fields[0] != want {
-			t.Errorf("line %d does not lead with %q:\n%s", lineNumber+1, want, lines[lineNumber])
-		}
-	}
-	for _, want := range []string{"PARAMETERS:  9.5M (9,543,210)", "TOKENS:      1.0B", "MFR", "ACCELERATOR", "GPUS", "NODES", "MEMORY/GPU", "APPROX. TIME", "Apple", "128 GB", "48 days", "NVIDIA", "80 GB", "44 hours"} {
+	for _, want := range []string{"PARAMETERS:  9.5M (9,543,210)", "TOKENS:      1.0B", "2 viable forecast topologies", "no hardware was detected or reserved", "fastest estimated runtime first", "MFR", "ACCELERATOR", "GPUS", "NODES", "NEEDED/GPU", "CAPACITY/GPU", "APPROX. TIME", "BASIS", "Apple", "14 GB", "128 GB", "48 days", "NVIDIA", "12 GB", "80 GB", "44 hours", "observed (3)", "forecast does not start training"} {
 		if !strings.Contains(output.String(), want) {
 			t.Errorf("output missing %q:\n%s", want, output.String())
 		}
 	}
-	for _, unwanted := range []string{"BACKEND", "FIT", "~", "unified"} {
+	for _, unwanted := range []string{"BACKEND", "FIT", "~", "unified", "under 1 hour"} {
 		if strings.Contains(output.String(), unwanted) {
 			t.Errorf("output unexpectedly contains %q:\n%s", unwanted, output.String())
 		}
