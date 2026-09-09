@@ -295,6 +295,14 @@ corpora, never raw source directories or exported corpus files.
 Before downloading any shard, `model train` refreshes the selected index and
 checks every corpus path in every stage. A failed sanity check reports all
 unavailable paths with their stage names and performs no shard materialization.
+For an existing model, WALDO also resolves the current filtered corpus BOM and
+reuses a completed stage only when that BOM and every other immutable stage
+fact exactly match a completed run. Rebuilding a corpus at the same path,
+changing stage parameters, or changing its objective leaves the complete stage
+executable. Reuse is limited to a compose prefix that matches the current
+completed run-history suffix, so a stale match behind newer weights is not a
+completion claim. WALDO never turns a declared multi-corpus stage into partial
+work.
 
 Stages execute in listed order. Each completed stage produces the current
 weights used to initialize the next stage. If a stage fails, later stages do

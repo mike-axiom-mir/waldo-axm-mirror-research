@@ -186,7 +186,7 @@ checkpoint_count=$(find "$models/smoke/runs" -type f -name 'step-*.json' -print 
 [ "$checkpoint_count" -eq 1 ] || { echo "found $checkpoint_count fake checkpoints, want 1" >&2; exit 1; }
 
 repeat_output=$("$binary" model train smoke "$compose" --audit)
-printf '%s\n' "$repeat_output" | grep -q 'unchanged; all selected corpora were already completed'
+printf '%s\n' "$repeat_output" | grep -q 'unchanged; all selected stage work was already completed'
 run_count=$(find "$models/smoke/runs" -type f -name RUN.json -print | wc -l | tr -d ' ')
 [ "$run_count" -eq 1 ] || { echo "completed corpus was trained again" >&2; exit 1; }
 

@@ -837,19 +837,47 @@ func runModelComposeTraining(context Context, name, path string, cluster trainin
 	if err != nil {
 		return err
 	}
-	var skipped []model.SkippedCorpus
-	if exists, err := model.Exists(builder.Root, name); err != nil {
+	exists, err := model.Exists(builder.Root, name)
+	if err != nil {
 		return err
-	} else if exists && !pending {
-		inspection, err := model.Inspect(builder.Root, name)
+	}
+	var inspection model.Inspection
+	var skipped []model.SkippedCorpus
+	if exists && !pending {
+		inspection, err = model.Inspect(builder.Root, name)
 		if err != nil {
 			return err
 		}
-		compose, skipped = model.SkipCompletedCorpora(compose, inspection)
+	}
+	builder.ComposeName = filepath.Base(composePath)
+	corpusTargets, err := sanityCheckComposeCorpora(context.Execution, compose, stderr)
+	if err != nil {
+		return err
+	}
+	cache, err := lookaside.DefaultCache()
+	if err != nil {
+		return err
+	}
+	prepared := make([]model.PreparedStage, 0, len(compose.Stages))
+	for _, stage := range compose.Stages {
+		bom, err := resolveModelStageBOM(context, stage, corpusTargets[stage.Name], cache, stderr)
+		if err != nil {
+			return err
+		}
+		prepared = append(prepared, model.PreparedStage{Stage: stage, BOM: bom})
+	}
+	if exists && !pending {
+		compose, prepared, skipped, err = model.SkipCompletedStages(compose, prepared, inspection)
+		if err != nil {
+			return err
+		}
 		for _, corpus := range skipped {
-			fmt.Fprintf(stderr, "preflight/%s          skipped %s (already completed by this model)\n", corpus.Stage, corpus.Path)
+			fmt.Fprintf(stderr, "preflight/%s          skipped %s (exact stage work already completed by this model)\n", corpus.Stage, corpus.Path)
 		}
 		if len(compose.Stages) == 0 {
+			if _, err := cache.PurgeUsed(); err != nil {
+				return fmt.Errorf("purge successful compose scratch: %w", err)
+			}
 			if context.JSON {
 				return writeJSON(stdout, struct {
 					Compose string                `json:"compose"`
@@ -857,14 +885,9 @@ func runModelComposeTraining(context Context, name, path string, cluster trainin
 					Skipped []model.SkippedCorpus `json:"skipped"`
 				}{Compose: composePath, Result: inspection, Skipped: skipped})
 			}
-			fmt.Fprintf(stdout, "model %s unchanged; all selected corpora were already completed\n", name)
+			fmt.Fprintf(stdout, "model %s unchanged; all selected stage work was already completed\n", name)
 			return nil
 		}
-	}
-	builder.ComposeName = filepath.Base(composePath)
-	corpusTargets, err := sanityCheckComposeCorpora(context.Execution, compose, stderr)
-	if err != nil {
-		return err
 	}
 	objectives := make([]string, 0, len(compose.Stages))
 	for _, stage := range compose.Stages {
@@ -875,17 +898,12 @@ func runModelComposeTraining(context Context, name, path string, cluster trainin
 	if err := builder.CheckBackend(context.Execution, compose.Architecture, objectives); err != nil {
 		return err
 	}
-	cache, err := lookaside.DefaultCache()
-	if err != nil {
-		return err
-	}
-	prepared := make([]model.PreparedStage, 0, len(compose.Stages))
-	for _, stage := range compose.Stages {
-		resolved, err := prepareModelStage(context, stage, corpusTargets[stage.Name], cache, stderr, boolOption(context, "audit"))
+	for index, candidate := range prepared {
+		resolved, err := materializeModelStage(context, candidate.Stage, candidate.BOM, cache, stderr, boolOption(context, "audit"))
 		if err != nil {
 			return err
 		}
-		prepared = append(prepared, resolved)
+		prepared[index] = resolved
 	}
 	result, err := builder.Compose(context.Execution, name, compose, prepared)
 	if err != nil {
@@ -1562,24 +1580,32 @@ func prepareDefaultTrainingStage(context Context, inspection model.Inspection, p
 }
 
 func prepareModelStage(context Context, stage model.Stage, targets []waldoindex.Target, cache *lookaside.Cache, progress io.Writer, audit bool) (model.PreparedStage, error) {
-	policy, err := corpus.NewLicensePolicy(nil, nil)
+	bom, err := resolveModelStageBOM(context, stage, targets, cache, progress)
 	if err != nil {
 		return model.PreparedStage{}, err
 	}
+	return materializeModelStage(context, stage, bom, cache, progress, audit)
+}
+
+func resolveModelStageBOM(context Context, stage model.Stage, targets []waldoindex.Target, cache *lookaside.Cache, progress io.Writer) (corpus.BOM, error) {
+	policy, err := corpus.NewLicensePolicy(nil, nil)
+	if err != nil {
+		return corpus.BOM{}, err
+	}
 	bom, err := corpus.BuildBOM(context.Execution, targets, policy, cache)
 	if err != nil {
-		return model.PreparedStage{}, fmt.Errorf("stage %s: %w", stage.Name, err)
+		return corpus.BOM{}, fmt.Errorf("stage %s: %w", stage.Name, err)
 	}
 	recordFilter, err := stage.RecordFilterPolicy(bom.Paths)
 	if err != nil {
-		return model.PreparedStage{}, fmt.Errorf("stage %s: %w", stage.Name, err)
+		return corpus.BOM{}, fmt.Errorf("stage %s: %w", stage.Name, err)
 	}
 	bom.RecordFilter = recordFilter
 	if err := bom.Validate(); err != nil {
-		return model.PreparedStage{}, fmt.Errorf("stage %s filtered corpus BOM: %w", stage.Name, err)
+		return corpus.BOM{}, fmt.Errorf("stage %s filtered corpus BOM: %w", stage.Name, err)
 	}
 	emitUnassessedFilterWarning(progress, stage.Name, bom)
-	return materializeModelStage(context, stage, bom, cache, progress, audit)
+	return bom, nil
 }
 
 func emitUnassessedFilterWarning(output io.Writer, stageName string, bom corpus.BOM) {

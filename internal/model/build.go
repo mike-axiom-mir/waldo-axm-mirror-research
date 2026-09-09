@@ -1278,32 +1278,11 @@ func validateStagedComposeRun(inspection Inspection, index int, prepared Prepare
 	if index >= len(inspection.RunBOMs) || inspection.Model.Runs[index].Stage != prepared.Stage.Name {
 		return fmt.Errorf("run %d does not match stage %s", index+1, prepared.Stage.Name)
 	}
-	bom := inspection.RunBOMs[index]
-	corpusHash, err := hashJSON(prepared.BOM)
+	matches, err := preparedStageMatchesRun(prepared, inspection.RunBOMs[index])
 	if err != nil {
 		return err
 	}
-	parameters, err := prepared.Stage.ResolvePlanningParameters()
-	if err != nil {
-		return err
-	}
-	if prepared.Stage.Parameters.Steps == 0 && prepared.Stage.Parameters.Tokens == 0 {
-		parameters, err = prepared.Stage.ResolveParametersForSteps(bom.Parameters.Steps)
-		if err != nil {
-			return err
-		}
-	}
-	if parameters.Data.Order == "corpus-weighted-shuffle-v1" {
-		parameters.Data.CorpusWeights, err = resolveCorpusWeights(parameters.Data.CorpusWeights, prepared.BOM.Paths)
-		if err != nil {
-			return err
-		}
-	}
-	conversation := training.ConversationTransform{}
-	if prepared.Stage.Conversation != nil {
-		conversation = *prepared.Stage.Conversation
-	}
-	if bom.Stage != prepared.Stage.Name || bom.StageType != prepared.Stage.Type || bom.Objective != prepared.Stage.Objective || !reflect.DeepEqual(bom.Conversation, conversation) || bom.CorpusBOMSHA256 != corpusHash || !equivalentTrainingParameters(bom.Parameters, parameters) {
+	if !matches {
 		return fmt.Errorf("run %d immutable facts do not match stage %s", index+1, prepared.Stage.Name)
 	}
 	return nil
