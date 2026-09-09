@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"sort"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -154,45 +155,74 @@ func writeModelForecast(stdout io.Writer, report model.ResourceForecast) {
 		accelerator  string
 		GPUs         string
 		nodes        string
-		memory       string
+		needed       string
+		capacity     string
 		duration     string
+		basis        string
 	}
-	rows := make([]row, 0, len(report.Configurations))
+	configurations := slices.Clone(report.Configurations)
+	sort.SliceStable(configurations, func(i, j int) bool {
+		left, right := configurations[i].ApproximateSeconds, configurations[j].ApproximateSeconds
+		if left < 0 {
+			return false
+		}
+		if right < 0 {
+			return true
+		}
+		return left < right
+	})
+	rows := make([]row, 0, len(configurations))
 	observedRuns := 0
 	manufacturerWidth, acceleratorWidth := len("MFR"), len("ACCELERATOR")
 	GPUsWidth, nodesWidth := len("GPUS"), len("NODES")
-	memoryWidth, durationWidth := len("MEMORY/GPU"), len("APPROX. TIME")
-	for _, configuration := range report.Configurations {
+	neededWidth, capacityWidth := len("NEEDED/GPU"), len("CAPACITY/GPU")
+	durationWidth, basisWidth := len("APPROX. TIME"), len("BASIS")
+	for _, configuration := range configurations {
 		if configuration.EstimateSource == "observed-runs" {
 			observedRuns += configuration.ObservedRuns
+		}
+		basis := "catalog"
+		if configuration.EstimateSource == "observed-runs" {
+			basis = fmt.Sprintf("observed (%d)", configuration.ObservedRuns)
 		}
 		candidate := row{
 			manufacturer: configuration.Manufacturer,
 			accelerator:  configuration.Accelerator,
 			GPUs:         fmt.Sprintf("%d", configuration.GPUs),
 			nodes:        fmt.Sprintf("%d", configuration.Nodes),
-			memory:       hardwareMemory(configuration.MemoryPerGPUBytes),
+			needed:       hardwareMemory(configuration.RequiredPerGPUBytes),
+			capacity:     hardwareMemory(configuration.MemoryPerGPUBytes),
 			duration:     approximateDuration(configuration.ApproximateSeconds),
+			basis:        basis,
 		}
 		rows = append(rows, candidate)
 		manufacturerWidth = max(manufacturerWidth, len(candidate.manufacturer))
 		acceleratorWidth = max(acceleratorWidth, len(candidate.accelerator))
 		GPUsWidth = max(GPUsWidth, len(candidate.GPUs))
 		nodesWidth = max(nodesWidth, len(candidate.nodes))
-		memoryWidth = max(memoryWidth, len(candidate.memory))
+		neededWidth = max(neededWidth, len(candidate.needed))
+		capacityWidth = max(capacityWidth, len(candidate.capacity))
 		durationWidth = max(durationWidth, len(candidate.duration))
+		basisWidth = max(basisWidth, len(candidate.basis))
 	}
+	fmt.Fprintf(stdout, "ESTIMATE:    %d viable forecast topologies; no hardware was detected or reserved.\n", len(rows))
+	fmt.Fprintln(stdout, "ORDER:       fastest estimated runtime first")
 	if observedRuns > 0 {
 		label := "runs"
 		if observedRuns == 1 {
 			label = "run"
 		}
 		fmt.Fprintf(stdout, "CALIBRATION: %d completed local %s applied\n\n", observedRuns, label)
+	} else {
+		fmt.Fprintln(stdout, "CALIBRATION: none; every row is a catalog projection")
+		fmt.Fprintln(stdout)
 	}
-	fmt.Fprintf(stdout, "%*s  %*s  %-*s  %-*s  %*s  %*s\n", GPUsWidth, "GPUS", nodesWidth, "NODES", manufacturerWidth, "MFR", acceleratorWidth, "ACCELERATOR", memoryWidth, "MEMORY/GPU", durationWidth, "APPROX. TIME")
+	fmt.Fprintf(stdout, "%*s  %*s  %-*s  %-*s  %*s  %*s  %*s  %-*s\n", GPUsWidth, "GPUS", nodesWidth, "NODES", manufacturerWidth, "MFR", acceleratorWidth, "ACCELERATOR", neededWidth, "NEEDED/GPU", capacityWidth, "CAPACITY/GPU", durationWidth, "APPROX. TIME", basisWidth, "BASIS")
 	for _, candidate := range rows {
-		fmt.Fprintf(stdout, "%*s  %*s  %-*s  %-*s  %*s  %*s\n", GPUsWidth, candidate.GPUs, nodesWidth, candidate.nodes, manufacturerWidth, candidate.manufacturer, acceleratorWidth, candidate.accelerator, memoryWidth, candidate.memory, durationWidth, candidate.duration)
+		fmt.Fprintf(stdout, "%*s  %*s  %-*s  %-*s  %*s  %*s  %*s  %-*s\n", GPUsWidth, candidate.GPUs, nodesWidth, candidate.nodes, manufacturerWidth, candidate.manufacturer, acceleratorWidth, candidate.accelerator, neededWidth, candidate.needed, capacityWidth, candidate.capacity, durationWidth, candidate.duration, basisWidth, candidate.basis)
 	}
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "NEXT:        match a listed topology to hardware you control; forecast does not start training")
 }
 
 func configuredForecastCalibration() ([]model.ForecastCalibration, error) {
@@ -215,10 +245,25 @@ func approximateDuration(seconds int64) string {
 	if seconds < 0 {
 		return "epoch-derived"
 	}
-	hours := float64(seconds) / float64(time.Hour/time.Second)
-	if hours < 1 {
-		return "under 1 hour"
+	if seconds < 60 {
+		label := "seconds"
+		if seconds == 1 {
+			label = "second"
+		}
+		return fmt.Sprintf("%d %s", seconds, label)
 	}
+	if seconds < int64(time.Hour/time.Second) {
+		minutes := int64(math.Round(float64(seconds) / float64(time.Minute/time.Second)))
+		if minutes < 1 {
+			minutes = 1
+		}
+		label := "minutes"
+		if minutes == 1 {
+			label = "minute"
+		}
+		return fmt.Sprintf("%d %s", minutes, label)
+	}
+	hours := float64(seconds) / float64(time.Hour/time.Second)
 	if hours < 100 {
 		value := int64(math.Round(hours))
 		if value < 1 {

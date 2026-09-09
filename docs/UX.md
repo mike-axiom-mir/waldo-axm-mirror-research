@@ -176,6 +176,11 @@ waldo model export --help
 
 Run `forecast` before allocating substantial compute. Training and generation
 fail when the selected host lacks a compatible runtime or artifacts.
+The human forecast orders viable topologies by fastest estimated runtime and
+shows required memory beside accelerator capacity. Each row says whether its
+estimate comes from the built-in catalog or matching completed local runs.
+Forecasting does not detect, reserve, or start hardware; use `--json` when a
+machine-readable plan is needed.
 Models with a declared `interaction.template` automatically receive the
 matching prompt format and multi-turn history in `model chat`; models without
 one remain raw causal-continuation models.
