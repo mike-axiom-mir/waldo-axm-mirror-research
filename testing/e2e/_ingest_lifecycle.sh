@@ -134,7 +134,7 @@ if [ -n "${WALDO_E2E_AWS_REGION:-}" ]; then
 fi
 
 destination="$index_root/core/e2e/tiny"
-common_arguments="--title Tiny-E2E-Corpus --description Disposable-ingestion-smoke-test --license CC0-1.0 --source https://example.invalid/waldo-e2e --source-category public-dataset"
+common_arguments="--title Tiny-E2E-Corpus --description Disposable-ingestion-smoke-test --license CC0-1.0 --source https://example.invalid/waldo-e2e --source-category public-dataset --language en"
 
 if [ "$mode" = "recipe" ]; then
   retired="$recipe_root/retired.yaml"
