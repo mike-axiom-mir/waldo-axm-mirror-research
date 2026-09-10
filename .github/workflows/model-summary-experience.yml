@@ -58,8 +58,10 @@ jobs:
           head_width = max(map(len, head.splitlines()))
           assert baseline_width > 44, f"baseline unexpectedly fits: {baseline_width}"
           assert head_width <= 44, f"head overflows: {head_width}"
-          for required in ("NAME:", "STATE:", "ARCHITECTURE:", "ADVICE:", os.environ["MODEL"]):
+          for required in ("NAME:", "STATE:", "ARCHITECTURE:", "ADVICE:"):
               assert required in head, f"missing {required!r} from head output"
+          compact_head = "".join(head.split())
+          assert os.environ["MODEL"] in compact_head, "wrapped model name was lost or changed"
           print(f"baseline max width: {baseline_width}")
           print(f"head max width: {head_width}")
           PY
