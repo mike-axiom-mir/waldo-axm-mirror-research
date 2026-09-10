@@ -196,7 +196,7 @@ func newModelCommand(state *cobraState) *cobra.Command {
 			unsigned64Flag("seed", 42, "deterministic training seed"),
 			integerFlag("nodes", 1, "nodes for a multi-node run (>= 1)"),
 			textFlag("rendezvous", "", "primary host:port the nodes rendezvous on (required when --nodes > 1)"),
-			textFlag("rendezvous-id", "", "run label naming the shared plan path the secondaries consume; must match exactly on every node (required when --nodes > 1)"),
+			textFlag("rendezvous-id", "", "run label naming the shared plan path the secondaries consume; must match on every node (required when --nodes > 1)"),
 			booleanFlag("audit", "audit shard structure, attestations, and declared totals before training")),
 		leaf(state, "continue <name>", "Resume an interrupted compose build", "Loads the model's latest numbered compose and resumes its retained transaction from the newest verified checkpoint. Completed, failed, and untrained models are rejected.", cobra.ExactArgs(1), runModelContinue),
 		leaf(state, "train-worker", "Join a multi-node training run as a secondary node", "Runs on every non-primary node of a multi-node run: it joins the rendezvous started by `model train --nodes N` on the primary and runs this node's local ranks. It authors no model records; the primary owns the run BOM. A compose-driven run publishes one plan per stage, and the worker follows every stage before exiting. --node-rank is this node's rank in 1..N-1. --rendezvous must be the primary's host:port (this is what couples the nodes); --rendezvous-id must match the primary's exactly — it names the shared plan path this node polls for the primary's training plan.", cobra.NoArgs, runModelTrainWorker,
