@@ -145,6 +145,28 @@ func TestSkipCompletedStagesReusesCurrentSuffixAsComposePrefix(t *testing.T) {
 	}
 }
 
+func TestSkipCompletedStagesReturnsExactRunEvidence(t *testing.T) {
+	compose := validCompose()
+	prepared := preparedFixture(t, compose.Stages[0])
+	inspection := completedStageInspection(t, prepared, RunComplete)
+
+	_, _, reused, err := SkipCompletedStages(compose, []PreparedStage{prepared}, inspection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []ReusedStage{{
+		Stage:           "pretrain",
+		RunID:           "run-pretrain",
+		RunOrdinal:      1,
+		RunBOMSHA256:    inspection.Model.Runs[0].BOMSHA256,
+		CorpusBOMSHA256: inspection.RunBOMs[0].CorpusBOMSHA256,
+		Corpora:         []string{"example"},
+	}}
+	if !reflect.DeepEqual(reused, want) {
+		t.Fatalf("reuse evidence = %+v, want %+v", reused, want)
+	}
+}
+
 func TestSkipCompletedStagesMatchesEpochDerivedParameters(t *testing.T) {
 	compose := validCompose()
 	compose.Stages[0].Parameters.Steps = 0
@@ -181,11 +203,19 @@ func completedStageInspection(t *testing.T, prepared PreparedStage, state RunSta
 	if prepared.Stage.Conversation != nil {
 		conversation = *prepared.Stage.Conversation
 	}
-	return Inspection{
-		Model: ModelRecord{Runs: []RunPin{{Stage: prepared.Stage.Name, State: state}}},
-		RunBOMs: []RunBOM{{
+	runBOM := RunBOM{
 			Stage: prepared.Stage.Name, StageType: prepared.Stage.Type, Objective: prepared.Stage.Objective,
 			Conversation: conversation, CorpusBOMSHA256: corpusHash, CorpusBOM: prepared.BOM, Parameters: parameters,
-		}},
+	}
+	runBOMHash, err := hashJSON(runBOM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return Inspection{
+		Model: ModelRecord{Runs: []RunPin{{
+			ID: "run-" + prepared.Stage.Name, Stage: prepared.Stage.Name, Ordinal: 1,
+			BOMSHA256: runBOMHash, State: state,
+		}}},
+		RunBOMs: []RunBOM{runBOM},
 	}
 }
