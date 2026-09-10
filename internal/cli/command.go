@@ -181,7 +181,7 @@ func newModelCommand(state *cobraState) *cobra.Command {
 			requiredTextFlag("preset", "model architecture preset")),
 		leaf(state, "pull <name> <source>", "Import a supported external model", "Imports and verifies a supported external model into WALDO's managed model store. Schema 1 accepts pinned Hugging Face Safetensors sources.", cobra.ExactArgs(2), runModelPull),
 		leaf(state, "list [pattern...]", "List locally managed models", "Patterns use shell-style *, ?, and character classes.", cobra.ArbitraryArgs, runModelList),
-		leaf(state, "summary <name>", "Summarize architecture and training history", "", cobra.ExactArgs(1), runModelSummary),
+		leaf(state, "summary <name>", "Summarize architecture and training history", "", cobra.ExactArgs(1), runModelSummaryView),
 		leaf(state, "advisor <name>", "Chat with an AI model advisor", "Compatibility form of `waldo advisor <name>`.", cobra.ExactArgs(1), runModelAdvisor, advisorFlags()...),
 		leaf(state, "bom <model-name-or-path> [output.json]", "Emit a model BOM", "The canonical OpenWALDO BOM is the default. EU GPAI is a derived regulatory representation and fails before emitting anything if required facts are absent.", cobra.RangeArgs(1, 2), runModelBOM,
 			textFlag("format", "openwaldo", "output format: openwaldo or eu-gpai"),
