@@ -22,11 +22,11 @@ func runModelSummaryView(context Context, args []string, stdout, stderr io.Write
 		return runModelSummary(context, args, stdout, stderr)
 	}
 
-	var canonical bytes.Buffer
-	if err := runModelSummary(context, args, &canonical, stderr); err != nil {
+	var source bytes.Buffer
+	if err := runModelSummary(context, args, &source, stderr); err != nil {
 		return err
 	}
-	return writeModelSummaryView(stdout, canonical.String(), modelListOutputWidth())
+	return writeModelSummaryView(stdout, source.String(), modelListOutputWidth())
 }
 
 func writeModelSummaryView(output io.Writer, summary string, width int) error {
