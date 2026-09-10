@@ -67,3 +67,4 @@ logs.
 - [0061: Stream record arrays in the JSON container](0061-stream-json-record-arrays.md)
 - [0062: Purge verified cache objects after successful use](0062-purge-successful-lookaside-cache.md)
 - [0063: Reuse only exact completed compose stages](0063-exact-compose-stage-reuse.md)
+- [0064: Expose stage reuse as run-anchored evidence](0064-run-anchored-stage-reuse-evidence.md)

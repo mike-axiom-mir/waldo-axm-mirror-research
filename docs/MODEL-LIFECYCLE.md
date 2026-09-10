@@ -353,6 +353,9 @@ to a partial selection: a non-matching stage executes exactly as declared.
 Reusable stages must be a prefix of the requested compose and the matching
 suffix of the model's current completed run history. This causal anchor keeps
 an older matching run from suppressing work after newer weights exist.
+Every reuse result names the exact completed run and immutable BOM identities
+that justified it. The result is derived from verified model history and does
+not create a second completion record or mutate model state.
 Durable transaction metadata beneath
 `<model.root>/.waldo-compose` pins the compose, every corpus BOM, the model ID,
 and the starting run ordinal.

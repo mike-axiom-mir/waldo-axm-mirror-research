@@ -302,7 +302,11 @@ changing stage parameters, or changing its objective leaves the complete stage
 executable. Reuse is limited to a compose prefix that matches the current
 completed run-history suffix, so a stale match behind newer weights is not a
 completion claim. WALDO never turns a declared multi-corpus stage into partial
-work.
+work. Human preflight output names the exact completed run used for each reused
+stage. JSON output returns the same decision under `reused`, including the run
+ID, ordinal, run-BOM SHA-256, corpus-BOM SHA-256, and complete declared corpus
+set. This is a derived explanation; the verified run history and BOMs remain
+authoritative.
 
 Stages execute in listed order. Each completed stage produces the current
 weights used to initialize the next stage. If a stage fails, later stages do

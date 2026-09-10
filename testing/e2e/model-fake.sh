@@ -187,6 +187,14 @@ checkpoint_count=$(find "$models/smoke/runs" -type f -name 'step-*.json' -print 
 
 repeat_output=$("$binary" model train smoke "$compose" --audit)
 printf '%s\n' "$repeat_output" | grep -q 'unchanged; all selected stage work was already completed'
+repeat_json=$("$binary" --json model train smoke "$compose" --audit)
+printf '%s\n' "$repeat_json" | grep -Eq '"reused"[[:space:]]*:'
+printf '%s\n' "$repeat_json" | grep -Eq '"stage"[[:space:]]*:[[:space:]]*"pretrain"'
+printf '%s\n' "$repeat_json" | grep -Eq '"run_id"[[:space:]]*:[[:space:]]*"[^" ]+"'
+printf '%s\n' "$repeat_json" | grep -Eq '"run_ordinal"[[:space:]]*:[[:space:]]*1'
+printf '%s\n' "$repeat_json" | grep -Eq '"run_bom_sha256"[[:space:]]*:[[:space:]]*"[0-9a-f]{64}"'
+printf '%s\n' "$repeat_json" | grep -Eq '"corpus_bom_sha256"[[:space:]]*:[[:space:]]*"[0-9a-f]{64}"'
+printf '%s\n' "$repeat_json" | grep -Eq '"corpora"[[:space:]]*:[[:space:]]*\[[[:space:]]*"core/e2e/model-corpus"'
 run_count=$(find "$models/smoke/runs" -type f -name RUN.json -print | wc -l | tr -d ' ')
 [ "$run_count" -eq 1 ] || { echo "completed corpus was trained again" >&2; exit 1; }
 
