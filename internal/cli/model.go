@@ -842,7 +842,7 @@ func runModelComposeTraining(context Context, name, path string, cluster trainin
 		return err
 	}
 	var inspection model.Inspection
-	var skipped []model.SkippedCorpus
+	var reused []model.ReusedStage
 	if exists && !pending {
 		inspection, err = model.Inspect(builder.Root, name)
 		if err != nil {
@@ -867,12 +867,12 @@ func runModelComposeTraining(context Context, name, path string, cluster trainin
 		prepared = append(prepared, model.PreparedStage{Stage: stage, BOM: bom})
 	}
 	if exists && !pending {
-		compose, prepared, skipped, err = model.SkipCompletedStages(compose, prepared, inspection)
+		compose, prepared, reused, err = model.SkipCompletedStages(compose, prepared, inspection)
 		if err != nil {
 			return err
 		}
-		for _, corpus := range skipped {
-			fmt.Fprintf(stderr, "preflight/%s          skipped %s (exact stage work already completed by this model)\n", corpus.Stage, corpus.Path)
+		for _, stage := range reused {
+			fmt.Fprintf(stderr, "preflight/%s          reused completed run %d %s (run BOM %s)\n", stage.Stage, stage.RunOrdinal, stage.RunID, stage.RunBOMSHA256)
 		}
 		if len(compose.Stages) == 0 {
 			if _, err := cache.PurgeUsed(); err != nil {
@@ -880,10 +880,10 @@ func runModelComposeTraining(context Context, name, path string, cluster trainin
 			}
 			if context.JSON {
 				return writeJSON(stdout, struct {
-					Compose string                `json:"compose"`
-					Result  model.Inspection      `json:"result"`
-					Skipped []model.SkippedCorpus `json:"skipped"`
-				}{Compose: composePath, Result: inspection, Skipped: skipped})
+					Compose string              `json:"compose"`
+					Result  model.Inspection    `json:"result"`
+					Reused  []model.ReusedStage `json:"reused"`
+				}{Compose: composePath, Result: inspection, Reused: reused})
 			}
 			fmt.Fprintf(stdout, "model %s unchanged; all selected stage work was already completed\n", name)
 			return nil
@@ -914,9 +914,10 @@ func runModelComposeTraining(context Context, name, path string, cluster trainin
 	}
 	if context.JSON {
 		return writeJSON(stdout, struct {
-			Compose string           `json:"compose"`
-			Result  model.Inspection `json:"result"`
-		}{Compose: composePath, Result: result})
+			Compose string              `json:"compose"`
+			Result  model.Inspection    `json:"result"`
+			Reused  []model.ReusedStage `json:"reused,omitempty"`
+		}{Compose: composePath, Result: result, Reused: reused})
 	}
 	return writeModelMutationResult(context, stdout, result, "trained")
 }

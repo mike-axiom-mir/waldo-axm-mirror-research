@@ -12,18 +12,23 @@ import (
 	"github.com/openwaldo/waldo/internal/training"
 )
 
-// SkippedCorpus identifies a compose selection omitted because its complete
-// stage work identity already has a successful run in this model.
-type SkippedCorpus struct {
-	Stage string `json:"stage"`
-	Path  string `json:"path"`
+// ReusedStage is a derived explanation of one exact completed run that made a
+// requested compose stage unnecessary. Run history and its BOM remain the
+// authority; this value only exposes their causal relationship to the request.
+type ReusedStage struct {
+	Stage           string   `json:"stage"`
+	RunID           string   `json:"run_id"`
+	RunOrdinal      int      `json:"run_ordinal"`
+	RunBOMSHA256    string   `json:"run_bom_sha256"`
+	CorpusBOMSHA256 string   `json:"corpus_bom_sha256"`
+	Corpora         []string `json:"corpora"`
 }
 
 // SkipCompletedStages removes complete stages whose immutable work identity
 // matches a successful historical run. A stage is never partially rewritten:
 // changed corpus bytes, parameters, objective, or conversation handling keep
 // the entire declared stage executable.
-func SkipCompletedStages(compose Compose, prepared []PreparedStage, inspection Inspection) (Compose, []PreparedStage, []SkippedCorpus, error) {
+func SkipCompletedStages(compose Compose, prepared []PreparedStage, inspection Inspection) (Compose, []PreparedStage, []ReusedStage, error) {
 	if len(compose.Stages) != len(prepared) {
 		return Compose{}, nil, nil, fmt.Errorf("compose has %d stages but preflight prepared %d", len(compose.Stages), len(prepared))
 	}
@@ -67,13 +72,19 @@ func SkipCompletedStages(compose Compose, prepared []PreparedStage, inspection I
 	filtered := compose
 	filtered.Stages = append([]Stage(nil), compose.Stages[matched:]...)
 	filteredPrepared := append([]PreparedStage(nil), prepared[matched:]...)
-	var skipped []SkippedCorpus
-	for _, stage := range compose.Stages[:matched] {
-		for _, selection := range stage.Corpora {
-			skipped = append(skipped, SkippedCorpus{Stage: stage.Name, Path: selection.Path})
-		}
+	reused := make([]ReusedStage, 0, matched)
+	start := latestComplete - matched + 1
+	for offset, stage := range compose.Stages[:matched] {
+		position := start + offset
+		pin := inspection.Model.Runs[position]
+		bom := inspection.RunBOMs[position]
+		reused = append(reused, ReusedStage{
+			Stage: stage.Name, RunID: pin.ID, RunOrdinal: pin.Ordinal,
+			RunBOMSHA256: pin.BOMSHA256, CorpusBOMSHA256: bom.CorpusBOMSHA256,
+			Corpora: CorpusPaths(stage.Corpora),
+		})
 	}
-	return filtered, filteredPrepared, skipped, nil
+	return filtered, filteredPrepared, reused, nil
 }
 
 func preparedStageMatchesRun(prepared PreparedStage, bom RunBOM) (bool, error) {
