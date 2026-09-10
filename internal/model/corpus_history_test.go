@@ -204,8 +204,8 @@ func completedStageInspection(t *testing.T, prepared PreparedStage, state RunSta
 		conversation = *prepared.Stage.Conversation
 	}
 	runBOM := RunBOM{
-			Stage: prepared.Stage.Name, StageType: prepared.Stage.Type, Objective: prepared.Stage.Objective,
-			Conversation: conversation, CorpusBOMSHA256: corpusHash, CorpusBOM: prepared.BOM, Parameters: parameters,
+		Stage: prepared.Stage.Name, StageType: prepared.Stage.Type, Objective: prepared.Stage.Objective,
+		Conversation: conversation, CorpusBOMSHA256: corpusHash, CorpusBOM: prepared.BOM, Parameters: parameters,
 	}
 	runBOMHash, err := hashJSON(runBOM)
 	if err != nil {
