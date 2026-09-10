@@ -22,7 +22,6 @@ import (
 	"slices"
 	"sort"
 	"strings"
-	"text/tabwriter"
 	"time"
 
 	"github.com/openwaldo/waldo/internal/calibration"
@@ -349,18 +348,9 @@ func runModelList(context Context, args []string, stdout, _ io.Writer) error {
 		return writeJSON(stdout, models)
 	}
 	if len(models) == 0 {
-		return nil
+		return writeEmptyModelList(stdout, args)
 	}
-	table := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(table, "NAME\tSTATE\tPARAMETERS\tRUNS\tUPDATED (UTC)")
-	for _, item := range models {
-		state := "untrained"
-		if item.State != "" {
-			state = string(item.State)
-		}
-		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\n", item.Name, state, humanCount(int64(item.Parameters)), humanInteger(int64(item.Runs)), item.Updated)
-	}
-	return table.Flush()
+	return writeModelList(stdout, models)
 }
 
 func runModelSummary(context Context, args []string, stdout, _ io.Writer) error {
