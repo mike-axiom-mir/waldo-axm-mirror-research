@@ -141,7 +141,7 @@ func ingestFlags() []commandFlag {
 		repeatedTextFlag("programming-language", "programming language present (repeatable or comma-separated)"),
 		textFlag("text-column", "", "raw Parquet text column"),
 		textFlag("input-profile", "", "declarative input profile path"),
-		textFlag("force-format", "", "override detected format: text, markdown, mbox, json, jsonl, parquet, or xml"),
+		textFlag("force-format", "", "override detected format: text, markdown, mbox, json, jsonl, parquet, xml"),
 		integerFlag("workers", 0, "concurrent ingestion, automatic audit, and publication workers (1..32; 0 uses lookaside.workers)"),
 	}
 }
@@ -181,7 +181,7 @@ func newModelCommand(state *cobraState) *cobra.Command {
 			requiredTextFlag("preset", "model architecture preset")),
 		leaf(state, "pull <name> <source>", "Import a supported external model", "Imports and verifies a supported external model into WALDO's managed model store. Schema 1 accepts pinned Hugging Face Safetensors sources.", cobra.ExactArgs(2), runModelPull),
 		leaf(state, "list [pattern...]", "List locally managed models", "Patterns use shell-style *, ?, and character classes.", cobra.ArbitraryArgs, runModelList),
-		leaf(state, "summary <name>", "Summarize architecture and training history", "", cobra.ExactArgs(1), runModelSummary),
+		leaf(state, "summary <name>", "Summarize architecture and training history", "", cobra.ExactArgs(1), runModelSummaryView),
 		leaf(state, "advisor <name>", "Chat with an AI model advisor", "Compatibility form of `waldo advisor <name>`.", cobra.ExactArgs(1), runModelAdvisor, advisorFlags()...),
 		leaf(state, "bom <model-name-or-path> [output.json]", "Emit a model BOM", "The canonical OpenWALDO BOM is the default. EU GPAI is a derived regulatory representation and fails before emitting anything if required facts are absent.", cobra.RangeArgs(1, 2), runModelBOM,
 			textFlag("format", "openwaldo", "output format: openwaldo or eu-gpai"),
@@ -196,7 +196,7 @@ func newModelCommand(state *cobraState) *cobra.Command {
 			unsigned64Flag("seed", 42, "deterministic training seed"),
 			integerFlag("nodes", 1, "nodes for a multi-node run (>= 1)"),
 			textFlag("rendezvous", "", "primary host:port the nodes rendezvous on (required when --nodes > 1)"),
-			textFlag("rendezvous-id", "", "run label naming the shared plan path the secondaries consume; must match on every node (required when --nodes > 1)"),
+			textFlag("rendezvous-id", "", "run label naming the shared plan path on every node (required when --nodes > 1)"),
 			booleanFlag("audit", "audit shard structure, attestations, and declared totals before training")),
 		leaf(state, "continue <name>", "Resume an interrupted compose build", "Loads the model's latest numbered compose and resumes its retained transaction from the newest verified checkpoint. Completed, failed, and untrained models are rejected.", cobra.ExactArgs(1), runModelContinue),
 		leaf(state, "train-worker", "Join a multi-node training run as a secondary node", "Runs on every non-primary node of a multi-node run: it joins the rendezvous started by `model train --nodes N` on the primary and runs this node's local ranks. It authors no model records; the primary owns the run BOM. A compose-driven run publishes one plan per stage, and the worker follows every stage before exiting. --node-rank is this node's rank in 1..N-1. --rendezvous must be the primary's host:port (this is what couples the nodes); --rendezvous-id must match the primary's exactly — it names the shared plan path this node polls for the primary's training plan.", cobra.NoArgs, runModelTrainWorker,
