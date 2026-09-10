@@ -1,0 +1,101 @@
+name: model summary experience
+
+on:
+  pull_request:
+    paths:
+      - internal/cli/command.go
+      - internal/cli/model.go
+      - internal/cli/model_list.go
+      - internal/cli/model_summary_view.go
+      - internal/cli/model_summary_view_test.go
+      - .github/workflows/model-summary-experience.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  terminal-surface:
+    runs-on: ubuntu-latest
+    env:
+      BASE_SHA: 3eaa17e00e322c06e01435e3c94e26598071f915
+      MODEL: experience-summary-model-with-long-name-2026
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Focused presentation contracts
+        run: go test ./internal/cli -run '^TestModelSummaryView' -count=1
+      - name: Exercise real summary before and after
+        shell: bash
+        run: |
+          set -euo pipefail
+          export HOME="$RUNNER_TEMP/waldo-home"
+          mkdir -p "$HOME"
+
+          go build -o "$RUNNER_TEMP/waldo-head" ./cmd/waldo
+          git worktree add --detach "$RUNNER_TEMP/base" "$BASE_SHA"
+          (
+            cd "$RUNNER_TEMP/base"
+            go build -o "$RUNNER_TEMP/waldo-base" ./cmd/waldo
+          )
+
+          "$RUNNER_TEMP/waldo-head" model init "$MODEL" --preset 10m >/dev/null
+
+          COLUMNS=44 "$RUNNER_TEMP/waldo-base" model summary "$MODEL" > "$RUNNER_TEMP/summary-baseline-44.txt"
+          COLUMNS=44 "$RUNNER_TEMP/waldo-head" model summary "$MODEL" > "$RUNNER_TEMP/summary-head-44.txt"
+
+          BASELINE="$RUNNER_TEMP/summary-baseline-44.txt" HEAD="$RUNNER_TEMP/summary-head-44.txt" python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          baseline = Path(os.environ["BASELINE"]).read_text()
+          head = Path(os.environ["HEAD"]).read_text()
+          baseline_width = max(map(len, baseline.splitlines()))
+          head_width = max(map(len, head.splitlines()))
+          assert baseline_width > 44, f"baseline unexpectedly fits: {baseline_width}"
+          assert head_width <= 44, f"head overflows: {head_width}"
+          for required in ("NAME:", "STATE:", "ARCHITECTURE:", "ADVICE:", os.environ["MODEL"]):
+              assert required in head, f"missing {required!r} from head output"
+          print(f"baseline max width: {baseline_width}")
+          print(f"head max width: {head_width}")
+          PY
+
+          for width in 32 44 56 80 120; do
+            COLUMNS="$width" "$RUNNER_TEMP/waldo-head" model summary "$MODEL" > "$RUNNER_TEMP/summary-head-${width}.txt"
+            WIDTH="$width" FILE="$RUNNER_TEMP/summary-head-${width}.txt" python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          width = int(os.environ["WIDTH"])
+          text = Path(os.environ["FILE"]).read_text()
+          longest = max(map(len, text.splitlines()))
+          assert longest <= width, (width, longest)
+          print(f"{width} columns: max emitted width {longest}")
+          PY
+          done
+
+          COLUMNS=32 "$RUNNER_TEMP/waldo-base" --json model summary "$MODEL" > "$RUNNER_TEMP/summary-base.json"
+          COLUMNS=32 "$RUNNER_TEMP/waldo-head" --json model summary "$MODEL" > "$RUNNER_TEMP/summary-head.json"
+          cmp "$RUNNER_TEMP/summary-base.json" "$RUNNER_TEMP/summary-head.json"
+
+          echo '--- baseline 44-column request ---'
+          cat "$RUNNER_TEMP/summary-baseline-44.txt"
+          echo '--- improved 44-column realization ---'
+          cat "$RUNNER_TEMP/summary-head-44.txt"
+      - name: Retain terminal evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-summary-experience
+          path: |
+            ${{ runner.temp }}/summary-baseline-44.txt
+            ${{ runner.temp }}/summary-head-32.txt
+            ${{ runner.temp }}/summary-head-44.txt
+            ${{ runner.temp }}/summary-head-56.txt
+            ${{ runner.temp }}/summary-head-80.txt
+            ${{ runner.temp }}/summary-head-120.txt
+            ${{ runner.temp }}/summary-base.json
+            ${{ runner.temp }}/summary-head.json
