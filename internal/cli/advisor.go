@@ -632,6 +632,10 @@ type advisorCheckpointMonitor struct {
 	events     chan model.Progress
 	done       chan struct{}
 
+	lifecycleMutex sync.Mutex
+	closed         bool
+	closeOnce      sync.Once
+
 	snapshotMutex sync.Mutex
 	snapshots     map[*training.Event]advisorCheckpointSnapshot
 }
@@ -647,6 +651,12 @@ func newAdvisorCheckpointMonitor(ctx context.Context, root, name string, selecti
 }
 
 func (monitor *advisorCheckpointMonitor) Observe(event model.Progress) {
+	monitor.lifecycleMutex.Lock()
+	defer monitor.lifecycleMutex.Unlock()
+	if monitor.closed {
+		return
+	}
+
 	_ = monitor.transcript.Flush()
 	if event.Training == nil || event.Training.Kind != "checkpoint" {
 		return
@@ -708,7 +718,12 @@ func (monitor *advisorCheckpointMonitor) forgetCheckpoint(event *training.Event)
 }
 
 func (monitor *advisorCheckpointMonitor) Close() {
-	close(monitor.events)
+	monitor.closeOnce.Do(func() {
+		monitor.lifecycleMutex.Lock()
+		monitor.closed = true
+		close(monitor.events)
+		monitor.lifecycleMutex.Unlock()
+	})
 	<-monitor.done
 }
 
