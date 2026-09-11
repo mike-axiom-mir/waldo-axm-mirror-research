@@ -129,11 +129,14 @@ func DescribeParallelism(plan Parallelism, globalBatch int64) []string {
 	}
 	switch plan.Strategy {
 	case ParallelismData:
-		messages = append(messages, fmt.Sprintf("the run produces one model; each of %d GPUs holds a synchronized complete copy and trains on %s", plan.WorldSize, sequenceDescription(sequences)))
+		messages = append(messages, dataShardingDescription(plan.WorldSize, sequences))
+		messages = append(messages, fmt.Sprintf("model placement: each of the %d GPUs holds a synchronized complete copy; the run still produces one model", plan.WorldSize))
 	case ParallelismHybridSharded:
-		messages = append(messages, fmt.Sprintf("the run produces one model; each of %d hosts holds a synchronized complete copy divided across its %d local GPUs, and all %d GPUs train on different sequences", plan.CompleteModelCopies, plan.GPUsSharingEachModelCopy, plan.WorldSize))
+		messages = append(messages, dataShardingDescription(plan.WorldSize, sequences))
+		messages = append(messages, fmt.Sprintf("model placement: the %d GPUs within each of %d hosts jointly hold one synchronized complete copy; the run still produces one model", plan.GPUsSharingEachModelCopy, plan.CompleteModelCopies))
 	case ParallelismFullySharded:
-		messages = append(messages, fmt.Sprintf("the run produces one model divided across %d GPUs; every GPU trains on different sequences", plan.WorldSize))
+		messages = append(messages, dataShardingDescription(plan.WorldSize, sequences))
+		messages = append(messages, fmt.Sprintf("model placement: one model is divided across all %d GPUs; no GPU or host holds a complete copy", plan.WorldSize))
 	}
 	var paths []string
 	if plan.GPUsPerNode > 1 && plan.LocalInterconnect != "" {
@@ -175,11 +178,14 @@ func automaticParallelismDescription(strategy string) string {
 	}
 }
 
-func sequenceDescription(count int64) string {
-	if count == 1 {
-		return "1 different sequence per optimizer step"
+func dataShardingDescription(GPUs int, sequences int64) string {
+	if sequences < 1 {
+		return fmt.Sprintf("training data: each global batch is sharded across %d GPUs without duplicating sequences between GPUs", GPUs)
 	}
-	return fmt.Sprintf("%d different sequences per optimizer step", count)
+	if sequences == 1 {
+		return fmt.Sprintf("training data: each global batch is sharded across %d GPUs; each GPU processes 1 unique sequence and no sequence is duplicated between GPUs", GPUs)
+	}
+	return fmt.Sprintf("training data: each global batch is sharded across %d GPUs; each GPU processes %d unique sequences and no sequence is duplicated between GPUs", GPUs, sequences)
 }
 
 func interconnectDisplayName(value string) string {

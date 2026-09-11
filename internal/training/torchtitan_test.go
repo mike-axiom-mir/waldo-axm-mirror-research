@@ -88,9 +88,12 @@ func TestDescribeParallelismUsesPlainLanguage(t *testing.T) {
 	}
 	text := strings.Join(DescribeParallelism(plan, 32), "\n")
 	for _, expected := range []string{
-		"automatically selected data parallelism", "the run produces one model",
-		"each of 4 GPUs holds a synchronized complete copy",
-		"8 different sequences", "NVLink", "RDMA", "2 hosts",
+		"automatically selected data parallelism",
+		"each global batch is sharded across 4 GPUs",
+		"each GPU processes 8 unique sequences",
+		"no sequence is duplicated between GPUs",
+		"each of the 4 GPUs holds a synchronized complete copy",
+		"the run still produces one model", "NVLink", "RDMA", "2 hosts",
 	} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("description %q omits %q", text, expected)
@@ -98,6 +101,26 @@ func TestDescribeParallelismUsesPlainLanguage(t *testing.T) {
 	}
 	if strings.Contains(strings.ToLower(text), "replica") {
 		t.Fatalf("description uses unexplained replica terminology: %s", text)
+	}
+}
+
+func TestDescribeShardedModelSeparatesDataAndModelPlacement(t *testing.T) {
+	plan := Parallelism{
+		Requested: ParallelismAuto, Strategy: ParallelismFullySharded,
+		WorldSize: 4, Nodes: 2, GPUsPerNode: 2,
+		CompleteModelCopies: 1, GPUsSharingEachModelCopy: 4,
+	}
+	text := strings.Join(DescribeParallelism(plan, 8), "\n")
+	for _, expected := range []string{
+		"each global batch is sharded across 4 GPUs",
+		"each GPU processes 2 unique sequences",
+		"no sequence is duplicated between GPUs",
+		"one model is divided across all 4 GPUs",
+		"no GPU or host holds a complete copy",
+	} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("description %q omits %q", text, expected)
+		}
 	}
 }
 

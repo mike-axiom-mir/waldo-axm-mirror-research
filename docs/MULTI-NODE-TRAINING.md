@@ -160,9 +160,9 @@ available. WALDO detects that local topology and chooses how to place the model:
 
 The automatic calculation reserves 40% of GPU memory for activations, logits,
 allocator overhead, and framework workspaces. Before training, WALDO explains
-the selected placement literally—for example, that the run produces one model,
-each of four GPUs holds a synchronized complete copy, and each GPU trains on
-eight different sequences per optimizer step.
+the selected placement literally. It separately states how the global training
+batch is sharded across GPUs and whether the model fits on one GPU, is divided
+within each host, or must be divided across every host.
 The resolved strategy, topology, interconnects, model-copy count, sharding
 width, estimated model-state size, and per-GPU memory are pinned in the run BOM.
 
