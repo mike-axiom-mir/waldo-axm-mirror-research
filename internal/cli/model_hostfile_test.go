@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/openwaldo/waldo/internal/model"
 	"github.com/openwaldo/waldo/internal/training"
@@ -126,11 +127,53 @@ func TestRunSecondaryStreamPlansNeedsNoCorpusData(t *testing.T) {
 		return nil
 	}
 	cluster := training.Cluster{Nodes: 2, NodeRank: 1, Rendezvous: "train-0:29500", RendezvousID: "test"}
-	if err := runSecondaryStreamPlansWithRunner(Context{Execution: context.Background()}, cluster, t.TempDir(), &stream, runner, io.Discard, io.Discard); err != nil {
+	var stdout bytes.Buffer
+	if err := runSecondaryStreamPlansWithRunner(Context{Execution: context.Background()}, cluster, t.TempDir(), &stream, nil, runner, &stdout, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	if !called {
 		t.Fatal("secondary runner was not called")
+	}
+	var ready hostfileStageReady
+	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &ready); err != nil {
+		t.Fatalf("decode secondary readiness %q: %v", stdout.String(), err)
+	}
+	if ready.Kind != hostfileStageReadyKind || ready.Schema != 1 || ready.RunID != plan.RunID || ready.Stage != plan.Stage || ready.StageOrdinal != plan.StageOrdinal || ready.StageCount != plan.StageCount {
+		t.Fatalf("secondary readiness = %+v", ready)
+	}
+}
+
+func TestRunSecondaryStreamPlansDoesNotAcknowledgeFailedReadiness(t *testing.T) {
+	parameters, err := training.ResolveParameters(training.Parameters{Steps: 1, BatchSize: 1, SequenceLength: 8, LearningRate: 0.001})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := model.MultiNodePlan{
+		Kind: model.MultiNodePlanKind, Schema: model.MultiNodePlanSchema,
+		RunID: "run-1", Stage: "pretrain", StageOrdinal: 1, StageCount: 2,
+		Nodes: 2, Objective: "causal-language-modeling",
+		ArchitectureSHA256: strings.Repeat("b", 64),
+		Architecture:       json.RawMessage(`{"family":"decoder-transformer","vocabulary_size":259,"tokenizer":{"name":"byte","revision":"builtin-byte-schema-1"}}`),
+		Parameters:         parameters,
+		EvaluationSet:      &training.EvaluationSet{Selection: "lowest-sha256-v1", SHA256: strings.Repeat("a", 64)},
+	}
+	var stream bytes.Buffer
+	if err := json.NewEncoder(&stream).Encode(plan); err != nil {
+		t.Fatal(err)
+	}
+	prepare := func(context.Context, training.Cluster) error { return errors.New("rendezvous unreachable") }
+	runner := func(context.Context, training.Cluster, training.Request) error {
+		t.Fatal("training started after readiness failed")
+		return nil
+	}
+	var stdout bytes.Buffer
+	cluster := training.Cluster{Nodes: 2, NodeRank: 1, Rendezvous: "train-0:29500", RendezvousID: "test"}
+	err = runSecondaryStreamPlansWithRunner(Context{Execution: context.Background()}, cluster, t.TempDir(), &stream, prepare, runner, &stdout, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "stage 1/2 secondary readiness") || !strings.Contains(err.Error(), "rendezvous unreachable") {
+		t.Fatalf("readiness error = %v", err)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("failed readiness emitted acknowledgement %q", stdout.String())
 	}
 }
 
@@ -145,7 +188,11 @@ case "$*" in
     ;;
   *--plan-stdin*)
     IFS= read -r plan || exit 3
-    printf '%s\n' 'worker accepted launcher plan'
+    printf '%s\n' '{"kind":"waldo-hostfile-stage-ready","schema":1,"run_id":"run-1","stage":"pretrain","stage_ordinal":1,"stage_count":2}'
+    printf '%s\n' 'worker accepted launcher stage 1'
+    IFS= read -r plan || exit 4
+    printf '%s\n' '{"kind":"waldo-hostfile-stage-ready","schema":1,"run_id":"run-2","stage":"post-train","stage_ordinal":2,"stage_count":2}'
+    printf '%s\n' 'worker accepted launcher stage 2'
     exit 0
     ;;
   *)
@@ -182,7 +229,14 @@ esac
 	evaluation := training.EvaluationSet{Selection: "lowest-sha256-v1", SHA256: strings.Repeat("a", 64)}
 	if err := session.publish(model.MultiNodePlan{
 		Kind: model.MultiNodePlanKind, Schema: model.MultiNodePlanSchema,
-		RunID: "run-1", Stage: "pretrain", StageOrdinal: 1, StageCount: 1,
+		RunID: "run-1", Stage: "pretrain", StageOrdinal: 1, StageCount: 2,
+		Nodes: 2, EvaluationSet: &evaluation,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.publish(model.MultiNodePlan{
+		Kind: model.MultiNodePlanKind, Schema: model.MultiNodePlanSchema,
+		RunID: "run-2", Stage: "post-train", StageOrdinal: 2, StageCount: 2,
 		Nodes: 2, EvaluationSet: &evaluation,
 	}); err != nil {
 		t.Fatal(err)
@@ -190,13 +244,58 @@ esac
 	if err := session.finish(nil); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(output.String(), "[train-1] worker accepted launcher plan") {
+	if !strings.Contains(output.String(), "[train-1] worker accepted launcher stage 1") || !strings.Contains(output.String(), "[train-1] worker accepted launcher stage 2") {
 		t.Fatalf("worker output = %q", output.String())
+	}
+	if strings.Contains(output.String(), hostfileStageReadyKind) {
+		t.Fatalf("worker control frames leaked into output: %q", output.String())
 	}
 	for _, expected := range []string{"multi-host preflight  rank 0 ready", "multi-host preflight  staging WALDO on train-1", "multi-host preflight  train-1 ready"} {
 		if !strings.Contains(output.String(), expected) {
 			t.Fatalf("preflight output %q omits %q", output.String(), expected)
 		}
+	}
+}
+
+func TestHostfilePublishRejectsWrongStageAcknowledgement(t *testing.T) {
+	previousListener := listenHostfileRendezvous
+	listenHostfileRendezvous = func(string) (io.Closer, error) { return io.NopCloser(strings.NewReader("")), nil }
+	t.Cleanup(func() { listenHostfileRendezvous = previousListener })
+	inputReader, inputWriter := io.Pipe()
+	defer inputReader.Close()
+	go func() { _, _ = io.Copy(io.Discard, inputReader) }()
+	worker := &hostfileWorker{
+		host: "train-1", stdin: inputWriter,
+		ready: make(chan hostfileStageReady, 1), done: make(chan struct{}),
+	}
+	worker.ready <- hostfileStageReady{Kind: hostfileStageReadyKind, Schema: 1, RunID: "wrong-run", Stage: "post-train", StageOrdinal: 2, StageCount: 3}
+	session := hostfileSession{ctx: context.Background(), cluster: training.Cluster{Rendezvous: "127.0.0.1:0"}, workers: []*hostfileWorker{worker}}
+	err := session.publish(model.MultiNodePlan{RunID: "run-2", Stage: "post-train", StageOrdinal: 2, StageCount: 3})
+	_ = inputWriter.Close()
+	if err == nil || !strings.Contains(err.Error(), "train-1 acknowledged unexpected stage plan") || !strings.Contains(err.Error(), "wrong-run") {
+		t.Fatalf("wrong acknowledgement error = %v", err)
+	}
+}
+
+func TestHostfilePublishTimesOutNamingHostAndStage(t *testing.T) {
+	previousListener := listenHostfileRendezvous
+	listenHostfileRendezvous = func(string) (io.Closer, error) { return io.NopCloser(strings.NewReader("")), nil }
+	t.Cleanup(func() { listenHostfileRendezvous = previousListener })
+	inputReader, inputWriter := io.Pipe()
+	defer inputReader.Close()
+	go func() { _, _ = io.Copy(io.Discard, inputReader) }()
+	worker := &hostfileWorker{
+		host: "train-2", stdin: inputWriter,
+		ready: make(chan hostfileStageReady, 1), done: make(chan struct{}),
+	}
+	previous := hostfileStageReadyTimeout
+	hostfileStageReadyTimeout = 10 * time.Millisecond
+	t.Cleanup(func() { hostfileStageReadyTimeout = previous })
+	session := hostfileSession{ctx: context.Background(), cluster: training.Cluster{Rendezvous: "127.0.0.1:0"}, workers: []*hostfileWorker{worker}}
+	err := session.publish(model.MultiNodePlan{RunID: "run-3", StageOrdinal: 3, StageCount: 5})
+	_ = inputWriter.Close()
+	if err == nil || !strings.Contains(err.Error(), "train-2 did not acknowledge stage 3/5") || !strings.Contains(err.Error(), "10ms") {
+		t.Fatalf("readiness timeout error = %v", err)
 	}
 }
 

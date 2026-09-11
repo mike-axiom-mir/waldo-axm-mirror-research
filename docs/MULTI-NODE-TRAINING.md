@@ -210,6 +210,12 @@ port, and remote reachability of that port. It then launches and supervises
 every secondary, relays their output with host labels, and publishes each
 compose stage directly over the launcher channel.
 
+Before rank 0 starts each stage's TorchTitan process, every secondary must
+acknowledge the exact run and stage plan. This stage-boundary handshake catches
+a host, network, or launcher failure that occurs during a long earlier stage
+without waiting for TorchTitan's rendezvous timeout. The error names the host
+that did not acknowledge.
+
 ## Failure behavior
 
 This implementation is deliberately non-elastic. A secondary failure cancels

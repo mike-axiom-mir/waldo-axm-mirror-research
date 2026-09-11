@@ -884,10 +884,16 @@ func runSecondaryStages(commandContext Context, cluster training.Cluster, modelR
 }
 
 func runSecondaryStreamPlans(commandContext Context, cluster training.Cluster, scratch string, input io.Reader, stdout, stderr io.Writer) error {
-	return runSecondaryStreamPlansWithRunner(commandContext, cluster, scratch, input, training.RunSecondaryTorchTitan, stdout, stderr)
+	prepare := func(ctx stdcontext.Context, cluster training.Cluster) error {
+		if err := training.CheckSecondaryTorchTitan(ctx, cluster); err != nil {
+			return err
+		}
+		return checkTrainingRendezvous(ctx, cluster.Rendezvous)
+	}
+	return runSecondaryStreamPlansWithRunner(commandContext, cluster, scratch, input, prepare, training.RunSecondaryTorchTitan, stdout, stderr)
 }
 
-func runSecondaryStreamPlansWithRunner(commandContext Context, cluster training.Cluster, scratch string, input io.Reader, run func(stdcontext.Context, training.Cluster, training.Request) error, stdout, stderr io.Writer) error {
+func runSecondaryStreamPlansWithRunner(commandContext Context, cluster training.Cluster, scratch string, input io.Reader, prepare func(stdcontext.Context, training.Cluster) error, run func(stdcontext.Context, training.Cluster, training.Request) error, stdout, stderr io.Writer) error {
 	decoder := json.NewDecoder(input)
 	lastRunID := ""
 	for {
@@ -909,6 +915,18 @@ func runSecondaryStreamPlansWithRunner(commandContext Context, cluster training.
 		if err != nil {
 			return err
 		}
+		if prepare != nil {
+			if err := prepare(commandContext.Execution, cluster); err != nil {
+				return fmt.Errorf("stage %d/%d secondary readiness: %w", plan.StageOrdinal, plan.StageCount, err)
+			}
+		}
+		if err := json.NewEncoder(stdout).Encode(hostfileStageReady{
+			Kind: hostfileStageReadyKind, Schema: 1,
+			RunID: plan.RunID, Stage: plan.Stage,
+			StageOrdinal: plan.StageOrdinal, StageCount: plan.StageCount,
+		}); err != nil {
+			return fmt.Errorf("acknowledge launcher stage %d/%d: %w", plan.StageOrdinal, plan.StageCount, err)
+		}
 		fmt.Fprintf(stderr, "joining rendezvous %s as node %d of %d for stage %d/%d\n", cluster.Rendezvous, cluster.NodeRank, cluster.Nodes, plan.StageOrdinal, plan.StageCount)
 		if err := run(commandContext.Execution, cluster, request); err != nil {
 			return err
@@ -916,7 +934,7 @@ func runSecondaryStreamPlansWithRunner(commandContext Context, cluster training.
 		_ = os.RemoveAll(stageScratch)
 		lastRunID = plan.RunID
 		if plan.StageOrdinal == plan.StageCount {
-			fmt.Fprintln(stdout, "secondary node completed")
+			fmt.Fprintln(stderr, "secondary node completed")
 			return nil
 		}
 		fmt.Fprintf(stderr, "stage %d/%d complete; awaiting the next launcher plan\n", plan.StageOrdinal, plan.StageCount)

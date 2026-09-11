@@ -139,7 +139,20 @@ type hostfileWorker struct {
 	rank    int
 	stdin   io.WriteCloser
 	command *exec.Cmd
-	done    chan error
+	ready   chan hostfileStageReady
+	done    chan struct{}
+	err     error
+}
+
+const hostfileStageReadyKind = "waldo-hostfile-stage-ready"
+
+type hostfileStageReady struct {
+	Kind         string `json:"kind"`
+	Schema       int    `json:"schema"`
+	RunID        string `json:"run_id"`
+	Stage        string `json:"stage"`
+	StageOrdinal int    `json:"stage_ordinal"`
+	StageCount   int    `json:"stage_count"`
 }
 
 type hostfileSession struct {
@@ -159,6 +172,8 @@ type hostfileSession struct {
 }
 
 const hostfileWorkerExitGrace = 10 * time.Second
+
+var hostfileStageReadyTimeout = 30 * time.Second
 
 func startHostfileSession(ctx context.Context, hostfile trainingHostfile, cluster training.Cluster, output io.Writer) (*hostfileSession, error) {
 	binary, err := os.Executable()
@@ -380,13 +395,16 @@ func (session *hostfileSession) startWorker(host string, rank int) (*hostfileWor
 	if err := command.Start(); err != nil {
 		return nil, fmt.Errorf("start training worker on %s: %w", host, err)
 	}
-	worker := &hostfileWorker{host: host, rank: rank, stdin: stdin, command: command, done: make(chan error, 1)}
-	go session.copyWorkerOutput(host, stdout)
+	worker := &hostfileWorker{
+		host: host, rank: rank, stdin: stdin, command: command,
+		ready: make(chan hostfileStageReady, 1), done: make(chan struct{}),
+	}
+	go session.copyWorkerStdout(worker, stdout)
 	go session.copyWorkerOutput(host, stderr)
 	go func() {
-		err := command.Wait()
-		worker.done <- err
-		if err != nil && session.ctx.Err() == nil {
+		worker.err = command.Wait()
+		close(worker.done)
+		if worker.err != nil && session.ctx.Err() == nil {
 			session.cancel()
 		}
 	}()
@@ -407,13 +425,64 @@ func (session *hostfileSession) copyWorkerOutput(host string, source io.Reader) 
 	}
 }
 
+func (session *hostfileSession) copyWorkerStdout(worker *hostfileWorker, source io.Reader) {
+	scanner := bufio.NewScanner(source)
+	for scanner.Scan() {
+		line := scanner.Text()
+		var ready hostfileStageReady
+		if json.Unmarshal([]byte(line), &ready) == nil && ready.Kind == hostfileStageReadyKind {
+			worker.ready <- ready
+			continue
+		}
+		session.outputMu.Lock()
+		fmt.Fprintf(session.output, "[%s] %s\n", worker.host, line)
+		session.outputMu.Unlock()
+	}
+}
+
 func (session *hostfileSession) publish(plan model.MultiNodePlan) error {
 	session.publishMu.Lock()
 	defer session.publishMu.Unlock()
+	rendezvousListener, err := listenHostfileRendezvous(session.cluster.Rendezvous)
+	if err != nil {
+		return fmt.Errorf("prepare rank 0 rendezvous for stage %d/%d: %w", plan.StageOrdinal, plan.StageCount, err)
+	}
 	for _, worker := range session.workers {
 		if err := json.NewEncoder(worker.stdin).Encode(plan); err != nil {
+			_ = rendezvousListener.Close()
 			return fmt.Errorf("send stage %d/%d to %s: %w", plan.StageOrdinal, plan.StageCount, worker.host, err)
 		}
+	}
+	for _, worker := range session.workers {
+		timer := time.NewTimer(hostfileStageReadyTimeout)
+		select {
+		case ready := <-worker.ready:
+			if !timer.Stop() {
+				<-timer.C
+			}
+			if ready.Schema != 1 || ready.RunID != plan.RunID || ready.Stage != plan.Stage || ready.StageOrdinal != plan.StageOrdinal || ready.StageCount != plan.StageCount {
+				_ = rendezvousListener.Close()
+				return fmt.Errorf("host %s acknowledged unexpected stage plan: schema %d, run %q, stage %q (%d/%d); expected schema 1, run %q, stage %q (%d/%d)", worker.host, ready.Schema, ready.RunID, ready.Stage, ready.StageOrdinal, ready.StageCount, plan.RunID, plan.Stage, plan.StageOrdinal, plan.StageCount)
+			}
+		case <-worker.done:
+			if !timer.Stop() {
+				<-timer.C
+			}
+			_ = rendezvousListener.Close()
+			return fmt.Errorf("host %s exited before acknowledging stage %d/%d: %v", worker.host, plan.StageOrdinal, plan.StageCount, worker.err)
+		case <-session.ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			_ = rendezvousListener.Close()
+			return fmt.Errorf("host %s did not acknowledge stage %d/%d: %w", worker.host, plan.StageOrdinal, plan.StageCount, session.ctx.Err())
+		case <-timer.C:
+			_ = rendezvousListener.Close()
+			return fmt.Errorf("host %s did not acknowledge stage %d/%d within %s; verify that the host is reachable and its launcher is still running", worker.host, plan.StageOrdinal, plan.StageCount, hostfileStageReadyTimeout)
+		}
+	}
+	if err := rendezvousListener.Close(); err != nil {
+		return fmt.Errorf("release rank 0 rendezvous preflight for stage %d/%d: %w", plan.StageOrdinal, plan.StageCount, err)
 	}
 	return nil
 }
@@ -427,8 +496,9 @@ func (session *hostfileSession) finish(primaryErr error) error {
 	}
 	var workerErrors []string
 	for _, worker := range session.workers {
-		if err := <-worker.done; err != nil {
-			workerErrors = append(workerErrors, fmt.Sprintf("%s: %v", worker.host, err))
+		<-worker.done
+		if worker.err != nil {
+			workerErrors = append(workerErrors, fmt.Sprintf("%s: %v", worker.host, worker.err))
 		}
 	}
 	session.cancel()
