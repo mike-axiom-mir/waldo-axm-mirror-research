@@ -186,39 +186,83 @@ func (builder Builder) Train(ctx context.Context, name string, prepared Prepared
 	if err != nil {
 		return Inspection{}, fmt.Errorf("stage %s tokenizer: %w", stage.Name, err)
 	}
-	builder.report(Progress{Phase: "preflight", Stage: stage.Name, Message: fmt.Sprintf("selecting deterministic held-out records across %d shards", len(prepared.Inputs))})
 	conversation := training.ConversationTransform{}
 	if stage.Conversation != nil {
 		conversation = *stage.Conversation
 	}
-	partition, err := training.NewRecordPartitionContextWithTransform(ctx, prepared.Inputs, resolvedParameters, codec, stage.Objective, conversation, func(event training.PartitionProgress) {
-		builder.report(Progress{Phase: "preflight", Stage: stage.Name, Message: fmt.Sprintf("evaluation selection %d/%d shards, %d records indexed", event.CurrentShard, event.TotalShards, event.Records)})
+	bomHash, err := hashJSON(prepared.BOM)
+	if err != nil {
+		return Inspection{}, err
+	}
+	preflightIdentity, err := hashJSON(stagePreflightIdentity{
+		ArchitectureSHA256: inspection.Model.ArchitectureSHA256, CorpusBOMSHA256: bomHash,
+		Stage: stage.Name, StageType: stage.Type, Objective: stage.Objective,
+		Conversation: conversation, Parameters: resolvedParameters,
 	})
 	if err != nil {
-		return Inspection{}, fmt.Errorf("stage %s held-out evaluation partition: %w", stage.Name, err)
+		return Inspection{}, err
 	}
-	builder.report(Progress{Phase: "preflight", Stage: stage.Name, Message: fmt.Sprintf("selected %d held-out records (%s text)", partition.Evaluation.Records, byteCount(partition.Evaluation.TextBytes))})
-	if stage.Parameters.Steps == 0 && stage.Parameters.Tokens == 0 {
-		builder.report(Progress{Phase: "preflight", Stage: stage.Name, Message: fmt.Sprintf("deriving optimizer steps from %d epochs", resolvedParameters.Epochs)})
-		derivedSteps, err := partition.TrainingSteps(ctx)
+	var partition training.RecordPartition
+	var preflight training.StagePreflight
+	capacityVerified := false
+	if cached, ordinal, ok, loadErr := reusableStagePreflight(inspection, preflightIdentity); loadErr != nil {
+		return Inspection{}, fmt.Errorf("stage %s reusable preflight: %w", stage.Name, loadErr)
+	} else if ok {
+		if err := validateCachedPreflightParameters(stage, prepared.BOM.Paths, cached); err != nil {
+			return Inspection{}, fmt.Errorf("stage %s reusable preflight: %w", stage.Name, err)
+		}
+		resolvedParameters = cached.Parameters
+		partition, err = training.NewRecordPartitionFromPreflight(ctx, prepared.Inputs, resolvedParameters, codec, stage.Objective, conversation, cached)
 		if err != nil {
-			return Inspection{}, fmt.Errorf("stage %s derive epoch training steps: %w", stage.Name, err)
+			return Inspection{}, fmt.Errorf("stage %s reusable held-out evaluation partition: %w", stage.Name, err)
 		}
-		resolvedParameters, err = stage.ResolveParametersForSteps(derivedSteps)
+		preflight = cached
+		capacityVerified = cached.CapacityVerified
+		builder.report(Progress{Phase: "preflight", Stage: stage.Name, Message: fmt.Sprintf("reused %d held-out records from verified run %04d preflight", partition.Evaluation.Records, ordinal)})
+		if stage.Parameters.Steps == 0 && stage.Parameters.Tokens == 0 {
+			builder.report(Progress{Phase: "preflight", Stage: stage.Name, Message: fmt.Sprintf("reused %d optimizer steps derived from %d epochs", resolvedParameters.Steps, resolvedParameters.Epochs)})
+		} else if capacityVerified {
+			builder.report(Progress{Phase: "preflight", Stage: stage.Name, Message: fmt.Sprintf("reused verified capacity for %d optimizer steps", resolvedParameters.Steps)})
+		}
+	} else {
+		builder.report(Progress{Phase: "preflight", Stage: stage.Name, Message: fmt.Sprintf("selecting deterministic held-out records across %d shards", len(prepared.Inputs))})
+		partition, err = training.NewRecordPartitionContextWithTransform(ctx, prepared.Inputs, resolvedParameters, codec, stage.Objective, conversation, func(event training.PartitionProgress) {
+			builder.report(Progress{Phase: "preflight", Stage: stage.Name, Message: fmt.Sprintf("evaluation selection %d/%d shards, %d records indexed", event.CurrentShard, event.TotalShards, event.Records)})
+		})
 		if err != nil {
-			return Inspection{}, fmt.Errorf("stage %s resolve epoch training parameters: %w", stage.Name, err)
+			return Inspection{}, fmt.Errorf("stage %s held-out evaluation partition: %w", stage.Name, err)
 		}
-		builder.report(Progress{Phase: "preflight", Stage: stage.Name, Message: fmt.Sprintf("planned %d optimizer steps from %d epochs", derivedSteps, resolvedParameters.Epochs)})
-	} else if stage.Parameters.Epochs > 0 {
-		builder.report(Progress{Phase: "preflight", Stage: stage.Name, Message: fmt.Sprintf("validating capacity for %d optimizer steps across %d explicit epochs", resolvedParameters.Steps, resolvedParameters.Epochs)})
-		availableSteps, sufficient, err := partition.TrainingStepCapacity(ctx, resolvedParameters.Steps)
-		if err != nil {
-			return Inspection{}, fmt.Errorf("stage %s training capacity: %w", stage.Name, err)
+		builder.report(Progress{Phase: "preflight", Stage: stage.Name, Message: fmt.Sprintf("selected %d held-out records (%s text)", partition.Evaluation.Records, byteCount(partition.Evaluation.TextBytes))})
+		if stage.Parameters.Steps == 0 && stage.Parameters.Tokens == 0 {
+			builder.report(Progress{Phase: "preflight", Stage: stage.Name, Message: fmt.Sprintf("deriving optimizer steps from %d epochs", resolvedParameters.Epochs)})
+			derivedSteps, err := partition.TrainingSteps(ctx)
+			if err != nil {
+				return Inspection{}, fmt.Errorf("stage %s derive epoch training steps: %w", stage.Name, err)
+			}
+			resolvedParameters, err = stage.ResolveParametersForSteps(derivedSteps)
+			if err != nil {
+				return Inspection{}, fmt.Errorf("stage %s resolve epoch training parameters: %w", stage.Name, err)
+			}
+			if resolvedParameters.Data.Order == "corpus-weighted-shuffle-v1" {
+				resolvedParameters.Data.CorpusWeights, err = resolveCorpusWeights(resolvedParameters.Data.CorpusWeights, prepared.BOM.Paths)
+				if err != nil {
+					return Inspection{}, fmt.Errorf("stage %s %w", stage.Name, err)
+				}
+			}
+			builder.report(Progress{Phase: "preflight", Stage: stage.Name, Message: fmt.Sprintf("planned %d optimizer steps from %d epochs", derivedSteps, resolvedParameters.Epochs)})
+		} else if stage.Parameters.Epochs > 0 {
+			builder.report(Progress{Phase: "preflight", Stage: stage.Name, Message: fmt.Sprintf("validating capacity for %d optimizer steps across %d explicit epochs", resolvedParameters.Steps, resolvedParameters.Epochs)})
+			availableSteps, sufficient, err := partition.TrainingStepCapacity(ctx, resolvedParameters.Steps)
+			if err != nil {
+				return Inspection{}, fmt.Errorf("stage %s training capacity: %w", stage.Name, err)
+			}
+			if !sufficient {
+				return Inspection{}, fmt.Errorf("stage %s requests %d optimizer steps, but its filtered training stream provides only %d across %d epochs; reduce steps, increase epochs, or select more data", stage.Name, resolvedParameters.Steps, availableSteps, resolvedParameters.Epochs)
+			}
+			capacityVerified = true
+			builder.report(Progress{Phase: "preflight", Stage: stage.Name, Message: fmt.Sprintf("verified capacity for %d optimizer steps", resolvedParameters.Steps)})
 		}
-		if !sufficient {
-			return Inspection{}, fmt.Errorf("stage %s requests %d optimizer steps, but its filtered training stream provides only %d across %d epochs; reduce steps, increase epochs, or select more data", stage.Name, resolvedParameters.Steps, availableSteps, resolvedParameters.Epochs)
-		}
-		builder.report(Progress{Phase: "preflight", Stage: stage.Name, Message: fmt.Sprintf("verified capacity for %d optimizer steps", resolvedParameters.Steps)})
+		preflight = partition.Preflight(preflightIdentity, resolvedParameters, capacityVerified)
 	}
 	records, err := partition.TrainingRecords()
 	if err != nil {
@@ -259,10 +303,6 @@ func (builder Builder) Train(ctx context.Context, name string, prepared Prepared
 		}
 	}
 
-	bomHash, err := hashJSON(prepared.BOM)
-	if err != nil {
-		return Inspection{}, err
-	}
 	if candidate, ok := resumableRun(inspection, stage, resolvedParameters, partition.Evaluation, bomHash, selection.Execution); ok {
 		return builder.resumeTraining(ctx, name, inspection, candidate, stage, prepared, records, evaluationRecords, architectureJSON, selection)
 	}
@@ -274,13 +314,22 @@ func (builder Builder) Train(ctx context.Context, name string, prepared Prepared
 	ordinal := len(inspection.Model.Runs) + 1
 	pin := RunPin{ID: runID, Stage: stage.Name, Ordinal: ordinal, State: RunPlanned, Backend: selection.Execution.Backend, Simulated: selection.Execution.Backend.Name == training.BackendFake}
 	runDirectory := filepath.Join(inspection.Path, "runs", runDirectoryName(pin))
+	preflightPath := filepath.Join(runDirectory, "PREFLIGHT.json")
+	if err := writeJSONAtomic(preflightPath, preflight); err != nil {
+		return Inspection{}, err
+	}
+	preflightHash, preflightBytes, err := hashFile(preflightPath)
+	if err != nil {
+		return Inspection{}, err
+	}
+	preflightArtifact := training.Artifact{Path: "PREFLIGHT.json", SHA256: preflightHash, Bytes: preflightBytes}
 	runBOM := RunBOM{
 		Kind: "openwaldo-bom", Schema: RunBOMSchema, Subject: "training-run",
 		ID: runID, ModelID: inspection.Model.ID, Stage: stage.Name, StageType: stage.Type,
 		Ordinal: ordinal, Objective: stage.Objective, Execution: selection.Execution,
 		ArchitectureSHA256: inspection.Model.ArchitectureSHA256,
 		CorpusBOMSHA256:    bomHash, CorpusBOM: prepared.BOM, Parameters: resolvedParameters,
-		EvaluationSet: &partition.Evaluation, Initialization: initialization,
+		EvaluationSet: &partition.Evaluation, Preflight: &preflightArtifact, Initialization: initialization,
 	}
 	if stage.Conversation != nil {
 		runBOM.Conversation = *stage.Conversation
@@ -321,6 +370,87 @@ func byteCount(value int64) string {
 		}
 	}
 	return fmt.Sprintf("%d B", value)
+}
+
+type stagePreflightIdentity struct {
+	ArchitectureSHA256 string                         `json:"architecture_sha256"`
+	CorpusBOMSHA256    string                         `json:"corpus_bom_sha256"`
+	Stage              string                         `json:"stage"`
+	StageType          string                         `json:"stage_type"`
+	Objective          string                         `json:"objective"`
+	Conversation       training.ConversationTransform `json:"conversation,omitzero"`
+	Parameters         training.ResolvedParameters    `json:"parameters"`
+}
+
+func reusableStagePreflight(inspection Inspection, identity string) (training.StagePreflight, int, bool, error) {
+	for index := len(inspection.RunBOMs) - 1; index >= 0; index-- {
+		bom := inspection.RunBOMs[index]
+		if bom.Preflight == nil {
+			continue
+		}
+		runDirectory := filepath.Join(inspection.Path, "runs", runDirectoryName(inspection.Model.Runs[index]))
+		var snapshot training.StagePreflight
+		if err := readStrictJSON(filepath.Join(runDirectory, bom.Preflight.Path), &snapshot); err != nil {
+			return training.StagePreflight{}, 0, false, err
+		}
+		if err := snapshot.Validate(); err != nil {
+			return training.StagePreflight{}, 0, false, fmt.Errorf("run %04d: %w", bom.Ordinal, err)
+		}
+		if bom.EvaluationSet == nil || snapshot.Evaluation != *bom.EvaluationSet || !equivalentTrainingParameters(snapshot.Parameters, bom.Parameters) {
+			return training.StagePreflight{}, 0, false, fmt.Errorf("run %04d preflight artifact does not match its run BOM", bom.Ordinal)
+		}
+		if snapshot.IdentitySHA256 == identity {
+			return snapshot, bom.Ordinal, true, nil
+		}
+	}
+	return training.StagePreflight{}, 0, false, nil
+}
+
+func validateCachedPreflightParameters(stage Stage, paths []string, snapshot training.StagePreflight) error {
+	var expected training.ResolvedParameters
+	var err error
+	if stage.Parameters.Steps == 0 && stage.Parameters.Tokens == 0 {
+		expected, err = stage.ResolveParametersForSteps(snapshot.Parameters.Steps)
+	} else {
+		expected, err = stage.ResolvePlanningParameters()
+	}
+	if err != nil {
+		return err
+	}
+	if expected.Data.Order == "corpus-weighted-shuffle-v1" {
+		expected.Data.CorpusWeights, err = resolveCorpusWeights(expected.Data.CorpusWeights, paths)
+		if err != nil {
+			return err
+		}
+	}
+	if !equivalentTrainingParameters(expected, snapshot.Parameters) {
+		return fmt.Errorf("cached optimizer parameters do not match the current stage")
+	}
+	if stage.Parameters.Steps > 0 && stage.Parameters.Epochs > 0 && !snapshot.CapacityVerified {
+		return fmt.Errorf("cached preflight does not prove the requested epoch capacity")
+	}
+	return nil
+}
+
+func readStrictJSON(path string, target any) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	decoder := json.NewDecoder(file)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return fmt.Errorf("%s: %w", path, err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("%s: unexpected trailing JSON value", path)
+		}
+		return fmt.Errorf("%s: %w", path, err)
+	}
+	return nil
 }
 
 func resumableRun(inspection Inspection, stage Stage, parameters training.ResolvedParameters, evaluation training.EvaluationSet, corpusHash string, execution training.Execution) (int, bool) {

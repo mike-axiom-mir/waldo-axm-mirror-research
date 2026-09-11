@@ -689,6 +689,7 @@ func TestInspectAcceptsLegacyRunBOMWithoutEpochs(t *testing.T) {
 	runDirectory := filepath.Join(trained.Path, "runs", runDirectoryName(pin))
 	runBOM := trained.RunBOMs[0]
 	runBOM.Parameters.Epochs = 0
+	runBOM.Preflight = nil
 	legacyHash, err := hashJSON(runBOM)
 	if err != nil {
 		t.Fatal(err)
@@ -875,6 +876,97 @@ func TestTrainDerivesAndPersistsEpochSteps(t *testing.T) {
 	}
 	if len(result.RunBOMs) != 1 || result.RunBOMs[0].Parameters.Steps <= 0 || result.RunBOMs[0].Parameters.Epochs != 2 {
 		t.Fatalf("epoch-derived run BOM = %+v", result.RunBOMs)
+	}
+}
+
+func TestTrainReusesPinnedStagePreflight(t *testing.T) {
+	root := t.TempDir()
+	var progress []Progress
+	builder := Builder{Root: root, Resolver: training.FakeResolver(), Progress: func(event Progress) { progress = append(progress, event) }}
+	if _, err := builder.Initialize("preflight-model", testArchitecture()); err != nil {
+		t.Fatal(err)
+	}
+	stage := testStage("pretrain")
+	stage.Parameters.Steps = 0
+	stage.Parameters.Epochs = 2
+	prepared := preparedFixture(t, stage)
+	first, err := builder.Train(context.Background(), "preflight-model", prepared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.RunBOMs[0].Preflight == nil {
+		t.Fatal("first run did not pin its stage preflight artifact")
+	}
+	progress = nil
+	second, err := builder.Train(context.Background(), "preflight-model", prepared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(second.RunBOMs) != 2 || second.RunBOMs[1].Preflight == nil {
+		t.Fatalf("second run BOMs = %+v", second.RunBOMs)
+	}
+	var reused, rescanned bool
+	for _, event := range progress {
+		reused = reused || strings.Contains(event.Message, "reused 1 held-out records")
+		rescanned = rescanned || strings.Contains(event.Message, "evaluation selection")
+	}
+	if !reused || rescanned {
+		t.Fatalf("preflight progress = %+v", progress)
+	}
+}
+
+func TestInspectRejectsTamperedStagePreflight(t *testing.T) {
+	root := t.TempDir()
+	builder := Builder{Root: root, NewID: func() (string, error) { return "preflight-run", nil }, Resolver: training.FakeResolver()}
+	if _, err := builder.Initialize("preflight-model", testArchitecture()); err != nil {
+		t.Fatal(err)
+	}
+	trained, err := builder.Train(context.Background(), "preflight-model", preparedFixture(t, testStage("pretrain")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(trained.Path, "runs", runDirectoryName(trained.Model.Runs[0]), "PREFLIGHT.json")
+	if err := os.WriteFile(path, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Inspect(root, "preflight-model"); err == nil || !strings.Contains(err.Error(), "preflight") {
+		t.Fatalf("Inspect tampered preflight error = %v", err)
+	}
+}
+
+func TestChangedStageIdentityDoesNotReusePreflight(t *testing.T) {
+	root := t.TempDir()
+	var progress []Progress
+	builder := Builder{Root: root, Resolver: training.FakeResolver(), Progress: func(event Progress) { progress = append(progress, event) }}
+	if _, err := builder.Initialize("preflight-model", testArchitecture()); err != nil {
+		t.Fatal(err)
+	}
+	prepared := preparedFixture(t, testStage("pretrain"))
+	if _, err := builder.Train(context.Background(), "preflight-model", prepared); err != nil {
+		t.Fatal(err)
+	}
+	prepared.Stage.Parameters.Seed++
+	progress = nil
+	if _, err := builder.Train(context.Background(), "preflight-model", prepared); err != nil {
+		t.Fatal(err)
+	}
+	var rescanned bool
+	for _, event := range progress {
+		rescanned = rescanned || strings.Contains(event.Message, "evaluation selection")
+	}
+	if !rescanned {
+		t.Fatalf("changed stage reused stale preflight: %+v", progress)
+	}
+}
+
+func TestStagePreflightJSONRejectsUnknownFields(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "PREFLIGHT.json")
+	if err := os.WriteFile(path, []byte(`{"kind":"openwaldo-stage-preflight","schema":1,"unknown":true}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var snapshot training.StagePreflight
+	if err := readStrictJSON(path, &snapshot); err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("strict preflight error = %v", err)
 	}
 }
 

@@ -18,6 +18,8 @@ import (
 	"math/bits"
 	"slices"
 	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/openwaldo/waldo/internal/record"
 	"github.com/openwaldo/waldo/internal/shard"
@@ -46,6 +48,126 @@ type RecordPartition struct {
 	codec             TokenCodec
 	objective         string
 	conversation      ConversationTransform
+}
+
+const (
+	StagePreflightKind   = "openwaldo-stage-preflight"
+	StagePreflightSchema = 1
+)
+
+// StagePreflight is the immutable result of the expensive, deterministic
+// record-partition scan. The model run BOM pins the serialized artifact.
+type StagePreflight struct {
+	Kind             string             `json:"kind"`
+	Schema           int                `json:"schema"`
+	IdentitySHA256   string             `json:"identity_sha256"`
+	Evaluation       EvaluationSet      `json:"evaluation"`
+	SelectedRecords  []string           `json:"selected_records"`
+	Parameters       ResolvedParameters `json:"parameters"`
+	CapacityVerified bool               `json:"capacity_verified,omitempty"`
+}
+
+func (snapshot StagePreflight) Validate() error {
+	if snapshot.Kind != StagePreflightKind || snapshot.Schema != StagePreflightSchema {
+		return fmt.Errorf("unsupported stage preflight artifact %q schema %d", snapshot.Kind, snapshot.Schema)
+	}
+	identity, err := hex.DecodeString(snapshot.IdentitySHA256)
+	if err != nil || len(identity) != sha256.Size || snapshot.IdentitySHA256 != strings.ToLower(snapshot.IdentitySHA256) {
+		return fmt.Errorf("stage preflight identity SHA-256 is invalid")
+	}
+	if int64(len(snapshot.SelectedRecords)) != snapshot.Evaluation.Records {
+		return fmt.Errorf("stage preflight contains %d selected record IDs but declares %d", len(snapshot.SelectedRecords), snapshot.Evaluation.Records)
+	}
+	for index, key := range snapshot.SelectedRecords {
+		if index > 0 && key <= snapshot.SelectedRecords[index-1] {
+			return fmt.Errorf("stage preflight selected record IDs are not unique and sorted")
+		}
+	}
+	return nil
+}
+
+// Preflight returns a portable snapshot of this partition. Selection IDs are
+// sorted so the artifact has a stable identity independent of map iteration.
+func (partition RecordPartition) Preflight(identity string, parameters ResolvedParameters, capacityVerified bool) StagePreflight {
+	selected := make([]string, 0, len(partition.selected))
+	for key := range partition.selected {
+		selected = append(selected, key)
+	}
+	sort.Strings(selected)
+	return StagePreflight{
+		Kind: StagePreflightKind, Schema: StagePreflightSchema, IdentitySHA256: identity,
+		Evaluation: partition.Evaluation, SelectedRecords: selected, Parameters: parameters,
+		CapacityVerified: capacityVerified,
+	}
+}
+
+// NewRecordPartitionFromPreflight reconstructs a partition by reading only
+// the pinned held-out rows, avoiding a full metadata selection scan.
+func NewRecordPartitionFromPreflight(ctx context.Context, inputs []Input, parameters ResolvedParameters, codec TokenCodec, objective string, conversation ConversationTransform, snapshot StagePreflight) (RecordPartition, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if codec == nil {
+		return RecordPartition{}, fmt.Errorf("record partition requires a tokenizer")
+	}
+	if err := snapshot.Validate(); err != nil {
+		return RecordPartition{}, err
+	}
+	ordered := orderedInputs(inputs)
+	positions := make(map[string]int, len(ordered))
+	for index, input := range ordered {
+		if _, exists := positions[input.SHA256]; exists {
+			return RecordPartition{}, fmt.Errorf("stage preflight has duplicate input shard %s", input.SHA256)
+		}
+		positions[input.SHA256] = index
+	}
+	selected := make([]evaluationCandidate, 0, len(snapshot.SelectedRecords))
+	for _, key := range snapshot.SelectedRecords {
+		separator := strings.LastIndexByte(key, ':')
+		if separator != 64 {
+			return RecordPartition{}, fmt.Errorf("stage preflight selected record ID is invalid")
+		}
+		inputPosition, ok := positions[key[:separator]]
+		if !ok {
+			return RecordPartition{}, fmt.Errorf("stage preflight selected record references an unknown shard")
+		}
+		row, err := strconv.ParseInt(key[separator+1:], 10, 64)
+		if err != nil || row < 0 || row >= ordered[inputPosition].Records {
+			return RecordPartition{}, fmt.Errorf("stage preflight selected record has an invalid row")
+		}
+		selected = append(selected, evaluationCandidate{key: key, corpus: ordered[inputPosition].Corpus, input: inputPosition, row: row})
+	}
+	sizes, err := evaluationCandidateSizes(ctx, ordered, selected)
+	if err != nil {
+		return RecordPartition{}, err
+	}
+	var textBytes int64
+	for index := range selected {
+		selected[index].textBytes = sizes[selected[index].key]
+		textBytes += selected[index].textBytes
+	}
+	records, tokenTargets, err := readEvaluationRecords(ctx, ordered, selected, codec, objective, conversation)
+	if err != nil {
+		return RecordPartition{}, err
+	}
+	hasher := sha256.New()
+	selectedMap := make(map[string]bool, len(selected))
+	for _, candidate := range selected {
+		selectedMap[candidate.key] = true
+		_, _ = fmt.Fprintln(hasher, candidate.key)
+	}
+	evaluation := EvaluationSet{
+		Selection: snapshot.Evaluation.Selection, Seed: snapshot.Evaluation.Seed,
+		Records: int64(len(selected)), TokenTargets: tokenTargets, TextBytes: textBytes,
+		SHA256: hex.EncodeToString(hasher.Sum(nil)),
+	}
+	if evaluation != snapshot.Evaluation {
+		return RecordPartition{}, fmt.Errorf("stage preflight held-out evidence does not match the selected records")
+	}
+	return RecordPartition{
+		Evaluation: evaluation, selected: selectedMap, evaluationRecords: records,
+		inputs: ordered, parameters: parameters, codec: codec, objective: objective, conversation: conversation,
+	}, nil
 }
 
 type PartitionProgress struct {

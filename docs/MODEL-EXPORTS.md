@@ -132,8 +132,10 @@ not depend on reopening a mutable checkout.
 
 The run BOM is written before training starts. It binds the corpus selection,
 architecture, backend, objective, resolved training parameters, environment,
-and planned work. Runtime observations are recorded separately so the plan
-cannot be rewritten after execution.
+and planned work. It also hash-pins the run's `PREFLIGHT.json`, containing the
+exact held-out row IDs and deterministic epoch-to-step result used by the run.
+Runtime observations are recorded separately so the plan cannot be rewritten
+after execution.
 
 ### Managed `MODEL-BOM.json`
 
@@ -263,6 +265,7 @@ small-waldo/
 └── runs/
     └── 0001-<stage>-<run-id>/
         ├── RUN-BOM.json
+        ├── PREFLIGHT.json
         ├── RUN.json
         └── artifacts/
 ```

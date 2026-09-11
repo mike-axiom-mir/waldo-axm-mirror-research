@@ -394,6 +394,7 @@ stage is cleared; interrupted work is retained.
 └── runs/
     └── 0001-<stage>-<run-id>/
         ├── RUN-BOM.json
+        ├── PREFLIGHT.json
         ├── RUN.json
         ├── TELEMETRY.csv
         └── artifacts/
@@ -412,7 +413,12 @@ stage is cleared; interrupted work is retained.
   training does not change model identity.
 - `RUN-BOM.json` embeds the hash-pinned corpus OpenWALDO BOM and pins
   architecture, backend, objective, parameters, and execution environment
-  before launch. With `--audit`, it additionally carries each embedded shard
+  before launch. It also pins `PREFLIGHT.json`, which records the exact
+  held-out row selection and any epoch-derived optimizer-step count. An exact
+  retry reuses that verified result instead of rescanning every record; a
+  changed corpus, filter, tokenizer, architecture, or stage rebuilds it.
+  Runs created before this artifact existed remain valid and perform the scan.
+  With `--audit`, the run BOM additionally carries each embedded shard
   BOM and its independent SHA-256, or explicit legacy/deep validation status.
 - `RUN.json` moves atomically through `planned`, `running`, and exactly one of
   `complete`, `failed`, or `interrupted`. It separates verified partial

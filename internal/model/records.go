@@ -148,6 +148,7 @@ type RunBOM struct {
 	CorpusBOM          corpus.BOM                     `json:"corpus_bom"`
 	Parameters         training.ResolvedParameters    `json:"parameters"`
 	EvaluationSet      *training.EvaluationSet        `json:"evaluation_set,omitempty"`
+	Preflight          *training.Artifact             `json:"preflight,omitempty"`
 	Initialization     *training.Initialization       `json:"initialization,omitempty"`
 }
 
@@ -398,6 +399,25 @@ func Inspect(root, nameOrPath string) (Inspection, error) {
 		}
 		if err := validateEvaluationSet(runBOM); err != nil {
 			return Inspection{}, fmt.Errorf("run %s evaluation set: %w", pin.ID, err)
+		}
+		if runBOM.Preflight != nil {
+			if runBOM.Preflight.Path != "PREFLIGHT.json" {
+				return Inspection{}, fmt.Errorf("run %s preflight artifact path %q is invalid", pin.ID, runBOM.Preflight.Path)
+			}
+			preflightPath := filepath.Join(runDirectory, runBOM.Preflight.Path)
+			if err := VerifyArtifactFile(preflightPath, *runBOM.Preflight); err != nil {
+				return Inspection{}, fmt.Errorf("run %s preflight: %w", pin.ID, err)
+			}
+			var preflight training.StagePreflight
+			if err := readStrictJSON(preflightPath, &preflight); err != nil {
+				return Inspection{}, fmt.Errorf("run %s preflight: %w", pin.ID, err)
+			}
+			if err := preflight.Validate(); err != nil {
+				return Inspection{}, fmt.Errorf("run %s preflight: %w", pin.ID, err)
+			}
+			if runBOM.EvaluationSet == nil || preflight.Evaluation != *runBOM.EvaluationSet || !equivalentTrainingParameters(preflight.Parameters, runBOM.Parameters) {
+				return Inspection{}, fmt.Errorf("run %s preflight artifact does not match its run BOM", pin.ID)
+			}
 		}
 		if run.Progress != nil {
 			for _, checkpoint := range run.Progress.Checkpoints {

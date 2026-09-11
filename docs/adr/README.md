@@ -64,3 +64,4 @@ Superseded and historical ADRs are removed. Missing numbers are intentional.
 - [0065: Ingest PDF and EPUB with built-in document adapters](0065-built-in-pdf-epub-adapters.md)
 - [0066: Pin trained managed-model parents](0066-pin-trained-model-parents.md)
 - [0067: Select topology-aware TorchTitan parallelism](0067-topology-aware-parallelism.md)
+- [0068: Pin and reuse deterministic stage preflight](0068-pinned-stage-preflight.md)

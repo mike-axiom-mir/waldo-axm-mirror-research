@@ -551,6 +551,58 @@ func TestTrainingStepCapacityAccountsForHeldOutRecords(t *testing.T) {
 	}
 }
 
+func TestStagePreflightReconstructsTheSamePartition(t *testing.T) {
+	inputs := []Input{writeTrainingShard(t, []string{"alpha record", "beta record", "gamma record", "delta record"})}
+	fraction := 0.5
+	maxRecords := 2
+	maxBytes := int64(1024)
+	parameters, err := ResolveParameters(Parameters{
+		Steps: 2, BatchSize: 1, SequenceLength: 8, LearningRate: 0.001, Seed: 7,
+		EvaluationFraction: &fraction, EvaluationMaxRecords: &maxRecords, EvaluationMaxBytes: &maxBytes,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	partition, err := NewRecordPartition(inputs, parameters)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := partition.Preflight(strings.Repeat("a", 64), parameters, false)
+	restored, err := NewRecordPartitionFromPreflight(context.Background(), inputs, parameters, byteCodec{}, "causal-language-modeling", ConversationTransform{}, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored.Evaluation != partition.Evaluation {
+		t.Fatalf("restored evaluation = %+v, want %+v", restored.Evaluation, partition.Evaluation)
+	}
+	originalSource, err := partition.TrainingRecords()
+	originalRecords := collectRecordSource(t, originalSource, err)
+	restoredSource, err := restored.TrainingRecords()
+	restoredRecords := collectRecordSource(t, restoredSource, err)
+	if !reflect.DeepEqual(originalRecords, restoredRecords) {
+		t.Fatalf("restored training records differ: %+v / %+v", originalRecords, restoredRecords)
+	}
+	snapshot.SelectedRecords = append(snapshot.SelectedRecords, snapshot.SelectedRecords[0])
+	if _, err := NewRecordPartitionFromPreflight(context.Background(), inputs, parameters, byteCodec{}, "causal-language-modeling", ConversationTransform{}, snapshot); err == nil {
+		t.Fatal("duplicate preflight selection was accepted")
+	}
+}
+
+func collectRecordSource(t *testing.T, source RecordSource, err error) []string {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var records []string
+	if err := source.Stream(context.Background(), func(value Record) error {
+		records = append(records, value.SelectionID)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return records
+}
+
 func TestTrainingStepCapacityAccountsForRecordFilters(t *testing.T) {
 	input := writeTrainingRows(t, []shard.Row{
 		{SHA256: record.TextHash(strings.Repeat("k", 20)), Kind: record.KindPretrain, Text: strings.Repeat("k", 20), Source: "fixture", License: "CC0-1.0", Lang: "en", Tokens: 1},
