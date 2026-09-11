@@ -330,6 +330,30 @@ weights used to initialize the next stage. If a stage fails, later stages do
 not run. Repeating the exact command after interruption resumes the durable
 transaction and its latest verified checkpoint.
 
+### Stage ordering is part of the model design
+
+Stage order is not organizational metadata and stages are not independent.
+Every stage changes the weights inherited by all later stages. Compose broad
+knowledge first, domain or technical adaptation next, conversational
+midtraining after that, and narrow assistant, alignment, or tool-use training
+last. Later broad-data training can weaken behavior learned during earlier
+conversation or alignment stages.
+
+A safe default progression is:
+
+1. broad foundation pretraining;
+2. domain or technical midtraining;
+3. conversational midtraining;
+4. assistant-response or instruction fine-tuning;
+5. narrow alignment or tool-use fine-tuning.
+
+Changing the order after any affected stage has completed does not reorder the
+model's existing training history. Completed work may be skipped by corpus
+identity, so rerunning the edited compose is not equivalent to training it in
+the new order. Start a new model from the corrected compose whenever the
+relative order of completed stages changes. Resume the existing model only
+when the correction affects a stage that has not yet changed its weights.
+
 Stage `type` currently records intent; it does not select a different loss or
 framework algorithm. `objective` selects executable behavior, and schema 1
 supports only causal language modeling.

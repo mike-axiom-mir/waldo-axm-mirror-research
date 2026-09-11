@@ -8,6 +8,13 @@ corpus recipe, training process, and evaluation gates.
 Runtime estimates cover training after data and the environment are ready.
 They are planning ranges until replaced by observed WALDO run evidence.
 
+Stages are weight-changing operations and execute strictly in YAML order. Keep
+broad foundation data first, domain or technical adaptation next, conversation
+training after that, and narrow assistant, alignment, or tool-use training
+last. If the relative order of completed stages is corrected, use a new model;
+replaying an existing model cannot retroactively change its training order.
+See [Stage ordering is part of the model design](../docs/MODEL-COMPOSE.md#stage-ordering-is-part-of-the-model-design).
+
 ## Canary / smoke test (`0000-canary.yaml`)
 
 | Field | Plan |
