@@ -21,7 +21,7 @@ import torch.nn.functional as functional
 
 PROTOCOL_SCHEMA = 1
 WORKER_REVISION = "builtin-pytorch-worker-schema-1-r7"
-TORCHTITAN_REVISION = "builtin-torchtitan-worker-schema-1-r14"
+TORCHTITAN_REVISION = "builtin-torchtitan-worker-schema-1-r15"
 IS_PRIMARY = True
 
 
@@ -283,37 +283,40 @@ class Trainer:
         self.distributed = device_name == "torchtitan"
         self.rank = torch.distributed.get_rank() if self.distributed else 0
         self.world_size = torch.distributed.get_world_size() if self.distributed else 1
+        self.parallelism = begin.get("parallelism", {})
+        self.parallelism_strategy = self.parallelism.get("strategy", "fully-sharded-data-parallel")
         if self.distributed:
             local_rank = int(os.environ["LOCAL_RANK"])
             self.device = torch.device(f"cuda:{local_rank}")
             torch.cuda.set_device(self.device)
-            # ParallelDims uses the PyTorch fake process-group backend for
-            # singleton mesh axes. Importing its registration module is part
-            # of TorchTitan's normal runtime initialization contract.
-            from torch.testing._internal.distributed import fake_pg as _fake_pg  # noqa: F401
-            from torchtitan.distributed import ParallelDims
+            self.parallel_dims = None
+            if self.parallelism_strategy != "data-parallel":
+                # ParallelDims uses the PyTorch fake process-group backend for
+                # singleton mesh axes. Importing its registration module is
+                # part of TorchTitan's normal runtime initialization contract.
+                from torch.testing._internal.distributed import fake_pg as _fake_pg  # noqa: F401
+                from torchtitan.distributed import ParallelDims
 
-            parallel_arguments = dict(
-                dp_replicate=1,
-                dp_shard=self.world_size,
-                cp=1,
-                tp=1,
-                pp=1,
-                ep=1,
-                world_size=self.world_size,
-            )
-            # TorchTitan development releases exposed an experimental `etp`
-            # dimension; the stable 0.3 API removed it. Supply it only when
-            # the installed constructor declares it.
-            if "etp" in inspect.signature(ParallelDims).parameters:
-                parallel_arguments["etp"] = 1
-            if "spmd_backend" in inspect.signature(ParallelDims).parameters:
-                # WALDO uses composable fully_shard directly and therefore
-                # needs TorchTitan's established FSDP mesh axis rather than
-                # its newer SPMD typechecking layout.
-                parallel_arguments["spmd_backend"] = "partial_dtensor"
-            self.parallel_dims = ParallelDims(**parallel_arguments)
-            self.parallel_dims.build_mesh()
+                nodes = int(self.parallelism.get("nodes", 1))
+                gpus_per_node = int(self.parallelism.get("gpus_per_node", self.world_size))
+                hybrid = self.parallelism_strategy == "hybrid-sharded-data-parallel"
+                parallel_arguments = dict(
+                    dp_replicate=nodes if hybrid else 1,
+                    dp_shard=gpus_per_node if hybrid else self.world_size,
+                    cp=1,
+                    tp=1,
+                    pp=1,
+                    ep=1,
+                    world_size=self.world_size,
+                )
+                # TorchTitan development releases exposed an experimental
+                # `etp` dimension; stable 0.3 removed it.
+                if "etp" in inspect.signature(ParallelDims).parameters:
+                    parallel_arguments["etp"] = 1
+                if "spmd_backend" in inspect.signature(ParallelDims).parameters:
+                    parallel_arguments["spmd_backend"] = "partial_dtensor"
+                self.parallel_dims = ParallelDims(**parallel_arguments)
+                self.parallel_dims.build_mesh()
         else:
             self.device = torch.device(device_name)
         self.sequence_length = self.parameters["sequence_length"]
@@ -385,12 +388,25 @@ class Trainer:
             if self.initialization is not None:
                 for parameter in self.model.parameters():
                     torch.distributed.broadcast(parameter.data, src=0)
-            from torch.distributed._composable.fsdp import fully_shard
+            if self.parallelism_strategy == "data-parallel":
+                from torch.nn.parallel import DistributedDataParallel
 
-            fsdp_mesh = self.parallel_dims.get_mesh("fsdp")
-            for layer in self.model.layers:
-                fully_shard(layer, mesh=fsdp_mesh)
-            fully_shard(self.model, mesh=fsdp_mesh)
+                local_rank = int(os.environ["LOCAL_RANK"])
+                self.model = DistributedDataParallel(
+                    self.model,
+                    device_ids=[local_rank],
+                    output_device=local_rank,
+                    broadcast_buffers=False,
+                    gradient_as_bucket_view=True,
+                    static_graph=True,
+                )
+            else:
+                from torch.distributed._composable.fsdp import fully_shard
+
+                fsdp_mesh = self.parallel_dims.get_mesh("fsdp")
+                for layer in self.model.layers:
+                    fully_shard(layer, mesh=fsdp_mesh)
+                fully_shard(self.model, mesh=fsdp_mesh)
         optimizer_parameters = self.parameters["optimizer"]
         self.optimizer = torch.optim.AdamW(
             self.model.parameters(),
@@ -486,8 +502,9 @@ class Trainer:
             if owner == self.rank:
                 self.batch.append((padded, mask, corpus_counts))
             # Every rank observes every sequence. Enter the optimizer step only
-            # at a complete global-batch boundary so FSDP collectives remain in
-            # identical order while each rank computes a distinct local slice.
+            # at a complete global-batch boundary so distributed collectives
+            # remain in identical order while each rank computes a distinct
+            # local slice.
             if self.sequence_number % self.global_batch_size == 0:
                 if len(self.batch) != self.batch_size:
                     raise ValueError(
@@ -523,8 +540,9 @@ class Trainer:
         if self.distributed:
             global_valid_tokens = local_valid_tokens.detach().clone()
             torch.distributed.all_reduce(global_valid_tokens, op=torch.distributed.ReduceOp.SUM)
-            # FSDP averages gradients across ranks. Scale each local loss so
-            # that the averaged gradient equals the global token-weighted mean.
+            # Distributed wrappers average gradients across ranks. Scale each
+            # local loss so that the averaged gradient equals the global
+            # token-weighted mean.
             loss = loss_sum * self.world_size / global_valid_tokens
         else:
             global_valid_tokens = local_valid_tokens
@@ -678,6 +696,7 @@ class Trainer:
                     "consumed_tokens": self.consumed_tokens,
                     "consumption": consumption,
                     "world_size": self.world_size,
+                    "parallelism_strategy": self.parallelism_strategy,
                 },
             )
             commit_directory(temporary, path)
@@ -724,6 +743,7 @@ class Trainer:
             or state.get("step") != self.resume["step"]
             or state.get("consumed_tokens") != self.resume["tokens"]
             or state.get("world_size") != self.world_size
+            or state.get("parallelism_strategy", "fully-sharded-data-parallel") != self.parallelism_strategy
         ):
             raise ValueError("PyTorch checkpoint state does not match the requested run, backend, and resume point")
         runtime = torch.load(self.resume_paths["runtime.pt"], map_location="cpu", weights_only=True)

@@ -189,6 +189,7 @@ type MultiNodePlan struct {
 	ArchitectureSHA256 string                         `json:"architecture_sha256"`
 	Architecture       json.RawMessage                `json:"architecture"`
 	Parameters         training.ResolvedParameters    `json:"parameters"`
+	Parallelism        training.Parallelism           `json:"parallelism"`
 	CorpusBOM          corpus.BOM                     `json:"corpus_bom"`
 	EvaluationSet      *training.EvaluationSet        `json:"evaluation_set,omitempty"`
 	Initialization     *training.Initialization       `json:"initialization,omitempty"`

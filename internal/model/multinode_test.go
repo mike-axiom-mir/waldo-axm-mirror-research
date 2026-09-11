@@ -27,7 +27,12 @@ func TestPublishMultiNodePlanRoundTrips(t *testing.T) {
 		ArchitectureSHA256: strings.Repeat("b", 64),
 		CorpusBOMSHA256:    strings.Repeat("c", 64),
 		Parameters:         training.ResolvedParameters{Seed: 7, BatchSize: 2, SequenceLength: 8},
-		EvaluationSet:      evaluation,
+		Execution: training.Execution{Parallelism: training.Parallelism{
+			Requested: training.ParallelismAuto, Strategy: training.ParallelismData,
+			WorldSize: 4, Nodes: 2, GPUsPerNode: 2,
+			CompleteModelCopies: 4, GPUsSharingEachModelCopy: 1,
+		}},
+		EvaluationSet: evaluation,
 		Initialization: &training.Initialization{
 			SourceType: "run", SourceRunID: "run0000",
 			Artifact: training.Artifact{Path: "artifacts/model.safetensors", SHA256: strings.Repeat("d", 64), Bytes: 4},
@@ -65,6 +70,9 @@ func TestPublishMultiNodePlanRoundTrips(t *testing.T) {
 	}
 	if plan.EvaluationSet == nil || plan.EvaluationSet.SHA256 != evaluation.SHA256 || plan.Parameters.Seed != 7 {
 		t.Fatalf("plan split/params = %+v", plan)
+	}
+	if plan.Parallelism.Strategy != training.ParallelismData || plan.Parallelism.WorldSize != 4 {
+		t.Fatalf("plan parallelism = %+v", plan.Parallelism)
 	}
 	if plan.InitializationPath != "smoke/runs/0001-train-run0000/artifacts/model.safetensors" {
 		t.Fatalf("plan initialization path = %q", plan.InitializationPath)

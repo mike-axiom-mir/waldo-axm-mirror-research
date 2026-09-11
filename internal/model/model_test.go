@@ -55,6 +55,14 @@ func TestLoadComposeIsStrictAndKeepsIndexPathsLogical(t *testing.T) {
 	if loaded != path || !reflect.DeepEqual(CorpusPaths(compose.Stages[0].Corpora), []string{"core/books", "science/papers"}) {
 		t.Fatalf("loaded = %q, corpora = %v", loaded, compose.Stages[0].Corpora)
 	}
+	configured := strings.Replace(composeYAML(""), "      steps: 2\n", "      parallelism: data-parallel\n      steps: 2\n", 1)
+	if err := os.WriteFile(path, []byte(configured), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	compose, _, err = LoadCompose(path)
+	if err != nil || compose.Stages[0].Parameters.Parallelism != training.ParallelismData {
+		t.Fatalf("parallelism compose = %+v, error = %v", compose.Stages[0].Parameters, err)
+	}
 	if err := os.WriteFile(path, []byte(composeYAML("backend:\n  name: fake\n")), 0o644); err != nil {
 		t.Fatal(err)
 	}

@@ -1,7 +1,9 @@
 # Multi-host TorchTitan training
 
-WALDO supports homogeneous, non-elastic multi-host training through TorchTitan
-and PyTorch FSDP2. The normal interface is one rank-0 command with a hostfile.
+WALDO supports homogeneous, non-elastic multi-host training through TorchTitan.
+It automatically selects data parallelism, hybrid sharding, or full model
+sharding for the model and available GPU memory. The normal interface is one
+rank-0 command with a hostfile.
 
 ## Hostfile
 
@@ -138,11 +140,42 @@ launcher-managed local scratch.
 Rank 0 resolves, verifies, filters, orders, and tokenizes the corpus. It sends
 compact token frames and masks through the NCCL process group; raw Parquet
 objects are not copied to secondary hosts. WALDO deterministically assigns a
-different slice of each global batch to every rank, and every rank participates
-in the globally FSDP2-sharded model step. The compose `batch_size` remains one
+different slice of each global batch to every rank. The compose `batch_size` remains one
 logical global batch and is not multiplied by the host count. It must be at
 least and evenly divisible by the aggregate GPU count. For example, a global
 batch of 64 gives each rank 16 distinct sequences in a four-GPU run.
+
+## Automatic GPU placement
+
+NCCL automatically uses NVLink between GPUs in the same host when it is
+available. WALDO detects that local topology and chooses how to place the model:
+
+- If the complete model and optimizer state fit safely on every GPU, each GPU
+  holds a complete model and trains on different sequences. This avoids model
+  sharding overhead and is normally fastest for compact models.
+- If a complete model does not fit on one GPU but fits when divided across the
+  GPUs in one host, each host holds one complete divided model. NVLink carries
+  the frequent within-host communication; hosts synchronize over RDMA or TCP.
+- If neither placement fits, WALDO divides one model across every GPU.
+
+The automatic calculation reserves 40% of GPU memory for activations, logits,
+allocator overhead, and framework workspaces. Before training, WALDO explains
+the selected placement literally—for example, that the run produces one model,
+each of four GPUs holds a synchronized complete copy, and each GPU trains on
+eight different sequences per optimizer step.
+The resolved strategy, topology, interconnects, model-copy count, sharding
+width, estimated model-state size, and per-GPU memory are pinned in the run BOM.
+
+To force a strategy for an experiment, set `parameters.parallelism` on a stage:
+
+```yaml
+parameters:
+  parallelism: data-parallel
+  batch_size: 32
+```
+
+The default is `auto`. An explicit placement that cannot fit safely or cannot
+be formed from the host topology fails during preflight.
 
 ## Network configuration
 
@@ -235,7 +268,9 @@ steps and checkpoint/evaluation intervals of one. Verify:
 2. the run BOM records the intended node count and global world size;
 3. rank 0 writes both checkpoints and terminal Safetensors;
 4. every secondary exits successfully; and
-5. no secondary downloads a corpus object.
+5. the selected parallelism and local/inter-host communication paths are clear;
+   and
+6. no secondary downloads a corpus object.
 
 The repository's opt-in multi-node hardware test exercises rendezvous and FSDP2
 on two GPUs in one Linux host. A real hostfile smoke test additionally validates

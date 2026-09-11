@@ -72,6 +72,21 @@ func TestResolveParametersPinsVersionedDefaultsAndOverrides(t *testing.T) {
 	}
 }
 
+func TestResolveParametersValidatesParallelismRequest(t *testing.T) {
+	base := Parameters{Steps: 1, BatchSize: 1, SequenceLength: 8, LearningRate: 0.001}
+	for _, value := range []string{"", ParallelismAuto, ParallelismData, ParallelismHybridSharded, ParallelismFullySharded} {
+		parameters := base
+		parameters.Parallelism = value
+		if _, err := ResolveParameters(parameters); err != nil {
+			t.Fatalf("parallelism %q: %v", value, err)
+		}
+	}
+	base.Parallelism = "magic"
+	if _, err := ResolveParameters(base); err == nil || !strings.Contains(err.Error(), "unsupported parallelism") {
+		t.Fatalf("invalid parallelism error = %v", err)
+	}
+}
+
 func TestResolveParametersSupportsTokenAndEpochBudgets(t *testing.T) {
 	tokenBudget := Parameters{Tokens: 101, BatchSize: 2, SequenceLength: 8, LearningRate: 0.001}
 	resolved, err := ResolveParameters(tokenBudget)

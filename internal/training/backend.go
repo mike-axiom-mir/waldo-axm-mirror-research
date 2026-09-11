@@ -10,6 +10,8 @@ package training
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 
 	"github.com/openwaldo/waldo/internal/corpus"
 )
@@ -53,12 +55,156 @@ type Execution struct {
 	Accelerators []Accelerator `json:"accelerators,omitempty"`
 	Nodes        int           `json:"nodes"`
 	WorldSize    int           `json:"world_size"`
+	Parallelism  Parallelism   `json:"parallelism,omitzero"`
+}
+
+const (
+	ParallelismAuto          = "auto"
+	ParallelismData          = "data-parallel"
+	ParallelismHybridSharded = "hybrid-sharded-data-parallel"
+	ParallelismFullySharded  = "fully-sharded-data-parallel"
+)
+
+// Parallelism is the resolved physical placement of one training stage. It
+// belongs to execution provenance rather than the portable model architecture.
+type Parallelism struct {
+	Requested                string `json:"requested"`
+	Strategy                 string `json:"strategy"`
+	WorldSize                int    `json:"world_size"`
+	Nodes                    int    `json:"nodes"`
+	GPUsPerNode              int    `json:"gpus_per_node"`
+	CompleteModelCopies      int    `json:"complete_model_copies"`
+	GPUsSharingEachModelCopy int    `json:"gpus_sharing_each_model_copy"`
+	LocalInterconnect        string `json:"local_interconnect,omitempty"`
+	InterNodeInterconnect    string `json:"inter_node_interconnect,omitempty"`
+	EstimatedModelStateBytes uint64 `json:"estimated_model_state_bytes"`
+	MemoryPerGPUBytes        uint64 `json:"memory_per_gpu_bytes"`
+}
+
+func ValidateParallelismRequest(value string) error {
+	switch value {
+	case "", ParallelismAuto, ParallelismData, ParallelismHybridSharded, ParallelismFullySharded:
+		return nil
+	default:
+		return fmt.Errorf("unsupported parallelism %q; use auto, data-parallel, hybrid-sharded-data-parallel, or fully-sharded-data-parallel", value)
+	}
+}
+
+func (plan Parallelism) Validate(execution Execution) error {
+	if plan.Strategy == "" {
+		return nil
+	}
+	if err := ValidateParallelismRequest(plan.Requested); err != nil {
+		return err
+	}
+	if plan.Strategy == ParallelismAuto {
+		return fmt.Errorf("resolved parallelism strategy cannot remain auto")
+	}
+	if err := ValidateParallelismRequest(plan.Strategy); err != nil {
+		return err
+	}
+	if plan.WorldSize != execution.WorldSize || plan.Nodes != execution.Nodes || plan.GPUsPerNode < 1 || plan.WorldSize != plan.Nodes*plan.GPUsPerNode {
+		return fmt.Errorf("resolved parallelism topology does not match execution topology")
+	}
+	if plan.CompleteModelCopies < 1 || plan.GPUsSharingEachModelCopy < 1 || plan.CompleteModelCopies*plan.GPUsSharingEachModelCopy != plan.WorldSize {
+		return fmt.Errorf("resolved parallelism model placement does not account for every GPU")
+	}
+	return nil
+}
+
+// DescribeParallelism returns deliberately literal user-facing descriptions;
+// distributed-training jargon is not required to understand model placement.
+func DescribeParallelism(plan Parallelism, globalBatch int64) []string {
+	if plan.Strategy == "" || plan.WorldSize < 1 {
+		return nil
+	}
+	selection := "selected " + parallelismDisplayName(plan.Strategy) + " as requested by the compose"
+	if plan.Requested == ParallelismAuto {
+		selection = "automatically selected " + automaticParallelismDescription(plan.Strategy)
+	}
+	messages := []string{selection}
+	sequences := int64(0)
+	if globalBatch > 0 && globalBatch%int64(plan.WorldSize) == 0 {
+		sequences = globalBatch / int64(plan.WorldSize)
+	}
+	switch plan.Strategy {
+	case ParallelismData:
+		messages = append(messages, fmt.Sprintf("the run produces one model; each of %d GPUs holds a synchronized complete copy and trains on %s", plan.WorldSize, sequenceDescription(sequences)))
+	case ParallelismHybridSharded:
+		messages = append(messages, fmt.Sprintf("the run produces one model; each of %d hosts holds a synchronized complete copy divided across its %d local GPUs, and all %d GPUs train on different sequences", plan.CompleteModelCopies, plan.GPUsSharingEachModelCopy, plan.WorldSize))
+	case ParallelismFullySharded:
+		messages = append(messages, fmt.Sprintf("the run produces one model divided across %d GPUs; every GPU trains on different sequences", plan.WorldSize))
+	}
+	var paths []string
+	if plan.GPUsPerNode > 1 && plan.LocalInterconnect != "" {
+		paths = append(paths, fmt.Sprintf("%s between the %d GPUs within each host", interconnectDisplayName(plan.LocalInterconnect), plan.GPUsPerNode))
+	}
+	if plan.Nodes > 1 && plan.InterNodeInterconnect != "" {
+		paths = append(paths, fmt.Sprintf("%s between %d hosts", interconnectDisplayName(plan.InterNodeInterconnect), plan.Nodes))
+	}
+	if len(paths) > 0 {
+		messages = append(messages, "model updates synchronize over "+strings.Join(paths, " and "))
+	}
+	return messages
+}
+
+func parallelismDisplayName(strategy string) string {
+	switch strategy {
+	case ParallelismData:
+		return "data parallelism"
+	case ParallelismHybridSharded:
+		return "hybrid sharding"
+	case ParallelismFullySharded:
+		return "full model sharding"
+	default:
+		return strategy
+	}
+}
+
+func automaticParallelismDescription(strategy string) string {
+	description := parallelismDisplayName(strategy)
+	switch strategy {
+	case ParallelismData:
+		return description + " because the complete model state fits within WALDO's per-GPU memory allowance"
+	case ParallelismHybridSharded:
+		return description + " because the complete model state does not fit within one GPU's allowance but does fit across one host"
+	case ParallelismFullySharded:
+		return description + " because the model state must be divided across every GPU to fit within the memory allowance"
+	default:
+		return description
+	}
+}
+
+func sequenceDescription(count int64) string {
+	if count == 1 {
+		return "1 different sequence per optimizer step"
+	}
+	return fmt.Sprintf("%d different sequences per optimizer step", count)
+}
+
+func interconnectDisplayName(value string) string {
+	switch value {
+	case "nvlink":
+		return "NVLink"
+	case "rdma":
+		return "RDMA"
+	case "tcp":
+		return "TCP networking"
+	case "gpu-peer-to-peer":
+		return "direct GPU peer-to-peer links"
+	case "pcie":
+		return "PCIe"
+	default:
+		return value
+	}
 }
 
 type ResolveRequest struct {
-	ArchitectureSHA256 string
-	Architecture       json.RawMessage
-	Objectives         []string
+	ArchitectureSHA256    string
+	Architecture          json.RawMessage
+	Objectives            []string
+	ApproximateParameters uint64
+	Parallelism           string
 }
 
 type Selection struct {
@@ -78,6 +224,7 @@ func (function ResolverFunc) Resolve(ctx context.Context, request ResolveRequest
 
 type Parameters struct {
 	Profile              string            `json:"profile,omitempty" yaml:"profile,omitempty"`
+	Parallelism          string            `json:"parallelism,omitempty" yaml:"parallelism,omitempty"`
 	Epochs               int64             `json:"epochs,omitempty" yaml:"epochs,omitempty"`
 	Tokens               int64             `json:"tokens,omitempty" yaml:"tokens,omitempty"`
 	Steps                int64             `json:"steps,omitempty" yaml:"steps,omitempty"`
@@ -182,6 +329,7 @@ type Request struct {
 	BOM                corpus.BOM
 	Inputs             []Input
 	Parameters         ResolvedParameters
+	Parallelism        Parallelism
 	Records            RecordSource
 	EvaluationRecords  RecordSource
 	EvaluationSet      EvaluationSet

@@ -246,7 +246,8 @@ func workerBeginFromRequest(request Request) WorkerBegin {
 	begin := WorkerBegin{
 		RunID: request.RunID, Stage: request.Stage, Objective: request.Objective,
 		ArchitectureSHA256: request.ArchitectureSHA256, Architecture: request.Architecture,
-		Parameters: request.Parameters, EvaluationSet: request.EvaluationSet, Tokenizer: tokenizer,
+		Parameters: request.Parameters, Parallelism: request.Parallelism,
+		EvaluationSet: request.EvaluationSet, Tokenizer: tokenizer,
 	}
 	if request.Initialization != nil {
 		begin.Initialization = &WorkerInitialization{

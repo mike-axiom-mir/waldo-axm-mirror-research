@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	TorchTitanRevision           = "builtin-torchtitan-worker-schema-1-r14"
+	TorchTitanRevision           = "builtin-torchtitan-worker-schema-1-r15"
 	recommendedTorchVersion      = "2.15.0.dev20260905+cu130"
 	recommendedTorchTitanVersion = "0.3.0"
 	recommendedTorchIndex        = "https://download.pytorch.org/whl/nightly/cu130"
@@ -218,6 +218,7 @@ type torchTitanProbe struct {
 	MemlockSoftBytes  int64              `json:"memlock_soft_bytes"`
 	NetworkInterfaces []HostInterface    `json:"network_interfaces"`
 	RDMADevices       []RDMADevice       `json:"rdma_devices"`
+	LocalInterconnect string             `json:"local_interconnect"`
 }
 
 type HostInterface struct {
@@ -240,6 +241,7 @@ type TorchTitanHost struct {
 	MemlockSoftBytes  int64           `json:"memlock_soft_bytes"`
 	NetworkInterfaces []HostInterface `json:"network_interfaces"`
 	RDMADevices       []RDMADevice    `json:"rdma_devices"`
+	LocalInterconnect string          `json:"local_interconnect"`
 }
 
 type TorchTitanResolver struct {
@@ -322,7 +324,92 @@ func (resolver TorchTitanResolver) Resolve(ctx context.Context, request ResolveR
 			execution.Accelerators = append(execution.Accelerators, Accelerator{Manufacturer: device.Manufacturer, Model: device.Model, MemoryBytes: device.MemoryBytes})
 		}
 	}
+	parallelism, err := resolveTorchTitanParallelism(request, facts, resolver.Cluster, nodes, localProcs)
+	if err != nil {
+		return Selection{}, err
+	}
+	execution.Parallelism = parallelism
 	return Selection{Backend: backend, Execution: execution}, nil
+}
+
+func resolveTorchTitanParallelism(request ResolveRequest, facts torchTitanProbe, cluster Cluster, nodes, GPUsPerNode int) (Parallelism, error) {
+	requested := strings.TrimSpace(request.Parallelism)
+	if requested == "" {
+		requested = ParallelismAuto
+	}
+	if err := ValidateParallelismRequest(requested); err != nil {
+		return Parallelism{}, err
+	}
+	worldSize := nodes * GPUsPerNode
+	if worldSize < 1 || len(facts.Devices) == 0 {
+		return Parallelism{}, fmt.Errorf("TorchTitan parallelism requires at least one visible GPU")
+	}
+	memoryPerGPU := facts.Devices[0].MemoryBytes
+	for _, device := range facts.Devices[1:] {
+		if device.MemoryBytes < memoryPerGPU {
+			memoryPerGPU = device.MemoryBytes
+		}
+	}
+	if request.ApproximateParameters > ^uint64(0)/16 {
+		return Parallelism{}, fmt.Errorf("estimated model state size overflows uint64")
+	}
+	stateBytes := request.ApproximateParameters * 16
+	// Keep 40% of each GPU free for activations, logits, allocator overhead,
+	// and framework workspaces.
+	stateBudget := memoryPerGPU / 10 * 6
+	strategy := requested
+	if requested == ParallelismAuto && request.ApproximateParameters == 0 {
+		strategy = ParallelismFullySharded
+	} else if requested == ParallelismAuto {
+		switch {
+		case stateBytes <= stateBudget:
+			strategy = ParallelismData
+		case nodes > 1 && GPUsPerNode > 1 && divideRoundUpBytes(stateBytes, uint64(GPUsPerNode)) <= stateBudget:
+			strategy = ParallelismHybridSharded
+		default:
+			strategy = ParallelismFullySharded
+		}
+	}
+	if strategy == ParallelismHybridSharded && (nodes < 2 || GPUsPerNode < 2) {
+		return Parallelism{}, fmt.Errorf("hybrid-sharded-data-parallel requires at least two hosts with at least two GPUs each")
+	}
+	if strategy == ParallelismData && stateBytes > stateBudget {
+		return Parallelism{}, fmt.Errorf("data-parallel model state requires approximately %d bytes per GPU, exceeding WALDO's %d-byte safe state budget; use auto or a sharded strategy", stateBytes, stateBudget)
+	}
+	if strategy == ParallelismHybridSharded && divideRoundUpBytes(stateBytes, uint64(GPUsPerNode)) > stateBudget {
+		return Parallelism{}, fmt.Errorf("hybrid-sharded-data-parallel model state does not fit safely when divided across %d GPUs per host; use auto or fully-sharded-data-parallel", GPUsPerNode)
+	}
+	if strategy == ParallelismFullySharded && divideRoundUpBytes(stateBytes, uint64(worldSize)) > stateBudget {
+		return Parallelism{}, fmt.Errorf("model state does not fit safely even when divided across all %d GPUs", worldSize)
+	}
+	sharing, copies := 1, worldSize
+	if strategy == ParallelismHybridSharded {
+		sharing, copies = GPUsPerNode, nodes
+	} else if strategy == ParallelismFullySharded {
+		sharing, copies = worldSize, 1
+	}
+	interNode := ""
+	if nodes > 1 {
+		if cluster.HCA != "" {
+			interNode = "rdma"
+		} else {
+			interNode = "tcp"
+		}
+	}
+	return Parallelism{
+		Requested: requested, Strategy: strategy, WorldSize: worldSize, Nodes: nodes, GPUsPerNode: GPUsPerNode,
+		CompleteModelCopies: copies, GPUsSharingEachModelCopy: sharing,
+		LocalInterconnect: facts.LocalInterconnect, InterNodeInterconnect: interNode,
+		EstimatedModelStateBytes: stateBytes, MemoryPerGPUBytes: memoryPerGPU,
+	}, nil
+}
+
+func divideRoundUpBytes(value, divisor uint64) uint64 {
+	result := value / divisor
+	if value%divisor != 0 {
+		result++
+	}
+	return result
 }
 
 func validateTorchArchitecture(raw json.RawMessage, label string) error {
@@ -352,6 +439,7 @@ import fcntl
 import json
 import platform
 import resource
+import subprocess
 import socket
 import struct
 from pathlib import Path
@@ -410,6 +498,30 @@ if rdma_root.is_dir():
         active = any(read_text(port / "state").startswith("4:") for port in (path / "ports").glob("*"))
         rdma_devices.append({"name": path.name, "active": active})
 
+def local_interconnect():
+    if len(devices) < 2:
+        return "single-gpu"
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "topo", "-m"], check=True, capture_output=True,
+            text=True, timeout=5,
+        )
+        rows = [line.split() for line in result.stdout.splitlines() if line.startswith("GPU")]
+        links = []
+        for row_index, row in enumerate(rows):
+            for column_index in range(len(rows)):
+                if row_index != column_index and column_index + 1 < len(row):
+                    links.append(row[column_index + 1])
+        if links and all(link.startswith("NV") for link in links):
+            return "nvlink"
+    except (OSError, subprocess.SubprocessError):
+        pass
+    if all(torch.cuda.can_device_access_peer(left, right)
+           for left in range(len(devices)) for right in range(len(devices))
+           if left != right):
+        return "gpu-peer-to-peer"
+    return "pcie"
+
 memlock_soft, _ = resource.getrlimit(resource.RLIMIT_MEMLOCK)
 print(json.dumps({
     "python_version": platform.python_version(),
@@ -419,6 +531,7 @@ print(json.dumps({
     "memlock_soft_bytes": memlock_soft,
     "network_interfaces": network_interfaces,
     "rdma_devices": rdma_devices,
+    "local_interconnect": local_interconnect(),
 }))
 `
 
@@ -487,6 +600,7 @@ func InspectTorchTitanHost(ctx context.Context) (TorchTitanHost, error) {
 		Python: python, PythonVersion: facts.PythonVersion, TorchVersion: facts.TorchVersion,
 		TorchTitanVersion: facts.TorchTitanVersion, MemlockSoftBytes: facts.MemlockSoftBytes,
 		NetworkInterfaces: facts.NetworkInterfaces, RDMADevices: facts.RDMADevices,
+		LocalInterconnect: facts.LocalInterconnect,
 	}
 	for _, device := range facts.Devices {
 		host.Accelerators = append(host.Accelerators, Accelerator{
@@ -599,7 +713,7 @@ func resolveSecondaryTorchTitan(ctx context.Context, cluster Cluster) (TorchTita
 	}
 	facts := torchTitanProbe{
 		PythonVersion: host.PythonVersion, TorchVersion: host.TorchVersion,
-		TorchTitanVersion: host.TorchTitanVersion,
+		TorchTitanVersion: host.TorchTitanVersion, LocalInterconnect: host.LocalInterconnect,
 	}
 	for _, device := range host.Accelerators {
 		facts.Devices = append(facts.Devices, torchTitanDevice{

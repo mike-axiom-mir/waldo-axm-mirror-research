@@ -533,6 +533,12 @@ func runModelSummary(context Context, args []string, stdout, _ io.Writer) error 
 			}
 		}
 		fmt.Fprintf(stdout, "RUN %04d:      %-16s %-11s %s tokens%s%s\n", pin.Ordinal, pin.Stage, pin.State, humanCount(tokens), simulated, detail)
+		if position < len(inspection.RunBOMs) {
+			bom := inspection.RunBOMs[position]
+			for _, description := range training.DescribeParallelism(bom.Execution.Parallelism, bom.Parameters.BatchSize) {
+				fmt.Fprintf(stdout, "  PARALLELISM: %s\n", description)
+			}
+		}
 		if position < len(inspection.Runs) && inspection.Runs[position].Observation != nil {
 			observation := inspection.Runs[position].Observation
 			if len(observation.Evaluations) > 0 {
@@ -979,6 +985,7 @@ func secondaryStreamRequest(plan model.MultiNodePlan, scratch string) (training.
 		RunID: plan.RunID, Stage: plan.Stage, Objective: plan.Objective,
 		Conversation: plan.Conversation, ArchitectureSHA256: plan.ArchitectureSHA256,
 		Architecture: plan.Architecture, Parameters: plan.Parameters,
+		Parallelism:   plan.Parallelism,
 		EvaluationSet: *plan.EvaluationSet, Tokenizer: tokenizer,
 		ArtifactDirectory: scratch, ArtifactPrefix: "artifacts",
 	}, nil

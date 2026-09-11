@@ -100,6 +100,9 @@ func optionalInt64(value *int64) int64 {
 }
 
 func resolveParameters(parameters Parameters, steps, requestedTokens int64) (ResolvedParameters, error) {
+	if err := ValidateParallelismRequest(parameters.Parallelism); err != nil {
+		return ResolvedParameters{}, err
+	}
 	profile := parameters.Profile
 	if profile == "" {
 		profile = DefaultProfile

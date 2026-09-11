@@ -30,6 +30,18 @@ func writeHostfile(t *testing.T, content string) string {
 	return path
 }
 
+func TestTorchTitanHostSummaryNamesLocalGPUConnection(t *testing.T) {
+	host := training.TorchTitanHost{
+		PythonVersion: "3.11", TorchVersion: "2.15", TorchTitanVersion: "0.3",
+		LocalInterconnect: "nvlink",
+		Accelerators:      []training.Accelerator{{Model: "H200"}, {Model: "H200"}},
+	}
+	summary := torchTitanHostSummary(host)
+	if !strings.Contains(summary, "2 GPUs (NVLink between local GPUs)") {
+		t.Fatalf("host summary = %q", summary)
+	}
+}
+
 func TestLoadTrainingHostfile(t *testing.T) {
 	path := writeHostfile(t, "# rank zero first\ntrain-0\n\ntrain-1 # worker\ntrain-2\n")
 	hostfile, err := loadTrainingHostfile(path)

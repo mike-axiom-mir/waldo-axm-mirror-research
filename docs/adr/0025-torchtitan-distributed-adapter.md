@@ -19,8 +19,10 @@ broadcasts compact token frames through NCCL. Each rank deterministically
 selects a different slice of the declared global batch; losses, token counts,
 and corpus consumption are aggregated across ranks. Secondary hosts do not
 need the index, corpus objects, lookaside credentials, shared model storage,
-or NFS. FSDP2 shards model state. Rank zero commits checkpoints, terminal
-Safetensors, and observations.
+or NFS. WALDO selects complete-model data parallelism, host-local hybrid
+sharding, or full FSDP2 sharding from the model-state estimate, GPU memory, and
+host topology. NCCL uses available local GPU links. Rank zero commits
+checkpoints, terminal Safetensors, and observations.
 
 Multi-node interrupted runs cannot currently resume. They must be restarted
 with the same topology and a fresh run.

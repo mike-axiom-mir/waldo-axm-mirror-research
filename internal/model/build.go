@@ -71,7 +71,14 @@ func (builder Builder) ResolveBackend(ctx context.Context, architecture Architec
 	if resolver == nil {
 		resolver = builtinResolver()
 	}
-	selection, err := resolver.Resolve(ctx, training.ResolveRequest{Architecture: architectureJSON, Objectives: objectives})
+	forecast, err := architecture.Forecast()
+	if err != nil {
+		return training.Selection{}, err
+	}
+	selection, err := resolver.Resolve(ctx, training.ResolveRequest{
+		Architecture: architectureJSON, Objectives: objectives,
+		ApproximateParameters: forecast.ApproximateParameters,
+	})
 	if err != nil {
 		return training.Selection{}, fmt.Errorf("resolve training backend: %w", err)
 	}
@@ -228,9 +235,11 @@ func (builder Builder) Train(ctx context.Context, name string, prepared Prepared
 	}
 	builder.report(Progress{Phase: "backend", Stage: stage.Name, Message: "verifying the selected training backend"})
 	selection, err := resolver.Resolve(ctx, training.ResolveRequest{
-		ArchitectureSHA256: inspection.Model.ArchitectureSHA256,
-		Architecture:       architectureJSON,
-		Objectives:         []string{stage.Objective},
+		ArchitectureSHA256:    inspection.Model.ArchitectureSHA256,
+		Architecture:          architectureJSON,
+		Objectives:            []string{stage.Objective},
+		ApproximateParameters: inspection.Model.Forecast.ApproximateParameters,
+		Parallelism:           stage.Parameters.Parallelism,
 	})
 	if err != nil {
 		return Inspection{}, fmt.Errorf("resolve training backend: %w", err)
@@ -239,6 +248,9 @@ func (builder Builder) Train(ctx context.Context, name string, prepared Prepared
 		return Inspection{}, err
 	}
 	builder.report(Progress{Phase: "backend", Stage: stage.Name, Message: fmt.Sprintf("selected %s@%s", selection.Execution.Backend.Name, selection.Execution.Backend.Revision)})
+	for _, message := range training.DescribeParallelism(selection.Execution.Parallelism, resolvedParameters.BatchSize) {
+		builder.report(Progress{Phase: "parallelism", Stage: stage.Name, Message: message})
+	}
 	var initialization *training.Initialization
 	if selection.Execution.Backend.Name != training.BackendFake {
 		initialization, err = resolveInitialization(inspection)
@@ -453,6 +465,7 @@ func (builder Builder) executeTrainingAttempt(ctx context.Context, name, modelPa
 		ArchitectureSHA256: record.ArchitectureSHA256,
 		Architecture:       architectureJSON, Tokenizer: tokenizerSpec, BOM: prepared.BOM, Inputs: prepared.Inputs,
 		Parameters: runBOM.Parameters, Records: records, EvaluationRecords: evaluationRecords, EvaluationSet: EvaluationSetValue(runBOM.EvaluationSet), Initialization: initializationForAttempt(runBOM.Initialization, resume), Resume: resume,
+		Parallelism:       runBOM.Execution.Parallelism,
 		ArtifactDirectory: filepath.Join(runDirectory, artifactPrefix), ArtifactPrefix: artifactPrefix, Report: report,
 	})
 	progressMutex.Lock()
@@ -573,6 +586,7 @@ func (builder Builder) publishMultiNodePlan(pin RunPin, runBOM RunBOM, prepared 
 		Nodes: builder.MultiNode.Nodes, Objective: stage.Objective,
 		ArchitectureSHA256: runBOM.ArchitectureSHA256, Architecture: architectureJSON,
 		Parameters: runBOM.Parameters, CorpusBOM: prepared.BOM,
+		Parallelism:   runBOM.Execution.Parallelism,
 		EvaluationSet: runBOM.EvaluationSet, Initialization: runBOM.Initialization,
 	}
 	if stage.Conversation != nil {
@@ -1670,6 +1684,9 @@ func validateSelection(selection training.Selection, objectives []string) error 
 	}
 	if selection.Execution.Host.OS == "" || selection.Execution.Host.Architecture == "" || selection.Execution.Nodes <= 0 || selection.Execution.WorldSize <= 0 {
 		return fmt.Errorf("resolved execution has incomplete host or topology facts")
+	}
+	if err := selection.Execution.Parallelism.Validate(selection.Execution); err != nil {
+		return fmt.Errorf("resolved execution parallelism: %w", err)
 	}
 	supported := make(map[string]bool, len(descriptor.Capabilities.Objectives))
 	for _, objective := range descriptor.Capabilities.Objectives {

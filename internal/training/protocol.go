@@ -25,6 +25,7 @@ type WorkerBegin struct {
 	ArchitectureSHA256 string                `json:"architecture_sha256"`
 	Architecture       json.RawMessage       `json:"architecture"`
 	Parameters         ResolvedParameters    `json:"parameters"`
+	Parallelism        Parallelism           `json:"parallelism,omitzero"`
 	Tokenizer          TokenizerSpec         `json:"tokenizer"`
 	EvaluationSet      EvaluationSet         `json:"evaluation_set"`
 	Initialization     *WorkerInitialization `json:"initialization,omitempty"`

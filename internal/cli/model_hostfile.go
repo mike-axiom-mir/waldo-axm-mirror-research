@@ -348,7 +348,20 @@ func (session *hostfileSession) probeHost(host string, rank int) (training.Torch
 }
 
 func torchTitanHostSummary(host training.TorchTitanHost) string {
-	return fmt.Sprintf("%d GPUs, Python %s, PyTorch %s, TorchTitan %s", len(host.Accelerators), host.PythonVersion, host.TorchVersion, host.TorchTitanVersion)
+	interconnect := host.LocalInterconnect
+	switch interconnect {
+	case "nvlink":
+		interconnect = "NVLink between local GPUs"
+	case "gpu-peer-to-peer":
+		interconnect = "direct peer-to-peer links between local GPUs"
+	case "pcie":
+		interconnect = "PCIe between local GPUs"
+	case "single-gpu":
+		interconnect = "one local GPU"
+	case "":
+		interconnect = "unknown local interconnect"
+	}
+	return fmt.Sprintf("%d GPUs (%s), Python %s, PyTorch %s, TorchTitan %s", len(host.Accelerators), interconnect, host.PythonVersion, host.TorchVersion, host.TorchTitanVersion)
 }
 
 func compareTorchTitanHosts(primary, secondary training.TorchTitanHost) error {
@@ -357,6 +370,9 @@ func compareTorchTitanHosts(primary, secondary training.TorchTitanHost) error {
 	}
 	if !reflect.DeepEqual(primary.Accelerators, secondary.Accelerators) {
 		return fmt.Errorf("visible accelerator topology differs: rank 0 has %v, secondary has %v", primary.Accelerators, secondary.Accelerators)
+	}
+	if primary.LocalInterconnect != secondary.LocalInterconnect {
+		return fmt.Errorf("local GPU interconnect differs: rank 0 has %s, secondary has %s", primary.LocalInterconnect, secondary.LocalInterconnect)
 	}
 	return nil
 }

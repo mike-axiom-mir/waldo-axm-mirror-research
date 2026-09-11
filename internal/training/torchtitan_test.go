@@ -42,6 +42,77 @@ func TestTorchTitanResolverRecordsEveryVisibleAccelerator(t *testing.T) {
 	}
 }
 
+func TestTorchTitanSelectsTopologyAwareParallelism(t *testing.T) {
+	facts := torchTitanProbe{
+		Devices: []torchTitanDevice{
+			{Manufacturer: "NVIDIA", Model: "H200", MemoryBytes: 140 << 30},
+			{Manufacturer: "NVIDIA", Model: "H200", MemoryBytes: 140 << 30},
+		},
+		LocalInterconnect: "nvlink",
+	}
+	cluster := Cluster{Nodes: 2, HCA: "mlx5_0"}
+	tests := []struct {
+		name       string
+		parameters uint64
+		requested  string
+		want       string
+		copies     int
+		sharing    int
+	}{
+		{"small model is complete on every GPU", 337_000_000, "", ParallelismData, 4, 1},
+		{"larger model is divided within each host", 6_000_000_000, "", ParallelismHybridSharded, 2, 2},
+		{"largest model is divided across every GPU", 12_000_000_000, "", ParallelismFullySharded, 1, 4},
+		{"explicit full sharding", 337_000_000, ParallelismFullySharded, ParallelismFullySharded, 1, 4},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			plan, err := resolveTorchTitanParallelism(ResolveRequest{
+				ApproximateParameters: test.parameters, Parallelism: test.requested,
+			}, facts, cluster, 2, 2)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if plan.Strategy != test.want || plan.CompleteModelCopies != test.copies || plan.GPUsSharingEachModelCopy != test.sharing || plan.LocalInterconnect != "nvlink" || plan.InterNodeInterconnect != "rdma" {
+				t.Fatalf("parallelism = %+v", plan)
+			}
+		})
+	}
+}
+
+func TestDescribeParallelismUsesPlainLanguage(t *testing.T) {
+	plan := Parallelism{
+		Requested: ParallelismAuto, Strategy: ParallelismData,
+		WorldSize: 4, Nodes: 2, GPUsPerNode: 2,
+		CompleteModelCopies: 4, GPUsSharingEachModelCopy: 1,
+		LocalInterconnect: "nvlink", InterNodeInterconnect: "rdma",
+	}
+	text := strings.Join(DescribeParallelism(plan, 32), "\n")
+	for _, expected := range []string{
+		"automatically selected data parallelism", "the run produces one model",
+		"each of 4 GPUs holds a synchronized complete copy",
+		"8 different sequences", "NVLink", "RDMA", "2 hosts",
+	} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("description %q omits %q", text, expected)
+		}
+	}
+	if strings.Contains(strings.ToLower(text), "replica") {
+		t.Fatalf("description uses unexplained replica terminology: %s", text)
+	}
+}
+
+func TestDescribeExplicitParallelismDoesNotInventAutomaticRationale(t *testing.T) {
+	plan := Parallelism{
+		Requested: ParallelismFullySharded, Strategy: ParallelismFullySharded,
+		WorldSize: 4, Nodes: 2, GPUsPerNode: 2,
+		CompleteModelCopies: 1, GPUsSharingEachModelCopy: 4,
+	}
+	text := strings.Join(DescribeParallelism(plan, 8), "\n")
+	if !strings.Contains(text, "selected full model sharding as requested by the compose") || strings.Contains(text, "because") {
+		t.Fatalf("explicit description = %q", text)
+	}
+}
+
 func TestTorchTitanResolverFailsClosed(t *testing.T) {
 	valid := json.RawMessage(`{"family":"decoder-transformer","vocabulary_size":259,"tokenizer":{"name":"byte","revision":"builtin-byte-schema-1"}}`)
 	if _, err := (TorchTitanResolver{OS: "darwin", Arch: "arm64"}).Resolve(context.Background(), ResolveRequest{Architecture: valid}); err == nil || !strings.Contains(err.Error(), "requires Linux") {
@@ -102,7 +173,7 @@ func TestValidateTorchTitanHostConfiguration(t *testing.T) {
 }
 
 func TestTorchTitanProbeCollectsNetworkAndRDMASanityFacts(t *testing.T) {
-	for _, expected := range []string{"resource.RLIMIT_MEMLOCK", `Path("/sys/class/net")`, `Path("/sys/class/infiniband")`, `"has_address"`, `"memlock_soft_bytes"`, `"network_interfaces"`, `"rdma_devices"`} {
+	for _, expected := range []string{"resource.RLIMIT_MEMLOCK", `Path("/sys/class/net")`, `Path("/sys/class/infiniband")`, `"has_address"`, `"memlock_soft_bytes"`, `"network_interfaces"`, `"rdma_devices"`, `"nvidia-smi", "topo", "-m"`, `"local_interconnect"`} {
 		if !strings.Contains(torchTitanProbeProgram, expected) {
 			t.Fatalf("TorchTitan probe omits %q", expected)
 		}
@@ -117,6 +188,9 @@ func TestTorchTitanWorkerAdaptsParallelDimsAPI(t *testing.T) {
 		`if "etp" in`,
 		`parallel_arguments["spmd_backend"] = "partial_dtensor"`,
 		`ParallelDims(**parallel_arguments)`,
+		`DistributedDataParallel`,
+		`nodes if hybrid else 1`,
+		`gpus_per_node if hybrid else self.world_size`,
 	} {
 		if !strings.Contains(source, expected) {
 			t.Fatalf("TorchTitan worker omits ParallelDims compatibility logic %q", expected)

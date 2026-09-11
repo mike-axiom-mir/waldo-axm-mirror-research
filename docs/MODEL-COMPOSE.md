@@ -5,9 +5,10 @@ model architecture and one or more ordered training stages. Use one when WALDO
 must create a model, train several stages as one resumable transaction, or
 preserve an exact experiment for later review.
 
-The compose does not select MLX, PyTorch, TorchTitan, GPUs, paths, credentials,
-or other machine-local policy. WALDO selects a compatible training backend on
-the machine that runs the compose.
+The compose does not select MLX, PyTorch, TorchTitan, particular GPUs, paths,
+credentials, or other machine-local policy. WALDO selects a compatible backend
+and physical topology on the machine that runs the compose. A stage may request
+a portable parallelism strategy, but `auto` is the default.
 
 ```bash
 waldo model forecast composes/0001-babble.yaml
@@ -417,6 +418,7 @@ must use one representation or the other, never both.
 | Field | Required | Default or range | Meaning |
 | --- | --- | --- | --- |
 | `profile` | no | `causal-pretrain-shuffled` | Selects versioned record ordering, corpus exposure, and held-out selection. |
+| `parallelism` | no | `auto` | TorchTitan placement: `auto`, `data-parallel`, `hybrid-sharded-data-parallel`, or `fully-sharded-data-parallel`. The resolved placement is pinned in the run BOM. |
 | `tokens` | one training budget | positive integer | Fixed pretraining target budget. WALDO rounds it up to a complete optimizer step and persists the derived step count. Cannot be combined with `epochs` or `steps`. |
 | `epochs` | one training budget | `1..1000000` | Complete deterministic passes over every selected canonical record. When `steps` is omitted, WALDO derives the exact optimizer-step count after filtering and held-out selection. |
 | `steps` | legacy/fixed-step budget | positive integer | Explicit optimizer steps and learning-rate schedule length. Retained for existing composes and exact fixed-step experiments; it may be combined with `epochs` as a repetition limit. |
