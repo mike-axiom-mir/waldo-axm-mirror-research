@@ -239,10 +239,13 @@ func TestConversationTwoExtendsConversationOneWithNewDialogueData(t *testing.T) 
 	if variant.Base != nil || variant.Architecture != baseline.Architecture || variant.Interaction != baseline.Interaction {
 		t.Fatalf("conversation2 model contract = %+v", variant)
 	}
-	if len(variant.Stages) != len(baseline.Stages)+2 || !reflect.DeepEqual(variant.Stages[:len(baseline.Stages)], baseline.Stages) {
-		t.Fatalf("conversation2 does not preserve the complete conversation1 curriculum")
+	if len(variant.Stages) != len(baseline.Stages)+2 || !reflect.DeepEqual(variant.Stages[0], baseline.Stages[0]) || !reflect.DeepEqual(variant.Stages[2:4], baseline.Stages[1:]) {
+		t.Fatalf("conversation2 does not preserve the conversation1 stages around its technical curriculum")
 	}
-	technical := variant.Stages[len(baseline.Stages)]
+	if got := []string{variant.Stages[0].Name, variant.Stages[1].Name, variant.Stages[2].Name, variant.Stages[3].Name, variant.Stages[4].Name}; !reflect.DeepEqual(got, []string{"pretrain", "technical-midtrain", "conversational-midtrain", "post-train", "expanded-conversation-sft"}) {
+		t.Fatalf("conversation2 stage order = %v", got)
+	}
+	technical := variant.Stages[1]
 	if technical.Name != "technical-midtrain" || technical.Type != "pre-training" || technical.Objective != "causal-language-modeling" {
 		t.Fatalf("conversation2 technical stage = %+v", technical)
 	}
