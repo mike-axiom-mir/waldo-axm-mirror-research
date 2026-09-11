@@ -242,6 +242,10 @@ func validateRecordFilterYAML(node *yaml.Node) error {
 			if err := knownYAMLFields(value, map[string]bool{"repetitive_content": true, "boilerplate_content": true, "licenses": true}); err != nil {
 				return err
 			}
+		} else if key == "languages" {
+			if err := knownYAMLFields(value, map[string]bool{"include": true, "exclude": true, "include_unset": true}); err != nil {
+				return err
+			}
 		} else if err := knownYAMLFields(value, map[string]bool{"include": true, "exclude": true}); err != nil {
 			return err
 		}

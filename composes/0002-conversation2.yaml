@@ -62,6 +62,7 @@ stages:
       main_content: true
       languages:
         include: [en]
+        include_unset: true
       exclude:
         repetitive_content: true
         boilerplate_content: true

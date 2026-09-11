@@ -50,8 +50,9 @@ type ExclusionFilter struct {
 }
 
 type ValueFilter struct {
-	Include []string `json:"include,omitempty" yaml:"include,omitempty"`
-	Exclude []string `json:"exclude,omitempty" yaml:"exclude,omitempty"`
+	Include      []string `json:"include,omitempty" yaml:"include,omitempty"`
+	Exclude      []string `json:"exclude,omitempty" yaml:"exclude,omitempty"`
+	IncludeUnset bool     `json:"include_unset,omitempty" yaml:"include_unset,omitempty"`
 }
 
 type DateFilter struct {
@@ -103,6 +104,9 @@ func (filter RecordFilter) Validate() error {
 			if err := field.values.Validate(); err != nil {
 				return fmt.Errorf("%s: %w", field.name, err)
 			}
+			if field.name != "languages" && field.values.IncludeUnset {
+				return fmt.Errorf("%s: include_unset is supported only for languages", field.name)
+			}
 		}
 	}
 	if filter.Date != nil {
@@ -130,6 +134,9 @@ func (filter ExclusionFilter) Validate() error {
 func (filter ValueFilter) Validate() error {
 	if len(filter.Include) == 0 && len(filter.Exclude) == 0 {
 		return fmt.Errorf("include or exclude is required")
+	}
+	if filter.IncludeUnset && len(filter.Include) == 0 {
+		return fmt.Errorf("include_unset requires include")
 	}
 	return validatePatterns(append(append([]string(nil), filter.Include...), filter.Exclude...))
 }
@@ -258,6 +265,13 @@ func (filter ValueFilter) AllowsAny(values ...string) bool {
 		for _, value := range values {
 			if matched, _ := path.Match(pattern, value); matched {
 				return false
+			}
+		}
+	}
+	if filter.IncludeUnset {
+		for _, value := range values {
+			if value == "" {
+				return true
 			}
 		}
 	}

@@ -46,7 +46,7 @@ func TestRecordFilterCombinesGlobalAndCorpusConditions(t *testing.T) {
 }
 
 func TestRecordFilterValidationAndBOMRoundTrip(t *testing.T) {
-	policy := &RecordFilterPolicy{Schema: RecordFilterSchema, Global: &RecordFilter{Languages: &ValueFilter{Include: []string{"en"}}}}
+	policy := &RecordFilterPolicy{Schema: RecordFilterSchema, Global: &RecordFilter{Languages: &ValueFilter{Include: []string{"en"}, IncludeUnset: true}}}
 	bom := BOM{Kind: "openwaldo-bom", Schema: 1, Subject: "corpus", Paths: []string{"books"}, RecordFilter: policy}
 	data, err := json.Marshal(bom)
 	if err != nil {
@@ -64,6 +64,25 @@ func TestRecordFilterValidationAndBOMRoundTrip(t *testing.T) {
 	}
 	if err := (&RecordFilterPolicy{Schema: RecordFilterSchema, Corpora: map[string]RecordFilter{"other": {Languages: &ValueFilter{Include: []string{"en"}}}}}).Validate([]string{"books"}); err == nil || !strings.Contains(err.Error(), "unselected corpus") {
 		t.Fatalf("unknown corpus error = %v", err)
+	}
+}
+
+func TestLanguageFilterCanExplicitlyIncludeUnsetRows(t *testing.T) {
+	filter := RecordFilter{Languages: &ValueFilter{Include: []string{"en"}, IncludeUnset: true}}
+	if err := filter.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if !filter.Allows(shard.RecordView{Language: "en"}) || !filter.Allows(shard.RecordView{}) {
+		t.Fatal("English or unset language was rejected")
+	}
+	if filter.Allows(shard.RecordView{Language: "fr"}) || filter.Allows(shard.RecordView{Language: "mul"}) {
+		t.Fatal("known non-English language was allowed")
+	}
+	if err := (RecordFilter{Licenses: &ValueFilter{Include: []string{"CC-*"}, IncludeUnset: true}}).Validate(); err == nil || !strings.Contains(err.Error(), "only for languages") {
+		t.Fatalf("non-language include_unset error = %v", err)
+	}
+	if err := (RecordFilter{Languages: &ValueFilter{IncludeUnset: true}}).Validate(); err == nil || !strings.Contains(err.Error(), "include or exclude") {
+		t.Fatalf("unbounded include_unset error = %v", err)
 	}
 }
 

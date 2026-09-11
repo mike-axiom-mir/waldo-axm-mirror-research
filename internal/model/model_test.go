@@ -222,7 +222,7 @@ func TestComposeAcceptsConfiguredCorporaWithoutBreakingScalarForm(t *testing.T) 
             include: [CC-BY-*]
       - path: science/papers
         weight: 1`, 1)
-	configured = strings.Replace(configured, "    corpora:\n", "    filter:\n      languages:\n        include: [en]\n    corpora:\n", 1)
+	configured = strings.Replace(configured, "    corpora:\n", "    filter:\n      languages:\n        include: [en]\n        include_unset: true\n    corpora:\n", 1)
 	configured = strings.Replace(configured, "    parameters:\n", "    parameters:\n      profile: causal-pretrain-weighted\n", 1)
 	if err := os.WriteFile(path, []byte(configured), 0o644); err != nil {
 		t.Fatal(err)
@@ -243,7 +243,7 @@ func TestComposeAcceptsConfiguredCorporaWithoutBreakingScalarForm(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if policy.Global == nil || policy.Corpora["core/books.yaml"].Licenses == nil {
+	if policy.Global == nil || policy.Global.Languages == nil || !policy.Global.Languages.IncludeUnset || policy.Corpora["core/books.yaml"].Licenses == nil {
 		t.Fatalf("resolved filters = %+v", policy)
 	}
 	encoded, err := yaml.Marshal(compose)

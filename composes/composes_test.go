@@ -258,7 +258,7 @@ func TestConversationTwoExtendsConversationOneWithNewDialogueData(t *testing.T) 
 	if got := corpusPaths(technical.Corpora); !reflect.DeepEqual(got, wantTechnical) {
 		t.Fatalf("conversation2 technical corpora = %v, want %v", got, wantTechnical)
 	}
-	if technical.Parameters.Tokens != 400000000 || technical.Filter == nil || technical.Filter.Languages == nil || !reflect.DeepEqual(technical.Filter.Languages.Include, []string{"en"}) {
+	if technical.Parameters.Tokens != 400000000 || technical.Filter == nil || technical.Filter.Languages == nil || !reflect.DeepEqual(technical.Filter.Languages.Include, []string{"en"}) || !technical.Filter.Languages.IncludeUnset {
 		t.Fatalf("conversation2 technical budget/filter = %+v / %+v", technical.Parameters, technical.Filter)
 	}
 	stage := variant.Stages[len(variant.Stages)-1]

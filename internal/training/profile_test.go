@@ -218,13 +218,14 @@ func TestRecordPartitionPinsAndExcludesHeldOutRecords(t *testing.T) {
 func TestRecordFiltersApplyToPartitionTargetsAndTrainingStream(t *testing.T) {
 	input := writeTrainingRows(t, []shard.Row{
 		{SHA256: record.TextHash("keep"), Kind: record.KindPretrain, Text: "keep", Source: "source-a", SourceName: "project-a", License: "CC-BY-4.0", Lang: "en", Date: "2024", Tokens: 1},
+		{SHA256: record.TextHash("keep unset"), Kind: record.KindPretrain, Text: "keep unset", Source: "source-a", SourceName: "project-a", License: "CC-BY-4.0", Date: "2024", Tokens: 1},
 		{SHA256: record.TextHash("wrong language"), Kind: record.KindPretrain, Text: "wrong language", Source: "source-a", SourceName: "project-a", License: "CC-BY-4.0", Lang: "fr", Date: "2024", Tokens: 1},
 		{SHA256: record.TextHash("wrong license"), Kind: record.KindPretrain, Text: "wrong license", Source: "source-a", SourceName: "project-a", License: "GPL-2.0-only", Lang: "en", Date: "2024", Tokens: 1},
 	})
 	input.Corpus = "example"
 	input.RecordFilter = &corpus.RecordFilterPolicy{
 		Schema:  corpus.RecordFilterSchema,
-		Global:  &corpus.RecordFilter{Languages: &corpus.ValueFilter{Include: []string{"en"}}},
+		Global:  &corpus.RecordFilter{Languages: &corpus.ValueFilter{Include: []string{"en"}, IncludeUnset: true}},
 		Corpora: map[string]corpus.RecordFilter{"example": {Licenses: &corpus.ValueFilter{Include: []string{"CC-BY-*"}}, Date: &corpus.DateFilter{From: "2020"}}},
 	}
 	zeroFraction := 0.0
@@ -249,10 +250,11 @@ func TestRecordFiltersApplyToPartitionTargetsAndTrainingStream(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(texts, []string{"keep"}) {
+	sort.Strings(texts)
+	if !reflect.DeepEqual(texts, []string{"keep", "keep unset"}) {
 		t.Fatalf("filtered training texts = %v", texts)
 	}
-	if targets, err := CountByteTargets(context.Background(), []Input{input}); err != nil || targets != int64(len("keep")) {
+	if targets, err := CountByteTargets(context.Background(), []Input{input}); err != nil || targets != int64(len("keep")+len("keep unset")+1) {
 		t.Fatalf("filtered byte targets = %d, err = %v", targets, err)
 	}
 }

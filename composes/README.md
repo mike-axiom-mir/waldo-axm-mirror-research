@@ -116,9 +116,10 @@ Success criteria:
 
 Corpus requirements:
 
-- English-only development mailing lists spanning Linux, Git, Python, Apache,
-  GCC, glibc, GNU, QEMU, Alpine, and other open-source communities.
-- English technical issue, pull-request, review, and repository-documentation text.
+- Development mailing lists spanning Linux, Git, Python, Apache, GCC, glibc,
+  GNU, QEMU, Alpine, and other open-source communities. Known non-English rows
+  are excluded; legacy rows without language metadata are retained.
+- Technical issue, pull-request, review, and repository-documentation text.
 - Smol-SmolTalk for compact-model instruction breadth.
 - UltraChat 200k for additional multi-turn dialogue.
 

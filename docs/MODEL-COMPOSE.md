@@ -360,6 +360,7 @@ corpora:
     filter:                     # only this corpus
       languages:
         include: [en]
+        include_unset: true
       sources:
         exclude: [deprecated-*]
       date:
@@ -382,6 +383,7 @@ corpora:
 | `date` | no | Selects canonical dates that overlap the inclusive `from`/`to` interval. |
 | `include` | no | At least one shell-style, case-sensitive pattern must match. |
 | `exclude` | no | Any matching pattern rejects the record and takes precedence over `include`. |
+| `languages.include_unset` | no | Also retains rows with no recorded language. Known languages must still match `include`. Defaults to `false`; it is not accepted for license or source filters. |
 | `from` | no | Inclusive lower date bound: `YYYY`, `YYYY-MM`, `YYYY-MM-DD`, or RFC 3339. |
 | `to` | no | Inclusive upper date bound in the same formats. |
 
