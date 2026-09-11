@@ -60,3 +60,59 @@ func TestAdvisorCheckpointMonitorUsesEvidenceCapturedAtObservation(t *testing.T)
 		t.Fatalf("monitor output = %q, warnings = %q", output.String(), warnings.String())
 	}
 }
+
+func TestAdvisorCheckpointMonitorCloseIsIdempotent(t *testing.T) {
+	transcript := &advisorTranscript{}
+	monitor := newAdvisorCheckpointMonitor(
+		context.Background(), "", "", waldoai.Selection{}, advisorIndexEvidence{},
+		transcript, &bytes.Buffer{}, &bytes.Buffer{},
+	)
+	monitor.Close()
+
+	if panicValue := advisorCheckpointMonitorPanic(monitor.Close); panicValue != nil {
+		t.Fatalf("second Close panicked: %v", panicValue)
+	}
+}
+
+func TestAdvisorCheckpointMonitorRejectsObservationAfterClose(t *testing.T) {
+	root := t.TempDir()
+	const name = "closed-checkpoint-monitor"
+	compose := advisorTestCompose()
+	if _, err := (model.Builder{Root: root}).Initialize(name, compose.Architecture); err != nil {
+		t.Fatal(err)
+	}
+
+	transcript := &advisorTranscript{
+		root: root, name: name, session: "test-session",
+		pending: []advisorChatRecord{{
+			Kind: "waldo-advisor-chat", Schema: 1, Session: "test-session",
+			Role: "user", Category: "chat", Content: "must remain pending",
+		}},
+	}
+	monitor := newAdvisorCheckpointMonitor(
+		context.Background(), root, name, waldoai.Selection{}, advisorIndexEvidence{},
+		transcript, &bytes.Buffer{}, &bytes.Buffer{},
+	)
+	monitor.Close()
+
+	event := model.Progress{
+		Phase: "training", RunID: "run-1", State: model.RunRunning,
+		Training: &training.Event{Kind: "checkpoint", Step: 1, Tokens: 64, Message: "checkpoint persisted"},
+	}
+	panicValue := advisorCheckpointMonitorPanic(func() { monitor.Observe(event) })
+	if panicValue != nil {
+		t.Errorf("observation after Close panicked: %v", panicValue)
+	}
+	if got := len(transcript.pending); got != 1 {
+		t.Errorf("pending transcript records = %d, want 1", got)
+	}
+	if _, err := os.Stat(filepath.Join(root, name, "advisor", "CHAT.jsonl")); !os.IsNotExist(err) {
+		t.Errorf("late observation touched transcript: %v", err)
+	}
+}
+
+func advisorCheckpointMonitorPanic(action func()) (value any) {
+	defer func() { value = recover() }()
+	action()
+	return nil
+}
