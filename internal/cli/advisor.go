@@ -613,6 +613,13 @@ func confirmAdvisorBuild(reader *bufio.Reader, output io.Writer, name, composePa
 	return true, nil
 }
 
+type advisorCheckpointSnapshot struct {
+	report         model.Advice
+	buildHistory   []advisorBuildSummary
+	composeHistory []string
+	history        []advisorTurn
+}
+
 type advisorCheckpointMonitor struct {
 	ctx        context.Context
 	root       string
@@ -624,6 +631,9 @@ type advisorCheckpointMonitor struct {
 	warnings   io.Writer
 	events     chan model.Progress
 	done       chan struct{}
+
+	snapshotMutex sync.Mutex
+	snapshots     map[*training.Event]advisorCheckpointSnapshot
 }
 
 func newAdvisorCheckpointMonitor(ctx context.Context, root, name string, selection waldoai.Selection, index advisorIndexEvidence, transcript *advisorTranscript, output, warnings io.Writer) *advisorCheckpointMonitor {
@@ -641,18 +651,60 @@ func (monitor *advisorCheckpointMonitor) Observe(event model.Progress) {
 	if event.Training == nil || event.Training.Kind != "checkpoint" {
 		return
 	}
+	report, err := currentAdvisorEvidence(monitor.root, monitor.name)
+	if err != nil {
+		fmt.Fprintf(monitor.warnings, "warning: advisor checkpoint monitor: capture checkpoint evidence: %v\n", err)
+		return
+	}
+	buildHistory, composeHistory, err := currentAdvisorBuildHistory(monitor.root, monitor.name)
+	if err != nil {
+		fmt.Fprintf(monitor.warnings, "warning: advisor checkpoint monitor: capture checkpoint history: %v\n", err)
+		return
+	}
+	monitor.rememberCheckpoint(event.Training, advisorCheckpointSnapshot{
+		report: report, buildHistory: buildHistory, composeHistory: composeHistory,
+		history: monitor.transcript.History(),
+	})
 	select {
 	case monitor.events <- event:
 	default:
 		select {
-		case <-monitor.events:
+		case displaced := <-monitor.events:
+			monitor.forgetCheckpoint(displaced.Training)
 		default:
 		}
 		select {
 		case monitor.events <- event:
 		default:
+			monitor.forgetCheckpoint(event.Training)
 		}
 	}
+}
+
+func (monitor *advisorCheckpointMonitor) rememberCheckpoint(event *training.Event, snapshot advisorCheckpointSnapshot) {
+	monitor.snapshotMutex.Lock()
+	defer monitor.snapshotMutex.Unlock()
+	if monitor.snapshots == nil {
+		monitor.snapshots = make(map[*training.Event]advisorCheckpointSnapshot)
+	}
+	monitor.snapshots[event] = snapshot
+}
+
+func (monitor *advisorCheckpointMonitor) takeCheckpoint(event *training.Event) (advisorCheckpointSnapshot, bool) {
+	monitor.snapshotMutex.Lock()
+	defer monitor.snapshotMutex.Unlock()
+	snapshot, ok := monitor.snapshots[event]
+	delete(monitor.snapshots, event)
+	return snapshot, ok
+}
+
+func (monitor *advisorCheckpointMonitor) forgetCheckpoint(event *training.Event) {
+	if event == nil {
+		return
+	}
+	monitor.snapshotMutex.Lock()
+	defer monitor.snapshotMutex.Unlock()
+	delete(monitor.snapshots, event)
 }
 
 func (monitor *advisorCheckpointMonitor) Close() {
@@ -663,17 +715,13 @@ func (monitor *advisorCheckpointMonitor) Close() {
 func (monitor *advisorCheckpointMonitor) run() {
 	defer close(monitor.done)
 	for event := range monitor.events {
-		report, err := currentAdvisorEvidence(monitor.root, monitor.name)
-		if err != nil {
-			fmt.Fprintf(monitor.warnings, "warning: advisor checkpoint monitor: %v\n", err)
+		snapshot, ok := monitor.takeCheckpoint(event.Training)
+		if !ok {
+			fmt.Fprintln(monitor.warnings, "warning: advisor checkpoint monitor: checkpoint arrived without captured evidence")
 			continue
 		}
-		buildHistory, composeHistory, err := currentAdvisorBuildHistory(monitor.root, monitor.name)
-		if err != nil {
-			fmt.Fprintf(monitor.warnings, "warning: advisor checkpoint monitor: %v\n", err)
-			continue
-		}
-		prompt := advisorMonitorPrompt(report, event, monitor.index, buildHistory, composeHistory, monitor.transcript.History())
+		report := snapshot.report
+		prompt := advisorMonitorPrompt(report, event, monitor.index, snapshot.buildHistory, snapshot.composeHistory, snapshot.history)
 		response, err := modelAdvisorAsk(monitor.ctx, monitor.selection, prompt)
 		if err != nil {
 			if monitor.ctx.Err() == nil {
