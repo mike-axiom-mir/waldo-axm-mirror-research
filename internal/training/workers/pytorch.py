@@ -21,7 +21,7 @@ import torch.nn.functional as functional
 
 PROTOCOL_SCHEMA = 1
 WORKER_REVISION = "builtin-pytorch-worker-schema-1-r7"
-TORCHTITAN_REVISION = "builtin-torchtitan-worker-schema-1-r15"
+TORCHTITAN_REVISION = "builtin-torchtitan-worker-schema-1-r16"
 IS_PRIMARY = True
 
 
@@ -822,7 +822,29 @@ class Trainer:
             if self.distributed:
                 pending = [None for _ in range(self.world_size)]
                 torch.distributed.all_gather_object(pending, len(self.batch))
-                if min(pending) > 0:
+                if max(pending) > 0:
+                    missing = self.batch_size - len(self.batch)
+                    if missing < 0:
+                        raise ValueError(
+                            f"rank {self.rank} has {len(self.batch)} sequences in the final batch; "
+                            f"local batch capacity is {self.batch_size}"
+                        )
+                    padding = [self.tokenizer.pad_id] * (self.sequence_length + 1)
+                    zero_mask = [0.0] * self.sequence_length
+                    self.batch.extend((padding, zero_mask, {}) for _ in range(missing))
+                    if IS_PRIMARY:
+                        real_sequences = sum(pending)
+                        padded_slots = self.global_batch_size - real_sequences
+                        emit(
+                            "event",
+                            event={
+                                "kind": "log",
+                                "message": (
+                                    f"final partial global batch has {real_sequences} training sequences and "
+                                    f"{padded_slots} empty slots; empty slots contribute zero loss"
+                                ),
+                            },
+                        )
                     self.train_batch()
                 else:
                     self.batch = []

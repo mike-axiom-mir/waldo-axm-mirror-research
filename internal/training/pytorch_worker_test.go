@@ -55,3 +55,21 @@ func TestTorchTitanWorkerKeepsSingleNodeBatchSemantics(t *testing.T) {
 		t.Fatal("PyTorch worker no longer preserves the declared batch on a single process")
 	}
 }
+
+func TestTorchTitanWorkerCompletesPartialFinalGlobalBatch(t *testing.T) {
+	source := string(pyTorchWorker)
+	for _, expected := range []string{
+		`if max(pending) > 0:`,
+		`missing = self.batch_size - len(self.batch)`,
+		`zero_mask = [0.0] * self.sequence_length`,
+		`self.batch.extend((padding, zero_mask, {}) for _ in range(missing))`,
+		`empty slots contribute zero loss`,
+	} {
+		if !strings.Contains(source, expected) {
+			t.Fatalf("TorchTitan worker omits final partial-batch behavior %q", expected)
+		}
+	}
+	if strings.Contains(source, `if min(pending) > 0:`) {
+		t.Fatal("TorchTitan worker still discards a final batch when one rank has no real sequence")
+	}
+}
