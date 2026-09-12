@@ -143,18 +143,57 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Diagnose Go formatting surface
+      - name: Capture Go formatting diagnostics
         shell: bash
         run: |
           set -euo pipefail
           gofmt -l . | tee /tmp/gofmt-files.txt
+
+      - name: Capture Go vet diagnostics
+        shell: bash
+        run: |
+          set +e
+          go vet ./... > /tmp/go-vet.log 2>&1
+          code=$?
+          cat /tmp/go-vet.log
+          echo "$code" > /tmp/go-vet.status
+          exit 0
+
+      - name: Capture Go test diagnostics
+        shell: bash
+        run: |
+          set +e
+          go test ./... -count=1 > /tmp/go-test.log 2>&1
+          code=$?
+          cat /tmp/go-test.log
+          echo "$code" > /tmp/go-test.status
+          exit 0
+
+      - name: Preserve compatibility diagnostics
+        if: always()
+        run: |
+          mkdir -p artifacts/openwaldo-mirror-compatibility
+          cp /tmp/gofmt-files.txt artifacts/openwaldo-mirror-compatibility/gofmt-files.txt 2>/dev/null || true
+          cp /tmp/go-vet.log artifacts/openwaldo-mirror-compatibility/go-vet.log 2>/dev/null || true
+          cp /tmp/go-vet.status artifacts/openwaldo-mirror-compatibility/go-vet.status 2>/dev/null || true
+          cp /tmp/go-test.log artifacts/openwaldo-mirror-compatibility/go-test.log 2>/dev/null || true
+          cp /tmp/go-test.status artifacts/openwaldo-mirror-compatibility/go-test.status 2>/dev/null || true
+
+      - name: Upload compatibility diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: openwaldo-mirror-compatibility
+          path: artifacts/openwaldo-mirror-compatibility/
+          if-no-files-found: error
+
+      - name: Enforce active compatibility gates
+        shell: bash
+        run: |
+          set -euo pipefail
           test ! -s /tmp/gofmt-files.txt
-
-      - name: Verify Go vet surface
-        run: go vet ./...
-
-      - name: Verify Go test surface
-        run: go test ./... -count=1
+          test "$(cat /tmp/go-vet.status)" = "0"
+          test "$(cat /tmp/go-test.status)" = "0"
 
       - name: Verify retained repository lifecycle
         run: ./testing/all.sh
@@ -166,7 +205,7 @@ jobs:
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          rm -rf artifacts/openwaldo-mirror-classification
+          rm -rf artifacts/openwaldo-mirror-classification artifacts/openwaldo-mirror-compatibility
           git add -A
           git commit -m 'Integrate additive Mirror experiment over current OpenWALDO'
           git push origin HEAD:integration/openwaldo-refresh-20260912
