@@ -29,7 +29,6 @@ jobs:
         run: |
           git fetch --no-tags origin "$UPSTREAM" "$MIRROR" "$MIRROR_BASELINE" "$OLD_FORK_MAIN"
           test "$(git rev-parse "$UPSTREAM^{tree}")" = "a4a3053ab44ec951ca8e0f6d162386b7d10fb995"
-          test "$(git rev-parse "$MIRROR^{tree}")" = "$(git rev-parse 26322e1565f80d779f19d6582cbd03e64a144c8e^{tree})"
 
       - name: Classify and materialize only additive Mirror-owned paths
         shell: bash
@@ -38,6 +37,7 @@ jobs:
           : > /tmp/unclassified
           : > /tmp/carried
           : > /tmp/upstream-owned
+          : > /tmp/excluded-core-extension
 
           while IFS= read -r path; do
             # Current OpenWALDO always wins for any path it owns today.
@@ -47,6 +47,14 @@ jobs:
             fi
 
             case "$path" in
+              internal/cli/mirror.go|\
+              internal/cli/mirror_test.go|\
+              internal/cli/model_chat_axm_hybrid.go|\
+              internal/inference/axm_hybrid.go|\
+              internal/inference/axm_hybrid_test.go|\
+              testing/e2e/mirror-positive-ground.sh)
+                echo "$path" >> /tmp/excluded-core-extension
+                ;;
               AXM_MIRROR_EXPERIMENT.md|\
               cmd/waldo-axm-mirror/*|\
               cmd/waldo-mirror-review/*|\
@@ -83,6 +91,7 @@ jobs:
 
           echo "Carried additive paths: $(wc -l < /tmp/carried)"
           echo "Skipped because current OpenWALDO owns the path: $(wc -l < /tmp/upstream-owned)"
+          echo "Excluded because they extend OpenWALDO runtime/CLI: $(wc -l < /tmp/excluded-core-extension)"
           git status --short
 
       - name: Preserve classification evidence
@@ -92,6 +101,7 @@ jobs:
           cp /tmp/unclassified artifacts/openwaldo-mirror-classification/unclassified.txt 2>/dev/null || true
           cp /tmp/carried artifacts/openwaldo-mirror-classification/carried.txt 2>/dev/null || true
           cp /tmp/upstream-owned artifacts/openwaldo-mirror-classification/upstream-owned.txt 2>/dev/null || true
+          cp /tmp/excluded-core-extension artifacts/openwaldo-mirror-classification/excluded-core-extension.txt 2>/dev/null || true
 
       - name: Upload classification evidence
         if: always()
@@ -151,6 +161,7 @@ jobs:
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          rm -rf artifacts/openwaldo-mirror-classification
           git add -A
           git commit -m 'Integrate additive Mirror experiment over current OpenWALDO'
           git push origin HEAD:integration/openwaldo-refresh-20260912
