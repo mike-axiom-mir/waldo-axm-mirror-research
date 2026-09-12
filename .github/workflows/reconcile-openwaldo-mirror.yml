@@ -40,7 +40,6 @@ jobs:
           : > /tmp/excluded-core-extension
 
           while IFS= read -r path; do
-            # Current OpenWALDO always wins for any path it owns today.
             if git cat-file -e "$UPSTREAM:$path" 2>/dev/null; then
               echo "$path" >> /tmp/upstream-owned
               continue
@@ -80,7 +79,6 @@ jobs:
             exit 1
           fi
 
-          # Preserve the fork provenance ledger as an additive AXM file.
           if ! git cat-file -e "$UPSTREAM:THIRD_PARTY.json" 2>/dev/null; then
             git checkout "$OLD_FORK_MAIN" -- THIRD_PARTY.json
             echo THIRD_PARTY.json >> /tmp/carried
@@ -145,11 +143,18 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Verify Go formatting and compilation surface
+      - name: Diagnose Go formatting surface
+        shell: bash
         run: |
-          test -z "$(gofmt -l .)"
-          go vet ./...
-          go test ./... -count=1
+          set -euo pipefail
+          gofmt -l . | tee /tmp/gofmt-files.txt
+          test ! -s /tmp/gofmt-files.txt
+
+      - name: Verify Go vet surface
+        run: go vet ./...
+
+      - name: Verify Go test surface
+        run: go test ./... -count=1
 
       - name: Verify retained repository lifecycle
         run: ./testing/all.sh
