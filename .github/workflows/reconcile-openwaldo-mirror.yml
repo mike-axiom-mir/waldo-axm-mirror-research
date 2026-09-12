@@ -1,0 +1,140 @@
+name: Reconcile current OpenWALDO with additive Mirror experiment
+
+on:
+  push:
+    branches:
+      - integration/openwaldo-refresh-20260912
+
+permissions:
+  contents: write
+
+jobs:
+  reconcile:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      UPSTREAM: cf3cd569881cbe55ab3b3eddd727a15ce3662f94
+      MIRROR: 26322e1565f80d779f19d6582cbd03e64a144c8e
+      MIRROR_BASELINE: b3784d3210de2ebd8df69b1f902b16eeed48b0a4
+      OLD_FORK_MAIN: 5a837acf07e11510cd95297429c74b1d8f82a6ff
+    steps:
+      - name: Checkout integration branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: integration/openwaldo-refresh-20260912
+
+      - name: Fetch exact retained source commits
+        run: |
+          git fetch --no-tags origin "$UPSTREAM" "$MIRROR" "$MIRROR_BASELINE" "$OLD_FORK_MAIN"
+          test "$(git rev-parse "$UPSTREAM^{tree}")" = "a4a3053ab44ec951ca8e0f6d162386b7d10fb995"
+          test "$(git rev-parse "$MIRROR^{tree}")" = "$(git rev-parse 26322e1565f80d779f19d6582cbd03e64a144c8e^{tree})"
+
+      - name: Classify and materialize only additive Mirror-owned paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > /tmp/unclassified
+          : > /tmp/carried
+          : > /tmp/upstream-owned
+
+          while IFS= read -r path; do
+            # Current OpenWALDO always wins for any path it owns today.
+            if git cat-file -e "$UPSTREAM:$path" 2>/dev/null; then
+              echo "$path" >> /tmp/upstream-owned
+              continue
+            fi
+
+            case "$path" in
+              AXM_MIRROR_EXPERIMENT.md|\
+              cmd/waldo-axm-mirror/*|\
+              cmd/waldo-mirror-review/*|\
+              internal/axmmirror/*|\
+              examples/axm-mirror/*|\
+              experiments/*|\
+              research/*|\
+              docs/adr/9*.md|\
+              .github/workflows/axm-*.yml|\
+              .github/workflows/axm-*.yaml)
+                git checkout "$MIRROR" -- "$path"
+                echo "$path" >> /tmp/carried
+                ;;
+              *)
+                echo "$path" >> /tmp/unclassified
+                ;;
+            esac
+          done < <(git diff --diff-filter=A --name-only "$MIRROR_BASELINE" "$MIRROR")
+
+          if test -s /tmp/unclassified; then
+            echo 'Unclassified files added after the old upstream baseline; refusing to guess:'
+            cat /tmp/unclassified
+            exit 1
+          fi
+
+          # Preserve the fork provenance ledger as an additive AXM file.
+          if ! git cat-file -e "$UPSTREAM:THIRD_PARTY.json" 2>/dev/null; then
+            git checkout "$OLD_FORK_MAIN" -- THIRD_PARTY.json
+            echo THIRD_PARTY.json >> /tmp/carried
+          else
+            echo 'Current upstream now owns THIRD_PARTY.json; refusing local replacement.'
+            exit 1
+          fi
+
+          echo "Carried additive paths: $(wc -l < /tmp/carried)"
+          echo "Skipped because current OpenWALDO owns the path: $(wc -l < /tmp/upstream-owned)"
+          git status --short
+
+      - name: Prove every current OpenWALDO path remains byte and mode exact
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add -A
+          candidate_tree=$(git write-tree)
+          failures=0
+          while IFS=$'\t' read -r meta path; do
+            expected_mode=$(awk '{print $1}' <<<"$meta")
+            expected_type=$(awk '{print $2}' <<<"$meta")
+            expected_sha=$(awk '{print $3}' <<<"$meta")
+            actual=$(git ls-tree "$candidate_tree" -- "$path")
+            if test -z "$actual"; then
+              echo "MISSING UPSTREAM PATH: $path"
+              failures=$((failures + 1))
+              continue
+            fi
+            actual_mode=$(awk '{print $1}' <<<"$actual")
+            actual_type=$(awk '{print $2}' <<<"$actual")
+            actual_sha=$(awk '{print $3}' <<<"$actual")
+            if test "$expected_mode" != "$actual_mode" || test "$expected_type" != "$actual_type" || test "$expected_sha" != "$actual_sha"; then
+              echo "UPSTREAM DRIFT: $path expected=$expected_mode/$expected_type/$expected_sha actual=$actual_mode/$actual_type/$actual_sha"
+              failures=$((failures + 1))
+            fi
+          done < <(git ls-tree -r "$UPSTREAM")
+          test "$failures" -eq 0
+          echo 'Current OpenWALDO body: EXACT'
+
+      - name: Setup Go from current upstream contract
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify Go formatting and compilation surface
+        run: |
+          test -z "$(gofmt -l .)"
+          go vet ./...
+          go test ./... -count=1
+
+      - name: Verify retained repository lifecycle
+        run: ./testing/all.sh
+
+      - name: Verify v0.54 service-mode sidecar
+        run: node experiments/creation-fabric-v2.12/vendor/AXM-Code-Creation-Fabric-v2.12-TEST/shared/service-mode-composer/selftest.js
+
+      - name: Commit only after full reconciliation passes
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Integrate additive Mirror experiment over current OpenWALDO'
+          git push origin HEAD:integration/openwaldo-refresh-20260912
