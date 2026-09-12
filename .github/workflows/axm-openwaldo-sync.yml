@@ -1,0 +1,123 @@
+name: AXM OpenWALDO refresh candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_ref:
+        description: OpenWALDO ref to inspect and stage
+        required: true
+        default: main
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Checkout experiment main
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Materialize exact upstream plus additive Mirror overlay
+        id: refresh
+        shell: bash
+        run: bash research/openwaldo-sync-v1/refresh.sh '${{ inputs.upstream_ref }}'
+
+      - name: Stop when upstream has not changed
+        if: steps.refresh.outputs.changed != 'true'
+        run: echo 'OpenWALDO lock already points at this exact candidate; nothing to stage.'
+
+      - name: Setup Go from refreshed upstream contract
+        if: steps.refresh.outputs.changed == 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify formatting stays explicit
+        if: steps.refresh.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          unformatted="$(gofmt -l .)"
+          if test -n "$unformatted"; then
+            echo 'Unformatted Go files after upstream refresh:'
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Vet refreshed combined body
+        if: steps.refresh.outputs.changed == 'true'
+        run: go vet ./...
+
+      - name: Test refreshed combined body
+        if: steps.refresh.outputs.changed == 'true'
+        run: go test ./... -count=1
+
+      - name: Test live Mirror surfaces directly
+        if: steps.refresh.outputs.changed == 'true'
+        run: go test ./internal/axmmirror ./cmd/waldo-axm-mirror ./cmd/waldo-mirror-review -count=1
+
+      - name: Test retained v0.54 service-mode sidecar
+        if: steps.refresh.outputs.changed == 'true'
+        run: node experiments/creation-fabric-v2.12/vendor/AXM-Code-Creation-Fabric-v2.12-TEST/shared/service-mode-composer/selftest.js
+
+      - name: Run full inherited lifecycle as evidence
+        id: lifecycle
+        if: steps.refresh.outputs.changed == 'true'
+        continue-on-error: true
+        shell: bash
+        run: ./testing/all.sh
+
+      - name: Stage refresh as a draft learning PR
+        if: steps.refresh.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_SHA: ${{ steps.refresh.outputs.upstream_sha }}
+          UPSTREAM_TREE: ${{ steps.refresh.outputs.upstream_tree }}
+          UPSTREAM_SHORT: ${{ steps.refresh.outputs.upstream_short }}
+          PREVIOUS_UPSTREAM: ${{ steps.refresh.outputs.previous_upstream }}
+          OVERLAY_PATHS: ${{ steps.refresh.outputs.overlay_paths }}
+          LIFECYCLE_OUTCOME: ${{ steps.lifecycle.outcome }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          branch="openwaldo-refresh/${UPSTREAM_SHORT}"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m "Refresh OpenWALDO upstream to ${UPSTREAM_SHORT}"
+          git push origin "HEAD:refs/heads/${branch}"
+
+          body_file="$(mktemp)"
+          {
+            echo '## OpenWALDO learning refresh'
+            echo
+            echo 'This is a **draft experimental refresh**, never an automatic Walmi promotion.'
+            echo
+            echo "- Previous upstream: \`${PREVIOUS_UPSTREAM}\`"
+            echo "- Candidate upstream: \`${UPSTREAM_SHA}\`"
+            echo "- Candidate upstream tree: \`${UPSTREAM_TREE}\`"
+            echo "- Retained AXM/Mirror additive paths: ${OVERLAY_PATHS}"
+            echo "- Full inherited lifecycle outcome: **${LIFECYCLE_OUTCOME}**"
+            echo
+            echo 'Hard refresh rules:'
+            echo '- every path owned by current OpenWALDO remains byte/mode exact;'
+            echo '- AXM/Mirror survives only through explicitly classified additive paths;'
+            echo '- path ownership collisions fail closed before a candidate is staged;'
+            echo '- local experimental history is preserved on its branches;'
+            echo '- nothing in this PR promotes anything into Walmi automatically.'
+          } > "$body_file"
+
+          gh pr create \
+            --draft \
+            --base main \
+            --head "$branch" \
+            --title "Refresh OpenWALDO learning body to ${UPSTREAM_SHORT}" \
+            --body-file "$body_file"

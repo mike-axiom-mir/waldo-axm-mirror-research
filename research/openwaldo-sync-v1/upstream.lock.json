@@ -1,0 +1,15 @@
+{
+  "commit": "cf3cd569881cbe55ab3b3eddd727a15ce3662f94",
+  "policy": {
+    "overlay_is_additive_only": true,
+    "path_collisions_fail_closed": true,
+    "upstream_owns_existing_paths": true,
+    "walmi_promotion_is_never_automatic": true
+  },
+  "previous_commit": "b3784d3210de2ebd8df69b1f902b16eeed48b0a4",
+  "schema_version": "axm-openwaldo-upstream-lock.v1",
+  "source_ref": "main",
+  "source_repo": "openwaldo/waldo",
+  "source_url": "https://github.com/openwaldo/waldo",
+  "tree": "a4a3053ab44ec951ca8e0f6d162386b7d10fb995"
+}
