@@ -143,6 +143,14 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Normalize exact live Mirror formatting repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f internal/axmmirror/experience_training_review.go
+          gofmt -w internal/axmmirror/experience_training_review.go
+          git diff --check -- internal/axmmirror/experience_training_review.go
+
       - name: Capture Go formatting diagnostics
         shell: bash
         run: |
