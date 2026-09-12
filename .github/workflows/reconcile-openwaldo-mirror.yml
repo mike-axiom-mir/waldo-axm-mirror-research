@@ -85,6 +85,22 @@ jobs:
           echo "Skipped because current OpenWALDO owns the path: $(wc -l < /tmp/upstream-owned)"
           git status --short
 
+      - name: Preserve classification evidence
+        if: always()
+        run: |
+          mkdir -p artifacts/openwaldo-mirror-classification
+          cp /tmp/unclassified artifacts/openwaldo-mirror-classification/unclassified.txt 2>/dev/null || true
+          cp /tmp/carried artifacts/openwaldo-mirror-classification/carried.txt 2>/dev/null || true
+          cp /tmp/upstream-owned artifacts/openwaldo-mirror-classification/upstream-owned.txt 2>/dev/null || true
+
+      - name: Upload classification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: openwaldo-mirror-classification
+          path: artifacts/openwaldo-mirror-classification/
+          if-no-files-found: error
+
       - name: Prove every current OpenWALDO path remains byte and mode exact
         shell: bash
         run: |
